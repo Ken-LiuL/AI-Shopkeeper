@@ -98,15 +98,24 @@ class TestListingE2E:
 
     def test_parse_url_alibaba(self, listing_client):
         """Parse an alibaba URL (mock skill)."""
+        import sys, types as _t
         mock_result = MagicMock()
         mock_result.model_dump = MagicMock(return_value={"title": "test", "price": 100})
-        mock_skill = MagicMock()
-        mock_skill.alibaba_detail = AsyncMock(return_value=mock_result)
+        mock_skill_instance = MagicMock()
+        mock_skill_instance.alibaba_detail = AsyncMock(return_value=mock_result)
+        mock_skill_cls = MagicMock(return_value=mock_skill_instance)
 
-        with patch("src.api.listing.ActionBookSkill", return_value=mock_skill):
+        # Stub the skills module
+        mod = _t.ModuleType("src.skills.actionbook")
+        mod.ActionBookSkill = mock_skill_cls
+        sys.modules["src.skills.actionbook"] = mod
+
+        try:
             res = listing_client.post("/api/listing/parse", json={
                 "url": "https://detail.1688.com/offer/123.html",
                 "platform": "alibaba",
             })
             assert res.status_code == 200
             assert res.json()["data"]["title"] == "test"
+        finally:
+            sys.modules.pop("src.skills.actionbook", None)

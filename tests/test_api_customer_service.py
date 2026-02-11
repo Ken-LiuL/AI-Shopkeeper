@@ -23,30 +23,17 @@ class TestChatRequest:
         assert request.session_id == "session_001"
         assert request.message == "有血压计吗"
 
-    def test_request_with_history(self):
-        """Request accepts conversation history."""
+    def test_request_minimal(self):
+        """Request only requires session_id and message (no conversation_history)."""
         from src.api.schemas import ChatRequest
         
-        history = [
-            {"role": "user", "content": "你好"},
-            {"role": "assistant", "content": "亲，在的呢~"},
-        ]
         request = ChatRequest(
             session_id="session_001",
             message="有血压计吗",
-            conversation_history=history,
         )
-        assert len(request.conversation_history) == 2
-
-    def test_request_default_history(self):
-        """Request defaults to empty history."""
-        from src.api.schemas import ChatRequest
-        
-        request = ChatRequest(
-            session_id="session_001",
-            message="你好",
-        )
-        assert request.conversation_history == []
+        assert request.session_id == "session_001"
+        assert request.message == "有血压计吗"
+        assert not hasattr(request, "conversation_history")
 
 
 class TestChatResponse:
