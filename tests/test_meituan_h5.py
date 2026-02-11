@@ -14,7 +14,7 @@ def mock_cli():
     cli = AsyncMock()
     cli.browser_open = AsyncMock()
     cli.browser_close = AsyncMock()
-    cli.browser_eval = AsyncMock(return_value=None)
+    cli.browser_eval = AsyncMock(return_value="")  # default: return empty string
     cli.browser_text = AsyncMock(return_value="")
     cli.cleanup = AsyncMock()
     return cli
@@ -22,7 +22,27 @@ def mock_cli():
 
 @pytest.fixture
 def scraper(mock_cli):
-    return MeituanH5Scraper(cli=mock_cli)
+    from unittest.mock import MagicMock
+    fp_mgr = MagicMock()
+    fp = MagicMock()
+    fp.generate_inject_js = MagicMock(return_value="")
+    fp_mgr.get_fingerprint = MagicMock(return_value=fp)
+    behavior = MagicMock()
+    behavior.estimate_page_stay = MagicMock(return_value=0)
+    captcha = AsyncMock()
+    captcha.detect_and_handle = AsyncMock(return_value=None)  # None = no captcha
+    scheduler = AsyncMock()
+    scheduler.wait_for_slot = AsyncMock(return_value=True)
+    scheduler.can_run = MagicMock(return_value=True)
+    scheduler.report_success = MagicMock()
+    scheduler.report_failure = MagicMock()
+    return MeituanH5Scraper(
+        cli=mock_cli,
+        fingerprint_mgr=fp_mgr,
+        behavior_sim=behavior,
+        captcha_handler=captcha,
+        scheduler=scheduler,
+    )
 
 
 # Disable all delays in tests
@@ -34,6 +54,22 @@ def no_delay():
 
 
 # ── search_products ──────────────────────────────────────────────────────────
+
+def _make_eval_fn(captured_data=None, dom_data=None):
+    """Create a browser_eval mock that returns data based on JS content."""
+    async def eval_fn(js_code, *args, **kwargs):
+        js = str(js_code)
+        if "__mt_captured" in js and "JSON.stringify" in js:
+            # _JS_GET_CAPTURED
+            return json.dumps(captured_data or [])
+        if "search-result" in js or "food-item" in js or "poi-item" in js:
+            # _JS_EXTRACT_SEARCH_RESULTS / _JS_EXTRACT_STORE_PRODUCTS
+            return json.dumps(dom_data or [])
+        if "hot-word" in js or "HotWord" in js:
+            return json.dumps([])
+        return ""
+    return eval_fn
+
 
 class TestSearchProducts:
     @pytest.mark.asyncio
@@ -58,11 +94,7 @@ class TestSearchProducts:
                 },
             }
         ]
-        # First call: inject interceptor returns 'injected'
-        # Second call: get captured returns xhr data
-        mock_cli.browser_eval = AsyncMock(
-            side_effect=["injected", json.dumps(xhr_data)]
-        )
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn(captured_data=xhr_data))
 
         products = await scraper.search_products("血压计")
         assert len(products) == 1
@@ -75,9 +107,7 @@ class TestSearchProducts:
         dom_data = [
             {"name": "血压计A", "price": 199, "sales": 50, "storeName": "药店", "storeId": "1"}
         ]
-        mock_cli.browser_eval = AsyncMock(
-            side_effect=["injected", "[]", json.dumps(dom_data)]
-        )
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn(dom_data=dom_data))
 
         products = await scraper.search_products("血压计")
         assert len(products) == 1
@@ -87,27 +117,22 @@ class TestSearchProducts:
     @pytest.mark.asyncio
     async def test_text_fallback(self, scraper, mock_cli):
         """XHR + DOM empty → text fallback."""
-        # Text must be > 50 chars for text parser to engage
         text = (
             "健康大药房 光谷店 距离1.2km\n月售120 ¥199\n"
             "另一家药店 关山大道店\n月售50 ¥89\n"
             "填充文本确保长度足够 padding text to exceed fifty characters\n"
         )
-        mock_cli.browser_eval = AsyncMock(
-            side_effect=["injected", "[]", "[]"]
-        )
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn())
         mock_cli.browser_text = AsyncMock(return_value=text)
 
         products = await scraper.search_products("健康")
-        # The text parser sets current_store on non-matching lines,
-        # then creates product when it sees 月售. "健康大药房" matches keyword "健康"
         assert len(products) >= 1
         assert products[0].monthly_sales == 120
 
     @pytest.mark.asyncio
     async def test_all_strategies_fail(self, scraper, mock_cli):
         """All strategies fail → empty list, no exception."""
-        mock_cli.browser_eval = AsyncMock(return_value=None)
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn())
         mock_cli.browser_text = AsyncMock(return_value="")
 
         products = await scraper.search_products("血压计")
@@ -123,7 +148,7 @@ class TestSearchProducts:
 
     @pytest.mark.asyncio
     async def test_custom_location(self, scraper, mock_cli):
-        mock_cli.browser_eval = AsyncMock(return_value=None)
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn())
         mock_cli.browser_text = AsyncMock(return_value="")
         await scraper.search_products("test", location=(116.0, 39.0))
         url = mock_cli.browser_open.call_args[0][0]
@@ -137,7 +162,9 @@ class TestGetStoreProducts:
     @pytest.mark.asyncio
     async def test_success(self, scraper, mock_cli):
         items = [{"name": "产品A", "price": 99, "sales": 30}]
-        mock_cli.browser_eval = AsyncMock(return_value=json.dumps(items))
+        mock_cli.browser_eval = AsyncMock(
+            side_effect=_make_eval_fn(dom_data=items)
+        )
 
         products = await scraper.get_store_products("12345")
         assert len(products) == 1
@@ -145,7 +172,7 @@ class TestGetStoreProducts:
 
     @pytest.mark.asyncio
     async def test_empty(self, scraper, mock_cli):
-        mock_cli.browser_eval = AsyncMock(return_value="[]")
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn())
         products = await scraper.get_store_products("12345")
         assert products == []
 
@@ -183,15 +210,18 @@ class TestGetCategoryRanking:
 class TestSearchHotKeywords:
     @pytest.mark.asyncio
     async def test_success(self, scraper, mock_cli):
-        mock_cli.browser_eval = AsyncMock(
-            return_value=json.dumps(["血压计", "口罩", "体温计"])
-        )
+        hot_words = ["血压计", "口罩", "体温计"]
+        async def eval_fn(js, *a, **kw):
+            if "hot-word" in str(js) or "HotWord" in str(js):
+                return json.dumps(hot_words)
+            return ""
+        mock_cli.browser_eval = AsyncMock(side_effect=eval_fn)
         keywords = await scraper.search_hot_keywords()
-        assert keywords == ["血压计", "口罩", "体温计"]
+        assert keywords == hot_words
 
     @pytest.mark.asyncio
     async def test_empty(self, scraper, mock_cli):
-        mock_cli.browser_eval = AsyncMock(return_value="[]")
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn())
         keywords = await scraper.search_hot_keywords()
         assert keywords == []
 

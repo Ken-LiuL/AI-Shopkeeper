@@ -8,9 +8,18 @@ from __future__ import annotations
 import sys
 import types as _types
 
-for _mod_name in ("neo4j", "aiohttp"):
+for _mod_name in ("neo4j",):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = _types.ModuleType(_mod_name)
+
+# aiohttp stub with ClientSession + ClientTimeout
+if "aiohttp" not in sys.modules:
+    from unittest.mock import MagicMock as _MagicMock
+    _aiohttp = _types.ModuleType("aiohttp")
+    _aiohttp.ClientSession = _MagicMock  # type: ignore
+    _aiohttp.ClientTimeout = _MagicMock  # type: ignore
+    _aiohttp.ClientError = Exception  # type: ignore
+    sys.modules["aiohttp"] = _aiohttp
 
 # ---------------------------------------------------------------------------
 
