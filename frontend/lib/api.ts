@@ -87,6 +87,37 @@ export const getChatHistory = (sessionId: string) =>
 export const deleteChatSession = (sessionId: string) =>
   request<any>(`/api/customer-service/sessions/${sessionId}`, { method: 'DELETE' });
 
+// Replenishment
+export const getReplenishmentSuggestions = () => request<any>('/api/replenishment/suggestions');
+export const getReplenishmentSafetyStock = () => request<any>('/api/replenishment/safety-stock');
+export const createPurchaseOrder = (items: any[]) =>
+  request<any>('/api/replenishment/purchase-order', { method: 'POST', body: JSON.stringify(items) });
+
+// Pricing
+export const getPricingSuggestions = () => request<any>('/api/pricing/suggestions');
+export const getPricingAnalysis = (id: string) => request<any>(`/api/pricing/analysis/${id}`);
+export const applyPriceChanges = (changes: any[]) =>
+  request<any>('/api/pricing/apply', { method: 'POST', body: JSON.stringify({ changes }) });
+
+// Reports
+export const getDailyReport = (date?: string) => {
+  const sp = new URLSearchParams();
+  if (date) sp.set('date', date);
+  return request<any>(`/api/reports/daily?${sp.toString()}`);
+};
+export const getWeeklyReport = () => request<any>('/api/reports/weekly');
+export const getMonthlyReport = () => request<any>('/api/reports/monthly');
+
+// Analytics
+export const getCSAnalytics = (params?: { start_date?: string; end_date?: string }) => {
+  const sp = new URLSearchParams();
+  if (params?.start_date) sp.set('start_date', params.start_date);
+  if (params?.end_date) sp.set('end_date', params.end_date);
+  return request<any>(`/api/analytics/customer-service?${sp.toString()}`);
+};
+export const getConversionTracking = (days?: number) =>
+  request<any>(`/api/analytics/conversion?days=${days || 7}`);
+
 // Listing
 export const getListings = (params?: { status?: string; page?: number; page_size?: number }) => {
   const sp = new URLSearchParams();

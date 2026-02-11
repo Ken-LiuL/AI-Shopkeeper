@@ -572,6 +572,134 @@
 }
 ```
 
+---
+
+## 补货管理 (Replenishment)
+
+### GET /api/replenishment/suggestions
+
+获取补货建议列表（库存低于安全库存的商品）。
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "product_id": "prod_001",
+      "product_name": "欧姆龙电子血压计",
+      "current_stock": 5,
+      "safety_stock": 15,
+      "suggested_qty": 15,
+      "cost_price": 128.00,
+      "estimated_cost": 1920.00,
+      "supplier_link": "https://s.1688.com/..."
+    }
+  ]
+}
+```
+
+### POST /api/replenishment/purchase-order
+
+生成采购单。
+
+**请求**: 补货建议列表（同 suggestions 返回格式）
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "order_id": "po_abc123def456",
+    "items": [...],
+    "total_cost": 5760.00,
+    "status": "draft"
+  }
+}
+```
+
+### GET /api/replenishment/safety-stock
+
+获取所有活跃商品的安全库存列表。
+
+---
+
+## 定价管理 (Pricing)
+
+### GET /api/pricing/suggestions
+
+获取定价建议列表。
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "product_id": "prod_001",
+      "product_name": "欧姆龙电子血压计",
+      "current_price": 299.00,
+      "suggested_price": 269.00,
+      "reason": "价格高于竞品均价15%，建议降价",
+      "current_margin": 0.57,
+      "projected_margin": 0.52,
+      "competitor_ref": { "avg": 245.00, "min": 199.00, "max": 320.00, "count": 5 }
+    }
+  ]
+}
+```
+
+### GET /api/pricing/analysis/{product_id}
+
+单品价格分析（含竞品对比、毛利、弹性）。
+
+### POST /api/pricing/apply
+
+批量应用调价。
+
+**请求**:
+```json
+{
+  "changes": [
+    { "product_id": "prod_001", "new_price": 269.00, "reason": "竞品降价跟进" }
+  ]
+}
+```
+
+---
+
+## 客服分析 (Analytics)
+
+### GET /api/analytics/customer-service
+
+客服统计数据。
+
+**Query 参数**: `start_date`, `end_date`
+
+**响应**:
+```json
+{
+  "success": true,
+  "data": {
+    "total_inquiries": 156,
+    "ai_handled": 120,
+    "human_transfer": 36,
+    "ai_ratio": 0.77,
+    "avg_response_ms": 850,
+    "intent_distribution": { "product_inquiry": 0.45, "after_sales": 0.30, "complaint": 0.25 },
+    "satisfaction_score": 4.2
+  }
+}
+```
+
+### GET /api/analytics/conversion
+
+客服推荐转化追踪。
+
+**Query 参数**: `days` (默认 7)
+
+---
+
 ### GET /api/dashboard/top-products
 
 近 30 天销量 TOP 10 商品。

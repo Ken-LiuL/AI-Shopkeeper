@@ -41,7 +41,37 @@ async def _period_report(days: int) -> dict:
 
 
 @router.get("/daily", response_model=APIResponse[dict])
-async def daily_report() -> APIResponse[dict]:
+async def daily_report(date: str | None = None) -> APIResponse[dict]:
+    """日报 — 支持 ?date=2026-02-12 查询指定日期的智能日报"""
+    if date:
+        from datetime import date as date_type
+        from src.services.daily_report import DailyReportService
+        try:
+            d = date_type.fromisoformat(date)
+            svc = DailyReportService()
+            report = await svc.generate_daily_report(d)
+            return APIResponse(data={
+                "date": report.date,
+                "revenue": report.revenue,
+                "order_count": report.order_count,
+                "avg_order_value": report.avg_order_value,
+                "revenue_vs_yesterday": report.revenue_vs_yesterday,
+                "revenue_vs_last_week": report.revenue_vs_last_week,
+                "order_vs_yesterday": report.order_vs_yesterday,
+                "order_vs_last_week": report.order_vs_last_week,
+                "top_products": report.top_products,
+                "slow_products": report.slow_products,
+                "cs_total": report.cs_total,
+                "cs_ai_ratio": report.cs_ai_ratio,
+                "cs_human_transfer": report.cs_human_transfer,
+                "alerts_triggered": report.alerts_triggered,
+                "alerts_pending": report.alerts_pending,
+                "alerts_resolved": report.alerts_resolved,
+                "todo_items": report.todo_items,
+                "competitor_changes": report.competitor_changes,
+            })
+        except ValueError:
+            pass
     return APIResponse(data=await _period_report(1))
 
 

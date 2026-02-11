@@ -71,13 +71,18 @@
 
 ## 功能模块
 
-| Agent | 职责 | LangGraph 节点数 |
-|-------|------|-----------------|
-| **Selection** | 智能选品：市场分析→竞品监控→缺品识别→供应链评估→综合评分 | 8 |
-| **CustomerService** | 智能客服：意图识别→路由→混合检索→精排→GraphRAG→回复生成 | 8 |
-| **Alert** | 智能预警：Prophet 时序检测→规则引擎→归因分析→行动建议 | 3 |
-| **Bundle** | 智能套餐：FP-Growth 关联挖掘→场景设计→定价 | 3 |
-| **Listing** | 智能上架：1688/拼多多解析→标品匹配→信息填充→合规校验 | 4 |
+| Agent / 服务 | 职责 | 说明 |
+|-------------|------|------|
+| **Selection** | 智能选品：市场分析→竞品监控→缺品识别→供应链评估→综合评分 | LangGraph 8节点 |
+| **CustomerService** | 智能客服：意图识别→路由→混合检索→精排→GraphRAG→回复生成 | LangGraph 8节点 |
+| **Alert** | 智能预警：Prophet 时序检测→规则引擎→归因分析→行动建议 | LangGraph 3节点 |
+| **Bundle** | 智能套餐：FP-Growth 关联挖掘→场景设计→定价 | LangGraph 3节点 |
+| **Listing** | 智能上架：1688/拼多多解析→标品匹配→信息填充→合规校验 | LangGraph 4节点 |
+| **DailyReport** | 智能日报：销售对比→热销/滞销→客服统计→预警→明日待办→推送 | 每日22:00自动推送 |
+| **Replenishment** | 智能补货：安全库存计算（Z=1.65）→补货建议→一键生成采购单 | 降本核心 |
+| **Pricing** | 动态定价：竞品价格对比→毛利分析→弹性估算→调价建议→批量执行 | 增效核心 |
+| **CSAnalytics** | 客服效果追踪：意图分布→AI处理率→推荐转化率 | 数据闭环 |
+| **FeedbackLoop** | 反馈闭环：选品/套餐/调价效果追踪→自适应权重调整 | 自我进化 |
 
 > 详细说明见 [docs/AGENTS.md](docs/AGENTS.md)
 
@@ -149,6 +154,12 @@ docker compose --profile app up -d
 | 上架 | `POST /api/listing/create` | 创建上架任务 |
 | | `POST /api/listing/parse` | 解析商品链接 |
 | 商品 | `GET/POST/PUT /api/products` | 商品 CRUD |
+| 补货 | `GET /api/replenishment/suggestions` | 补货建议 |
+| | `POST /api/replenishment/purchase-order` | 生成采购单 |
+| 定价 | `GET /api/pricing/suggestions` | 调价建议 |
+| | `POST /api/pricing/apply` | 批量调价 |
+| 分析 | `GET /api/analytics/customer-service` | 客服统计 |
+| | `GET /api/analytics/conversion` | 转化追踪 |
 | 仪表盘 | `GET /api/dashboard/overview` | 运营概览 |
 
 > 完整 API 文档见 [docs/API.md](docs/API.md)

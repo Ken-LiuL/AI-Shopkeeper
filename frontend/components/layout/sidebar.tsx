@@ -10,6 +10,9 @@ const nav = [
   { href: '/bundles', label: '套餐管理', icon: '🎁' },
   { href: '/customer-service', label: '智能客服', icon: '💬' },
   { href: '/listing', label: '上架管理', icon: '🚀' },
+  { href: '/replenishment', label: '补货管理', icon: '📦' },
+  { href: '/pricing', label: '定价管理', icon: '💲' },
+  { href: '/reports', label: '经营报表', icon: '📈' },
   { href: '/settings', label: '系统设置', icon: '⚙️' },
 ];
 

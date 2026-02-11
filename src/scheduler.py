@@ -172,48 +172,16 @@ async def prophet_retrain_task() -> None:
 
 
 async def daily_report_task() -> None:
-    """每日报告任务 (22:00)"""
+    """每日报告任务 (22:00) — 使用 DailyReportService 生成智能日报"""
     logger.info("Starting daily report task")
     try:
-        from src.skills.notifier import NotifierSkill, DailyReportPayload
-        from src.skills.database import DatabaseSkill
-        from src.db import postgres as pg
-        from datetime import date
+        from src.services.daily_report import DailyReportService
 
-        pool = pg.get_pool()
-        db_skill = DatabaseSkill(pool)
+        svc = DailyReportService()
+        report = await svc.generate_daily_report()
+        await svc.push_report(report)
         
-        # 获取今日统计
-        today = date.today()
-        stats = await db_skill.get_sales_stats(start_date=today, end_date=today)
-        
-        total_revenue = sum(s.total_revenue for s in stats)
-        total_orders = sum(s.order_count for s in stats)
-        avg_margin = sum(s.gross_margin for s in stats) / len(stats) if stats else 0
-        
-        # 获取预警数量
-        alerts = await db_skill.get_alerts(status="open", limit=100)
-        
-        # 获取最新选品推荐
-        runs = await db_skill.get_latest_selection_runs(limit=1)
-        recommendations = []
-        if runs and runs[0].results:
-            recommendations = runs[0].results.get("recommendations", [])[:5]
-        
-        # 发送报告
-        notifier = NotifierSkill(webhook_url=os.environ.get("WECHAT_WEBHOOK_URL", ""))
-        await notifier.send_daily_report(DailyReportPayload(
-            date=str(today),
-            metrics={
-                "total_revenue": total_revenue,
-                "total_orders": total_orders,
-                "avg_margin": avg_margin,
-                "alert_count": len(alerts),
-            },
-            top_recommendations=recommendations,
-        ))
-        
-        logger.info("Daily report sent")
+        logger.info("Daily report generated and pushed for %s", report.date)
         
     except Exception as e:
         logger.exception("Daily report task failed")
