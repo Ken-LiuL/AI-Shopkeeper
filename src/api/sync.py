@@ -1,0 +1,64 @@
+"""Data sync status and trigger API routes."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastapi import APIRouter, BackgroundTasks
+
+from src.db import postgres as pg
+
+from .schemas import APIResponse
+
+router = APIRouter(prefix="/api/sync", tags=["sync"])
+logger = logging.getLogger(__name__)
+
+
+@router.get("/status", response_model=APIResponse[list[dict]])
+async def sync_status() -> APIResponse[list[dict]]:
+    """Return sync state for all registered syncers."""
+    pool = pg.get_pool()
+    rows = await pool.fetch(
+        """SELECT syncer_name, last_full_sync, last_incremental_sync,
+                  last_sync_status, last_sync_error, records_synced,
+                  last_sync_duration_ms, updated_at
+           FROM sync_state ORDER BY syncer_name"""
+    )
+    return APIResponse(data=[dict(r) for r in rows])
+
+
+async def _trigger_sync_all() -> None:
+    """Run all syncers once in background."""
+    try:
+        from src.sync.products import ProductSyncer
+        from src.sync.orders import OrderSyncer
+        from src.sync.inventory import InventorySyncer
+        from src.sync.metrics import MetricsSyncer
+        from src.sync.traffic import TrafficSyncer
+        from src.sync.reviews import ReviewSyncer
+        from src.sync.qnh_client import QNHClient
+
+        client = QNHClient()
+        syncers = [
+            ProductSyncer(client),
+            OrderSyncer(client),
+            InventorySyncer(client),
+            MetricsSyncer(client),
+            TrafficSyncer(client),
+            ReviewSyncer(client),
+        ]
+        for s in syncers:
+            try:
+                await s.sync_full()
+            except Exception:
+                logger.exception("Sync failed for %s", s.name)
+    except Exception:
+        logger.exception("Failed to trigger sync")
+
+
+@router.post("/trigger", response_model=APIResponse[dict])
+async def trigger_sync(bg: BackgroundTasks) -> APIResponse[dict]:
+    """Manually trigger a full sync of all data sources."""
+    bg.add_task(_trigger_sync_all)
+    return APIResponse(data={"status": "triggered"}, message="Full sync triggered in background")

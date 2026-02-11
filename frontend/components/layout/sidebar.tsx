@@ -8,6 +8,8 @@ const nav = [
   { href: '/selection', label: '选品推荐', icon: '🎯' },
   { href: '/alerts', label: '预警中心', icon: '🔔' },
   { href: '/bundles', label: '套餐管理', icon: '🎁' },
+  { href: '/customer-service', label: '智能客服', icon: '💬' },
+  { href: '/listing', label: '上架管理', icon: '🚀' },
   { href: '/settings', label: '系统设置', icon: '⚙️' },
 ];
 

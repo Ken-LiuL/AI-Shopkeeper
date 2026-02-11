@@ -108,7 +108,7 @@ async def update_product(product_id: str, body: ProductUpdateRequest) -> APIResp
 async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
-        """SELECT sale_date AS date, quantity, revenue FROM product_sales
+        """SELECT sale_date AS date, quantity, revenue FROM sales_history
            WHERE product_id = $1 ORDER BY sale_date DESC LIMIT 90""",
         product_id,
     )

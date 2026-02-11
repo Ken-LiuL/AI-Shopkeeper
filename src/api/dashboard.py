@@ -17,13 +17,17 @@ async def overview() -> APIResponse[DashboardOverview]:
     total_products = await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
     today_orders = await pool.fetchval("SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE") or 0
     pending_alerts = await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
-    pending_tasks = await pool.fetchval(
-        """SELECT COUNT(*) FROM (
-             SELECT 1 FROM selection_runs WHERE status = 'running'
-             UNION ALL SELECT 1 FROM bundle_tasks WHERE status = 'running'
-             UNION ALL SELECT 1 FROM listings WHERE status = 'processing'
-           ) t"""
-    ) or 0
+    # Count running tasks across tables that may or may not exist yet
+    pending_tasks = 0
+    for q in [
+        "SELECT COUNT(*) FROM selection_runs WHERE status = 'running'",
+        "SELECT COUNT(*) FROM bundle_tasks WHERE status = 'running'",
+        "SELECT COUNT(*) FROM listings WHERE status = 'processing'",
+    ]:
+        try:
+            pending_tasks += await pool.fetchval(q) or 0
+        except Exception:
+            pass
     return APIResponse(
         data=DashboardOverview(
             total_products=total_products,
@@ -39,7 +43,7 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT sale_date AS date, SUM(quantity)::int AS quantity, SUM(revenue) AS revenue
-           FROM product_sales
+           FROM sales_history
            WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
            GROUP BY sale_date ORDER BY sale_date"""
     )
@@ -51,7 +55,7 @@ async def top_products() -> APIResponse[list[TopProduct]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT ps.product_id, p.name, SUM(ps.quantity)::int AS total_sales, SUM(ps.revenue) AS revenue
-           FROM product_sales ps JOIN products p ON ps.product_id = p.product_id
+           FROM sales_history ps JOIN products p ON ps.product_id = p.product_id
            WHERE ps.sale_date >= CURRENT_DATE - INTERVAL '30 days'
            GROUP BY ps.product_id, p.name
            ORDER BY total_sales DESC LIMIT 10"""

@@ -16,7 +16,10 @@ from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
 from src.api.listing import router as listing_router
 from src.api.products import router as products_router
+from src.api.knowledge import router as knowledge_router
+from src.api.metrics_api import router as metrics_router
 from src.api.selection import router as selection_router
+from src.api.sync import router as sync_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
 from src.db import postgres as pg_db
@@ -145,6 +148,9 @@ app.include_router(bundles_router)
 app.include_router(listing_router)
 app.include_router(products_router)
 app.include_router(dashboard_router)
+app.include_router(sync_router)
+app.include_router(knowledge_router)
+app.include_router(metrics_router)
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)

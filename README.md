@@ -1,153 +1,313 @@
-# AI店长 - 智能零售管理系统
+# AI店长 — 智能零售管理系统
 
-美团即时零售（医疗器械类目）智能运营系统
+> 美团即时零售（医疗器械类目）AI 驱动运营系统，覆盖选品、客服、预警、套餐、上架五大核心环节。
 
-## 功能模块
+[![CI](https://github.com/your-org/ai-store-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/ai-store-manager/actions)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-proprietary-red.svg)]()
 
-| 模块 | 描述 |
-|------|------|
-| Selection Agent | 智能选品（市场分析 → 缺品识别 → 供应链评估 → 综合评分） |
-| CustomerService Agent | 智能客服（意图识别 → Hybrid Search → GraphRAG → 回复生成） |
-| Alert Agent | 智能预警（Prophet时序检测 → 归因分析 → 行动建议） |
-| Bundle Agent | 智能套餐（FP-Growth关联挖掘 → 场景设计 → 定价） |
-| Listing Agent | 智能上架（1688/拼多多解析 → 标品匹配 → 合规校验） |
+---
+
+## 系统架构
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│                        接入层                                  │
+│   React 管理后台 (3000)  ·  企业微信  ·  APScheduler 定时任务  │
+└──────────────────────────┬────────────────────────────────────┘
+                           │  HTTP / WebSocket
+                           ▼
+┌───────────────────────────────────────────────────────────────┐
+│                   FastAPI  (8000)                              │
+│   /api/selection · /api/cs · /api/alerts · /api/bundles       │
+│   /api/listing · /api/products · /api/dashboard               │
+└──────────────────────────┬────────────────────────────────────┘
+                           │
+                           ▼
+┌───────────────────────────────────────────────────────────────┐
+│                  Orchestrator（总调度）                         │
+│         接收请求 → 路由到子 Agent → 聚合结果返回                │
+└──┬──────────┬──────────┬──────────┬──────────┬────────────────┘
+   │          │          │          │          │
+   ▼          ▼          ▼          ▼          ▼
+┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐
+│选品  │ │客服  │ │预警  │ │套餐  │ │上架  │   ← LangGraph 状态机
+│Agent │ │Agent │ │Agent │ │Agent │ │Agent │
+└──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘ └──┬───┘
+   └────────┴────────┴────────┴────────┘
+                     │
+                     ▼
+┌───────────────────────────────────────────────────────────────┐
+│                    Skills Layer (MCP)                          │
+│  ActionBook · Neo4jSkill · DatabaseSkill · EmbeddingSkill     │
+│  RerankerSkill · ProphetSkill · CalculatorSkill · Notifier    │
+└──────────────────────────┬────────────────────────────────────┘
+                           │
+         ┌─────────────────┼─────────────────┐
+         ▼                 ▼                 ▼
+   ┌──────────┐    ┌──────────┐     ┌──────────┐
+   │PostgreSQL│    │  Neo4j   │     │  Redis   │
+   │   16     │    │ 5 + APOC │     │    7     │
+   │ (业务数据)│    │(知识图谱) │     │  (缓存)  │
+   └──────────┘    └──────────┘     └──────────┘
+```
 
 ## 技术栈
 
-- **Agent框架**: LangGraph 0.2.x
-- **LLM**: Claude API (Haiku/Sonnet/Opus 分层)
-- **Web框架**: FastAPI
-- **数据库**: PostgreSQL 16 + Neo4j 5 + Redis 7
-- **时序预测**: Prophet
-- **检索增强**: BGE Embedding + BGE Reranker + Neo4j Vector Index
-- **可观测性**: Langfuse + Prometheus + Grafana
+| 层级 | 技术 | 版本 |
+|------|------|------|
+| Agent 框架 | LangGraph | ≥ 0.2 |
+| LLM 调用 | OpenRouter (Gemini Flash / DeepSeek V3 / Claude Sonnet) + Anthropic 直连 | — |
+| Web 框架 | FastAPI + Uvicorn | ≥ 0.115 |
+| 关系数据库 | PostgreSQL | 16 |
+| 图数据库 | Neo4j Community + APOC | 5 |
+| 缓存 | Redis (hiredis) | 7 |
+| 向量化 | BGE-large-zh (sentence-transformers) | 1024d |
+| 精排 | BGE-Reranker | — |
+| 时序预测 | Prophet | ≥ 1.1 |
+| 可观测性 | Langfuse + Prometheus + Grafana | — |
+| 前端 | React + Recharts + TailwindCSS | — |
+| CI | GitHub Actions (ruff + pytest + coverage) | — |
 
-## 项目结构
+## 功能模块
 
-```
-ai-store-manager/
-├── SPEC.md                    # 完整技术方案
-├── README.md
-├── pyproject.toml
-├── docker-compose.yml
-├── config/                    # 配置文件
-│   ├── scoring.yaml
-│   ├── anomaly.yaml
-│   ├── customer_service.yaml
-│   └── system.yaml
-├── src/
-│   ├── __init__.py
-│   ├── main.py                # FastAPI 入口
-│   ├── config.py              # 配置加载
-│   ├── agents/                # Agent 定义
-│   │   ├── __init__.py
-│   │   ├── orchestrator.py    # 总调度
-│   │   ├── selection/         # 选品 Agent
-│   │   ├── customer_service/  # 客服 Agent
-│   │   ├── alert/             # 预警 Agent
-│   │   ├── bundle/            # 套餐 Agent
-│   │   └── listing/           # 上架 Agent
-│   ├── skills/                # MCP Skills Layer
-│   │   ├── __init__.py
-│   │   ├── actionbook.py      # 数据采集（美团/1688/拼多多）
-│   │   ├── neo4j_skill.py     # 图谱 + 向量检索
-│   │   ├── database.py        # PostgreSQL CRUD
-│   │   ├── embedding.py       # BGE 向量化
-│   │   ├── reranker.py        # BGE Reranker
-│   │   ├── prophet_skill.py   # 时序预测
-│   │   ├── calculator.py      # 评分/毛利计算
-│   │   └── notifier.py        # 企业微信通知
-│   ├── models/                # 数据模型
-│   │   ├── __init__.py
-│   │   ├── product.py
-│   │   ├── order.py
-│   │   ├── alert.py
-│   │   └── bundle.py
-│   ├── db/                    # 数据库
-│   │   ├── __init__.py
-│   │   ├── postgres.py        # PostgreSQL 连接
-│   │   ├── neo4j.py           # Neo4j 连接
-│   │   └── redis.py           # Redis 连接
-│   └── api/                   # API 路由
-│       ├── __init__.py
-│       ├── selection.py
-│       ├── customer_service.py
-│       ├── alerts.py
-│       ├── bundles.py
-│       └── listing.py
-├── migrations/                # 数据库迁移
-│   ├── postgres/
-│   │   └── 001_initial.sql
-│   └── neo4j/
-│       └── 001_schema.cypher
-├── tests/
-│   ├── __init__.py
-│   ├── test_selection.py
-│   ├── test_customer_service.py
-│   ├── test_alert.py
-│   └── test_bundle.py
-└── scripts/
-    ├── seed_data.py           # 初始化数据
-    └── train_prophet.py       # 训练Prophet模型
-```
+| Agent | 职责 | LangGraph 节点数 |
+|-------|------|-----------------|
+| **Selection** | 智能选品：市场分析→竞品监控→缺品识别→供应链评估→综合评分 | 8 |
+| **CustomerService** | 智能客服：意图识别→路由→混合检索→精排→GraphRAG→回复生成 | 8 |
+| **Alert** | 智能预警：Prophet 时序检测→规则引擎→归因分析→行动建议 | 3 |
+| **Bundle** | 智能套餐：FP-Growth 关联挖掘→场景设计→定价 | 3 |
+| **Listing** | 智能上架：1688/拼多多解析→标品匹配→信息填充→合规校验 | 4 |
 
-## 数据同步模块 (`src/sync/`)
+> 详细说明见 [docs/AGENTS.md](docs/AGENTS.md)
 
-牵牛花（`qnh.meituan.com`）数据采集引擎，支持全量和增量同步。
+## 快速开始（5 分钟）
 
-### 架构
+### 环境要求
 
-| 文件 | 职责 |
-|------|------|
-| `base.py` | `BaseSyncer` 抽象基类 — 全量/增量/智能选择、重试、状态持久化 |
-| `qnh_auth.py` | 认证管理 — Cookie持久化、CDP提取、滑块验证码、自动重登录 |
-| `qnh_client.py` | HTTP客户端 — csec参数注入、限流、并发控制、auth自动刷新 |
-| `products.py` | 商品主档同步（SPU/SKU/价格/状态） |
-| `orders.py` | 订单数据同步（金额/状态/商品明细） |
-| `metrics.py` | 每日经营指标（订单额/客单价/毛利/渠道分布） |
-| `inventory.py` | 库存快照 + 库存流水增量 |
-| `traffic.py` | 商品流量（曝光/点击/转化） |
-| `reviews.py` | 评价数据（评分/内容/回复） |
-| `scheduler.py` | 定时调度器（cron式调度） |
+- Python 3.11+
+- Docker & Docker Compose
+- 一个 OpenRouter API Key（或 Anthropic API Key）
 
-### 调度策略
-
-```
-products   → 全量 06:00 + 增量 every 4h
-orders     → 增量 every 30min
-metrics    → 全量 23:30
-inventory  → 增量 every 1h
-traffic    → 全量 23:00
-reviews    → 增量 every 4h
-```
-
-### 快速开始
-
-```python
-from src.sync import QNHClient, QNHAuth, ProductSyncer, SyncScheduler
-
-auth = QNHAuth()  # 从环境变量或浏览器CDP获取session
-async with QNHClient(auth=auth) as client:
-    syncer = ProductSyncer(client=client, db_pool=pool)
-    result = await syncer.sync()  # 智能选择全量或增量
-    print(result.summary)
-```
-
-### 数据库迁移
+### 1. 克隆 & 安装
 
 ```bash
-psql -f migrations/postgres/002_sync_tables.sql
+git clone <repo-url> && cd ai-store-manager
+cp .env.example .env
+# 编辑 .env，填入 API Key
 ```
 
-### 环境变量
+### 2. 启动基础设施
 
-| 变量 | 说明 |
+```bash
+docker compose up -d          # PostgreSQL 16 + Neo4j 5 + Redis 7
+make health-check             # 等待所有服务 ready
+```
+
+### 3. 初始化数据库 & 种子数据
+
+```bash
+make migrate-pg               # PostgreSQL schema
+make migrate-neo4j            # Neo4j schema + 向量索引
+make seed                     # 示例商品 + 订单 + FAQ
+python scripts/seed_knowledge_graph.py  # 知识图谱
+```
+
+### 4. 启动应用
+
+```bash
+# 方式一：开发模式（auto-reload）
+make dev                      # → http://localhost:8000
+
+# 方式二：Docker
+docker compose --profile app up -d
+```
+
+### 5. 访问
+
+| 服务 | 地址 |
 |------|------|
-| `QNH_USERNAME` | 牵牛花登录账号 |
-| `QNH_PASSWORD` | 牵牛花登录密码 |
-| `QNH_SESSION_FILE` | Session持久化路径（默认 `~/.qnh_session.json`） |
-| `QNH_CDP_ENDPOINT` | Chrome CDP端口（默认 `http://127.0.0.1:9222`） |
+| API 文档 (Swagger) | http://localhost:8000/docs |
+| 健康检查 | http://localhost:8000/health |
+| 深度就绪检查 | http://localhost:8000/ready |
+| Neo4j Browser | http://localhost:7474 |
+| 前端管理台 | http://localhost:3000（需单独启动 `cd frontend && npm run dev`）|
+| Prometheus 指标 | http://localhost:9090/metrics |
 
-## 开发计划
+## API 概览
 
-详见 SPEC.md 第十二部分
+所有 API 返回统一格式：`{"success": true, "data": ..., "message": ""}`
+
+| 模块 | 端点 | 说明 |
+|------|------|------|
+| 选品 | `POST /api/selection/run` | 触发选品分析 |
+| | `GET /api/selection/recommendations` | 获取最新推荐 |
+| 客服 | `POST /api/cs/chat` | 发送咨询消息 |
+| 预警 | `POST /api/alerts/scan` | 触发预警扫描 |
+| | `GET /api/alerts` | 查询预警列表 |
+| 套餐 | `POST /api/bundles/generate` | 触发套餐生成 |
+| 上架 | `POST /api/listing/create` | 创建上架任务 |
+| | `POST /api/listing/parse` | 解析商品链接 |
+| 商品 | `GET/POST/PUT /api/products` | 商品 CRUD |
+| 仪表盘 | `GET /api/dashboard/overview` | 运营概览 |
+
+> 完整 API 文档见 [docs/API.md](docs/API.md)
+
+## Agent 交互流程
+
+```
+用户请求 / 定时触发
+       │
+       ▼
+  Orchestrator.run(task_type, input)
+       │
+       ├─ task_type="selection" ──→ SelectionGraph.ainvoke()
+       │     fetch_data → [market ∥ competitor ∥ inventory ∥ seasonal]
+       │     → gap_identification → supplier_evaluation → scorer
+       │
+       ├─ task_type="customer_service" ──→ CSGraph.ainvoke()
+       │     intent → route ─┬─ faq → reply
+       │                     ├─ search → rerank → graphrag → reply
+       │                     └─ human (转人工)
+       │
+       ├─ task_type="alert" ──→ AlertGraph.ainvoke()
+       │     anomaly_detection ─┬─ 无异常 → END
+       │                        └─ 有异常 → root_cause → action
+       │
+       ├─ task_type="bundle" ──→ BundleGraph.ainvoke()
+       │     order_mining → scene_design → pricing
+       │
+       └─ task_type="listing" ──→ ListingGraph.ainvoke()
+             parser → matcher → filler → compliance
+```
+
+## 配置说明
+
+### 环境变量（.env）
+
+| 变量 | 必填 | 说明 | 默认值 |
+|------|------|------|--------|
+| `LLM_PROVIDER` | 否 | LLM 提供商：`openrouter` 或 `anthropic` | `openrouter` |
+| `OPENROUTER_API_KEY` | 是* | OpenRouter API Key | — |
+| `ANTHROPIC_API_KEY` | 是* | Anthropic API Key（直连时） | — |
+| `POSTGRES_HOST` | 否 | PostgreSQL 主机 | `localhost` |
+| `POSTGRES_PORT` | 否 | PostgreSQL 端口 | `5432` |
+| `POSTGRES_DB` | 否 | 数据库名 | `ai_store` |
+| `POSTGRES_USER` | 否 | 数据库用户 | `postgres` |
+| `POSTGRES_PASSWORD` | 否 | 数据库密码 | `postgres` |
+| `NEO4J_URI` | 否 | Neo4j Bolt 地址 | `bolt://localhost:7687` |
+| `NEO4J_USER` | 否 | Neo4j 用户 | `neo4j` |
+| `NEO4J_PASSWORD` | 否 | Neo4j 密码 | `neo4jpassword` |
+| `REDIS_URL` | 否 | Redis 连接 URL | `redis://localhost:6379/0` |
+| `LANGFUSE_PUBLIC_KEY` | 否 | Langfuse 追踪 Public Key | — |
+| `LANGFUSE_SECRET_KEY` | 否 | Langfuse 追踪 Secret Key | — |
+| `LANGFUSE_HOST` | 否 | Langfuse 服务地址 | `http://localhost:3000` |
+| `QNH_USERNAME` | 否 | 牵牛花登录账号 | — |
+| `QNH_PASSWORD` | 否 | 牵牛花登录密码 | — |
+| `WECHAT_WEBHOOK_URL` | 否 | 企业微信机器人 Webhook | — |
+
+> *二选一：使用 OpenRouter 填 `OPENROUTER_API_KEY`，直连 Anthropic 填 `ANTHROPIC_API_KEY`。
+
+### YAML 配置文件
+
+| 文件 | 说明 |
+|------|------|
+| `config/system.yaml` | 系统参数：LLM 模型、并发、缓存 TTL、定时任务 cron、数据库连接 |
+| `config/scoring.yaml` | 选品评分：六维度权重、热度评分参数、供应商评分、毛利阈值 |
+| `config/anomaly.yaml` | 预警检测：Prophet 参数、销量异常阈值、库存预警天数 |
+| `config/customer_service.yaml` | 客服配置：意图识别、检索参数、回复模板 |
+
+## 开发指南
+
+### 运行测试
+
+```bash
+make test                     # pytest -v --tb=short
+pytest tests/test_cs_graph.py # 单个测试文件
+pytest -k "test_intent"       # 按名称过滤
+```
+
+测试环境自动设置 `TESTING=1`，跳过调度器启动和外部依赖。
+
+### 代码规范
+
+```bash
+make lint                     # ruff check + mypy
+ruff check src tests --fix    # 自动修复
+```
+
+- **Linter**: Ruff (E, F, I, N, W, UP, B, A, SIM)
+- **Type Checker**: mypy (strict mode)
+- **Line Length**: 100
+- **Target**: Python 3.11
+
+### 项目结构
+
+```
+src/
+├── main.py              # FastAPI 入口 + lifespan
+├── config.py            # YAML 配置加载（支持 ${ENV_VAR:default}）
+├── metrics.py           # Prometheus 指标定义
+├── scheduler.py         # APScheduler 定时任务
+├── agents/
+│   ├── orchestrator.py  # 总调度器
+│   ├── llm.py           # 统一 LLM 调用（OpenRouter/Anthropic + Langfuse）
+│   ├── tools.py         # Anthropic tool schema 定义
+│   ├── prompts/         # 各 Agent 的 Prompt 模板
+│   ├── selection/       # 选品 Agent（graph + nodes + state）
+│   ├── customer_service/# 客服 Agent
+│   ├── alert/           # 预警 Agent
+│   ├── bundle/          # 套餐 Agent
+│   └── listing/         # 上架 Agent
+├── skills/              # MCP Skills Layer
+│   ├── actionbook.py    # 数据采集（美团/1688/拼多多）
+│   ├── neo4j_skill.py   # 知识图谱 + 向量检索
+│   ├── database.py      # PostgreSQL CRUD
+│   ├── embedding.py     # BGE 向量化
+│   ├── reranker.py      # BGE 精排
+│   ├── prophet_skill.py # 时序预测
+│   ├── calculator.py    # 评分/毛利计算
+│   └── notifier.py      # 企业微信通知
+├── models/              # Pydantic 数据模型
+├── db/                  # 数据库连接管理（postgres/neo4j/redis）
+├── api/                 # FastAPI 路由
+├── sync/                # 牵牛花数据同步引擎
+└── learning/            # 自适应学习（权重/阈值/版本管理）
+```
+
+## 部署
+
+### Docker Compose（推荐）
+
+```bash
+# 开发环境
+docker compose up -d
+
+# 生产环境（含应用容器）
+docker compose --profile app up -d
+```
+
+### 生产注意事项
+
+- 反向代理：Nginx 配置 HTTPS + WebSocket 转发
+- 进程管理：Dockerfile 内置 `uvicorn --workers 2`，建议配合 Supervisor
+- 数据库：启用 PostgreSQL 主从复制，Neo4j 配置认证
+- 监控：Prometheus + Grafana 仪表盘
+- 备份：PostgreSQL `pg_dump` 每日备份，Neo4j `neo4j-admin dump` 每日备份
+
+> 详细部署文档见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+
+## 文档导航
+
+| 文档 | 说明 |
+|------|------|
+| [docs/API.md](docs/API.md) | 完整 API 文档 |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 架构设计 |
+| [docs/AGENTS.md](docs/AGENTS.md) | Agent 详细说明 |
+| [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 部署指南 |
+| [docs/客户方案书.md](docs/客户方案书.md) | 客户方案书 |
+| [SPEC.md](SPEC.md) | 完整技术规格书 |
+
+## 许可证
+
+Proprietary — All rights reserved.

@@ -1,7 +1,18 @@
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+function getBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const stored = localStorage.getItem('app-settings');
+    if (stored) {
+      try {
+        const settings = JSON.parse(stored);
+        if (settings.apiUrl) return settings.apiUrl;
+      } catch {}
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE_URL}${path}`, {
+  const res = await fetch(`${getBaseUrl()}${path}`, {
     headers: { 'Content-Type': 'application/json', ...options?.headers },
     ...options,
   });
@@ -54,3 +65,32 @@ export const updateBundle = (id: string, data: any) =>
   request<any>(`/api/bundles/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
 export const deleteBundle = (id: string) =>
   request<any>(`/api/bundles/${id}`, { method: 'DELETE' });
+
+// Customer Service
+export const sendChatMessage = (message: string, sessionId?: string) =>
+  request<any>('/api/customer-service/chat', {
+    method: 'POST',
+    body: JSON.stringify({ message, session_id: sessionId }),
+  });
+export const getChatSessions = () => request<any>('/api/customer-service/sessions');
+export const getChatHistory = (sessionId: string) =>
+  request<any>(`/api/customer-service/sessions/${sessionId}/messages`);
+
+// Listing
+export const getListings = (params?: { status?: string; page?: number; page_size?: number }) => {
+  const sp = new URLSearchParams();
+  if (params?.status) sp.set('status', params.status);
+  if (params?.page) sp.set('page', String(params.page));
+  if (params?.page_size) sp.set('page_size', String(params.page_size));
+  return request<any>(`/api/listing?${sp.toString()}`);
+};
+export const getListing = (id: string) => request<any>(`/api/listing/${id}`);
+export const generateListing = (sourceUrl: string) =>
+  request<any>('/api/listing/generate', {
+    method: 'POST',
+    body: JSON.stringify({ source_url: sourceUrl }),
+  });
+export const updateListing = (id: string, data: any) =>
+  request<any>(`/api/listing/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
+export const publishListing = (id: string) =>
+  request<any>(`/api/listing/${id}/publish`, { method: 'POST' });

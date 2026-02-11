@@ -108,3 +108,72 @@ export interface TaskCreatedResponse {
   task_id: string;
   message: string;
 }
+
+// Customer Service
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp?: string;
+  intent?: string;
+  confidence?: number;
+}
+
+export interface ChatSession {
+  session_id: string;
+  title: string;
+  last_message?: string;
+  message_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatResponse {
+  success: boolean;
+  data: {
+    reply: string;
+    intent?: string;
+    confidence?: number;
+    session_id: string;
+  };
+}
+
+// Listing
+export interface Listing {
+  listing_id: string;
+  source_url: string;
+  platform: string;
+  status: 'draft' | 'reviewing' | 'published' | 'failed';
+  title: string;
+  description: string;
+  seo_keywords: string[];
+  images: string[];
+  price?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListingGenerateResponse {
+  success: boolean;
+  data: {
+    listing_id: string;
+    title: string;
+    description: string;
+    seo_keywords: string[];
+    status: string;
+  };
+  message: string;
+}
+
+// Settings
+export interface AppSettings {
+  apiUrl: string;
+  refreshInterval: number;
+  selectionMinScore: number;
+  selectionMaxResults: number;
+  alertStockThreshold: number;
+  alertSalesDropThreshold: number;
+  bundleMinSupport: number;
+  bundleMinConfidence: number;
+  bundleMaxCount: number;
+  llmModel: string;
+}
