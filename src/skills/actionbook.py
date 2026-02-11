@@ -930,11 +930,46 @@ class ActionBookSkill:
     ) -> List[CompetitorStore]:
         """获取周边竞品店铺。
 
-        通过美团 H5 搜索采集，失败时降级为 mock 数据。
+        数据来源优先级：
+        1. competitor_stores 表（RPC 设备采集的真实数据）
+        2. H5 搜索采集
+        3. Mock fallback
         """
         self._check_rate("competitor_stores")
 
-        # 尝试 H5 采集
+        # Strategy 1: DB (RPC 采集数据)
+        if self._db_pool:
+            try:
+                rows = await self._db_pool.fetch(
+                    """
+                    SELECT store_id, name, rating, monthly_sales, distance_km, category
+                    FROM competitor_stores
+                    WHERE distance_km <= $1
+                      AND last_synced >= NOW() - INTERVAL '7 days'
+                    ORDER BY monthly_sales DESC
+                    LIMIT 20
+                    """,
+                    radius_km,
+                )
+                if rows:
+                    stores = []
+                    for row in rows:
+                        ms = int(row["monthly_sales"] or 0)
+                        threat = "high" if ms > 10000 else "medium" if ms > 5000 else "low"
+                        stores.append(CompetitorStore(
+                            store_id=str(row["store_id"]),
+                            name=row["name"] or "",
+                            distance_km=float(row["distance_km"] or 0),
+                            rating=float(row["rating"] or 0),
+                            monthly_sales=ms,
+                            threat_level=threat,
+                        ))
+                    logger.info(f"Competitor stores: got {len(stores)} from RPC DB")
+                    return stores
+            except Exception as e:
+                logger.warning(f"DB competitor_stores query failed: {e}")
+
+        # Strategy 2: H5 采集
         if await self._ensure_extension():
             try:
                 from src.skills.meituan_h5 import MeituanH5Scraper
@@ -989,11 +1024,45 @@ class ActionBookSkill:
     ) -> List[CompetitorProduct]:
         """获取竞品商品列表。
 
-        通过美团 H5 搜索采集，失败时降级为 mock 数据。
+        数据来源优先级：
+        1. competitor_products 表（RPC 设备采集的真实数据）
+        2. H5 搜索采集
+        3. Mock fallback
         """
         self._check_rate("competitor_products")
 
-        # 尝试 H5 采集
+        # Strategy 1: DB (RPC 采集数据)
+        if self._db_pool:
+            try:
+                query = """
+                    SELECT product_id, name, price, monthly_sales, rating, category
+                    FROM competitor_products
+                    WHERE last_synced >= NOW() - INTERVAL '7 days'
+                """
+                params: list = []
+                if category:
+                    query += " AND category ILIKE $1"
+                    params.append(f"%{category}%")
+                query += " ORDER BY monthly_sales DESC LIMIT $" + str(len(params) + 1)
+                params.append(limit)
+
+                rows = await self._db_pool.fetch(query, *params)
+                if rows:
+                    products = [
+                        CompetitorProduct(
+                            product_id=str(row["product_id"]),
+                            name=row["name"] or "",
+                            price=float(row["price"] or 0),
+                            monthly_sales=int(row["monthly_sales"] or 0),
+                        )
+                        for row in rows
+                    ]
+                    logger.info(f"Competitor products: got {len(products)} from RPC DB")
+                    return products
+            except Exception as e:
+                logger.warning(f"DB competitor_products query failed: {e}")
+
+        # Strategy 2: H5 采集
         if await self._ensure_extension():
             try:
                 from src.skills.meituan_h5 import MeituanH5Scraper
@@ -1039,6 +1108,58 @@ class ActionBookSkill:
 
         # Mock fallback
         return ["电子血压计", "体温计", "血糖试纸", "口罩", "制氧机", "雾化器", "血氧仪"]
+
+    async def meituan_search_keywords(
+        self,
+        category: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[MeituanKeyword]:
+        """获取美团搜索关键词热度数据。
+
+        数据来源：competitor_keywords 表（RPC 设备采集）。
+        无数据时 fallback mock。
+        """
+        self._check_rate("meituan_keywords")
+
+        if self._db_pool:
+            try:
+                query = """
+                    SELECT keyword, search_volume, result_count, avg_price
+                    FROM competitor_keywords
+                    WHERE last_synced >= NOW() - INTERVAL '7 days'
+                """
+                params: list = []
+                if category:
+                    query += " AND keyword ILIKE $1"
+                    params.append(f"%{category}%")
+                query += " ORDER BY search_volume DESC LIMIT $" + str(len(params) + 1)
+                params.append(limit)
+
+                rows = await self._db_pool.fetch(query, *params)
+                if rows:
+                    keywords = [
+                        MeituanKeyword(
+                            keyword=row["keyword"],
+                            search_volume=int(row["search_volume"] or 0),
+                            growth_rate=0.0,
+                            category=category or "",
+                        )
+                        for row in rows
+                    ]
+                    logger.info(f"Search keywords: got {len(keywords)} from RPC DB")
+                    return keywords
+            except Exception as e:
+                logger.warning(f"DB competitor_keywords query failed: {e}")
+
+        # Mock fallback
+        mock = [
+            MeituanKeyword(keyword="电子血压计", search_volume=12000, growth_rate=0.15, category="血压监测"),
+            MeituanKeyword(keyword="血糖试纸", search_volume=8500, growth_rate=0.22, category="血糖监测"),
+            MeituanKeyword(keyword="体温计", search_volume=35000, growth_rate=0.08, category="体温监测"),
+            MeituanKeyword(keyword="雾化器", search_volume=5200, growth_rate=0.35, category="呼吸治疗"),
+            MeituanKeyword(keyword="制氧机", search_volume=3800, growth_rate=0.28, category="呼吸治疗"),
+        ]
+        return mock[:limit]
 
     # ── 1688 ─────────────────────────────────────────────────────────────
 
