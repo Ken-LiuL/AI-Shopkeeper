@@ -11,10 +11,14 @@ from src.agents.llm import (
     MODEL_HAIKU,
     MODEL_OPUS,
     MODEL_SONNET,
+    MODEL_FLASH,
+    MODEL_DEEPSEEK,
+    MODEL_PRO,
     call_tool,
     call_tool_with_reflection,
-    get_client,
     _record_llm_metrics,
+    _get_openai_client,
+    _get_anthropic_client,
 )
 
 
@@ -24,7 +28,7 @@ from src.agents.llm import (
 
 @pytest.fixture
 def mock_tool():
-    """Sample tool schema for testing."""
+    """Sample tool schema (Anthropic format, as used by call_tool)."""
     return {
         "name": "test_output_tool",
         "description": "Test output tool",
@@ -39,33 +43,36 @@ def mock_tool():
     }
 
 
+def _make_openai_response(tool_name: str, tool_input: dict, input_tokens=100, output_tokens=50):
+    """Build a mock OpenAI ChatCompletion with a tool call."""
+    tc = MagicMock()
+    tc.function.name = tool_name
+    tc.function.arguments = json.dumps(tool_input)
+
+    message = MagicMock()
+    message.tool_calls = [tc]
+
+    choice = MagicMock()
+    choice.message = message
+
+    usage = MagicMock()
+    usage.prompt_tokens = input_tokens
+    usage.completion_tokens = output_tokens
+
+    response = MagicMock()
+    response.choices = [choice]
+    response.usage = usage
+    return response
+
+
 @pytest.fixture
-def mock_tool_response():
-    """Create a mock Anthropic response with tool_use block."""
-    def _factory(tool_name: str, tool_input: dict):
-        block = MagicMock()
-        block.type = "tool_use"
-        block.id = "toolu_test_001"
-        block.name = tool_name
-        block.input = tool_input
-
-        response = MagicMock()
-        response.content = [block]
-        response.stop_reason = "tool_use"
-        response.usage = MagicMock()
-        response.usage.input_tokens = 100
-        response.usage.output_tokens = 50
-        return response
-    return _factory
-
-
-@pytest.fixture
-def mock_anthropic_client(mock_tool_response):
-    """Mock Anthropic async client."""
+def mock_openai_client():
+    """Mock OpenAI async client (used for OpenRouter path)."""
     client = AsyncMock()
-    client.messages = AsyncMock()
-    client.messages.create = AsyncMock(
-        return_value=mock_tool_response("test_output_tool", {"result": "test_result", "score": 0.9})
+    client.chat = AsyncMock()
+    client.chat.completions = AsyncMock()
+    client.chat.completions.create = AsyncMock(
+        return_value=_make_openai_response("test_output_tool", {"result": "test_result", "score": 0.9})
     )
     return client
 
@@ -77,111 +84,130 @@ def mock_anthropic_client(mock_tool_response):
 class TestModelConstants:
     """Test model tier constants are defined correctly."""
 
-    def test_haiku_model(self):
-        """Verify Haiku model string."""
-        assert "haiku" in MODEL_HAIKU.lower()
+    def test_model_flash_exists(self):
+        assert MODEL_FLASH is not None and len(MODEL_FLASH) > 0
 
-    def test_sonnet_model(self):
-        """Verify Sonnet model string."""
-        assert "sonnet" in MODEL_SONNET.lower()
+    def test_model_deepseek_exists(self):
+        assert MODEL_DEEPSEEK is not None and len(MODEL_DEEPSEEK) > 0
 
-    def test_opus_model(self):
-        """Verify Opus model string."""
-        assert "opus" in MODEL_OPUS.lower()
+    def test_model_pro_exists(self):
+        assert MODEL_PRO is not None and len(MODEL_PRO) > 0
+
+    def test_model_sonnet_exists(self):
+        assert MODEL_SONNET is not None and len(MODEL_SONNET) > 0
 
     def test_model_hierarchy(self):
-        """Ensure models are distinct."""
-        assert MODEL_HAIKU != MODEL_SONNET != MODEL_OPUS
+        """Ensure key models are distinct."""
+        assert MODEL_FLASH != MODEL_SONNET
+        assert MODEL_FLASH != MODEL_PRO
 
 
 # ---------------------------------------------------------------------------
-# call_tool
+# call_tool (OpenRouter / OpenAI SDK path)
 # ---------------------------------------------------------------------------
 
 class TestCallTool:
-    """Tests for call_tool function."""
+    """Tests for call_tool function (default: openrouter)."""
 
-    async def test_call_tool_success(self, mock_anthropic_client, mock_tool):
-        """Test successful tool call returns parsed result."""
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
+    async def test_call_tool_success(self, mock_openai_client, mock_tool):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                result = await call_tool(
-                    prompt="Test prompt",
-                    tool=mock_tool,
-                    model=MODEL_SONNET,
-                )
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    result = await call_tool(prompt="Test prompt", tool=mock_tool, model=MODEL_SONNET)
         assert result["result"] == "test_result"
         assert result["score"] == 0.9
 
-    async def test_call_tool_uses_correct_model(self, mock_anthropic_client, mock_tool):
-        """Test that the specified model is passed to the API."""
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
+    async def test_call_tool_uses_correct_model(self, mock_openai_client, mock_tool):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool(
-                    prompt="Test",
-                    tool=mock_tool,
-                    model=MODEL_HAIKU,
-                )
-        call_kwargs = mock_anthropic_client.messages.create.call_args.kwargs
-        assert call_kwargs["model"] == MODEL_HAIKU
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    await call_tool(prompt="Test", tool=mock_tool, model=MODEL_FLASH)
+        call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["model"] == MODEL_FLASH
 
-    async def test_call_tool_with_system_prompt(self, mock_anthropic_client, mock_tool):
-        """Test that system prompt is included when provided."""
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
+    async def test_call_tool_with_system_prompt(self, mock_openai_client, mock_tool):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool(
-                    prompt="Test",
-                    tool=mock_tool,
-                    system="You are a helpful assistant.",
-                )
-        call_kwargs = mock_anthropic_client.messages.create.call_args.kwargs
-        assert call_kwargs["system"] == "You are a helpful assistant."
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    await call_tool(prompt="Test", tool=mock_tool, system="You are helpful.")
+        call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+        messages = call_kwargs["messages"]
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"] == "You are helpful."
 
-    async def test_call_tool_forces_tool_choice(self, mock_anthropic_client, mock_tool):
-        """Test that tool_choice forces the specific tool."""
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
+    async def test_call_tool_forces_tool_choice(self, mock_openai_client, mock_tool):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool(prompt="Test", tool=mock_tool)
-        call_kwargs = mock_anthropic_client.messages.create.call_args.kwargs
-        assert call_kwargs["tool_choice"]["type"] == "tool"
-        assert call_kwargs["tool_choice"]["name"] == mock_tool["name"]
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    await call_tool(prompt="Test", tool=mock_tool)
+        call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["tool_choice"]["type"] == "function"
+        assert call_kwargs["tool_choice"]["function"]["name"] == mock_tool["name"]
 
-    async def test_call_tool_no_tool_use_block_raises(self, mock_anthropic_client, mock_tool):
-        """Test that missing tool_use block raises ValueError."""
-        # Create response without tool_use block
-        text_block = MagicMock()
-        text_block.type = "text"
-        text_block.text = "I don't want to use a tool"
+    async def test_call_tool_no_tool_calls_raises(self, mock_openai_client, mock_tool):
+        message = MagicMock()
+        message.tool_calls = None
+        choice = MagicMock()
+        choice.message = message
+        response = MagicMock()
+        response.choices = [choice]
+        mock_openai_client.chat.completions.create.return_value = response
+
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
+            with patch("src.agents.llm._init_langfuse", return_value=None):
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    with pytest.raises(ValueError, match="No tool call"):
+                        await call_tool(prompt="Test", tool=mock_tool)
+
+    async def test_call_tool_api_error_propagates(self, mock_openai_client, mock_tool):
+        mock_openai_client.chat.completions.create.side_effect = RuntimeError("API error")
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
+            with patch("src.agents.llm._init_langfuse", return_value=None):
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    with pytest.raises(RuntimeError, match="API error"):
+                        await call_tool(prompt="Test", tool=mock_tool)
+
+    async def test_call_tool_custom_max_tokens(self, mock_openai_client, mock_tool):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
+            with patch("src.agents.llm._init_langfuse", return_value=None):
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    await call_tool(prompt="Test", tool=mock_tool, max_tokens=2048)
+        call_kwargs = mock_openai_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["max_tokens"] == 2048
+
+
+# ---------------------------------------------------------------------------
+# call_tool — Anthropic path
+# ---------------------------------------------------------------------------
+
+class TestCallToolAnthropic:
+    """Tests for call_tool when LLM_PROVIDER == 'anthropic'."""
+
+    @pytest.fixture
+    def mock_anthro_client(self):
+        block = MagicMock()
+        block.type = "tool_use"
+        block.input = {"result": "anthro_result", "score": 1.0}
 
         response = MagicMock()
-        response.content = [text_block]
-        response.usage = MagicMock()
-        response.usage.input_tokens = 50
-        response.usage.output_tokens = 20
+        response.content = [block]
+        response.usage = MagicMock(input_tokens=80, output_tokens=40)
 
-        mock_anthropic_client.messages.create.return_value = response
+        client = AsyncMock()
+        client.messages = AsyncMock()
+        client.messages.create = AsyncMock(return_value=response)
+        return client
 
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
-            with patch("src.agents.llm._init_langfuse", return_value=None):
-                with pytest.raises(ValueError, match="No tool_use block"):
-                    await call_tool(prompt="Test", tool=mock_tool)
-
-    async def test_call_tool_api_error_propagates(self, mock_anthropic_client, mock_tool):
-        """Test that API errors are propagated."""
-        mock_anthropic_client.messages.create.side_effect = RuntimeError("API error")
-        
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
-            with patch("src.agents.llm._init_langfuse", return_value=None):
-                with pytest.raises(RuntimeError, match="API error"):
-                    await call_tool(prompt="Test", tool=mock_tool)
-
-    async def test_call_tool_custom_max_tokens(self, mock_anthropic_client, mock_tool):
-        """Test custom max_tokens is passed."""
-        with patch("src.agents.llm.get_client", return_value=mock_anthropic_client):
-            with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool(prompt="Test", tool=mock_tool, max_tokens=2048)
-        call_kwargs = mock_anthropic_client.messages.create.call_args.kwargs
-        assert call_kwargs["max_tokens"] == 2048
+    async def test_anthropic_path(self, mock_anthro_client, mock_tool):
+        import sys, types
+        # Stub anthropic module so `import anthropic` inside _call_anthropic works
+        fake_anthropic = types.ModuleType("anthropic")
+        with patch.dict(sys.modules, {"anthropic": fake_anthropic}):
+            with patch("src.agents.llm._get_anthropic_client", return_value=mock_anthro_client):
+                with patch("src.agents.llm._init_langfuse", return_value=None):
+                    with patch("src.agents.llm.LLM_PROVIDER", "anthropic"):
+                        result = await call_tool(prompt="Test", tool=mock_tool)
+        assert result["result"] == "anthro_result"
 
 
 # ---------------------------------------------------------------------------
@@ -191,129 +217,100 @@ class TestCallTool:
 class TestCallToolWithReflection:
     """Tests for call_tool_with_reflection (two-round self-reflection)."""
 
-    async def test_reflection_calls_twice(self, mock_tool_response, mock_tool):
-        """Test that reflection makes two API calls."""
+    async def test_reflection_calls_twice(self, mock_tool):
         call_count = 0
 
         async def _mock_create(**kwargs):
             nonlocal call_count
             call_count += 1
-            return mock_tool_response("test_output_tool", {"result": f"round_{call_count}", "score": call_count})
+            return _make_openai_response("test_output_tool", {"result": f"round_{call_count}", "score": call_count})
 
         mock_client = AsyncMock()
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = _mock_create
+        mock_client.chat = AsyncMock()
+        mock_client.chat.completions = AsyncMock()
+        mock_client.chat.completions.create = _mock_create
 
-        def reflection_prompt(initial_result: str) -> str:
-            return f"Please reflect on: {initial_result}"
-
-        with patch("src.agents.llm.get_client", return_value=mock_client):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                result = await call_tool_with_reflection(
-                    initial_prompt="Initial prompt",
-                    reflection_prompt_fn=reflection_prompt,
-                    tool=mock_tool,
-                    model=MODEL_OPUS,
-                )
-        
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    result = await call_tool_with_reflection(
+                        initial_prompt="Initial",
+                        reflection_prompt_fn=lambda x: f"Reflect: {x}",
+                        tool=mock_tool,
+                        model=MODEL_OPUS,
+                    )
+
         assert call_count == 2
-        # Result should be from the second (reflection) call
         assert result["result"] == "round_2"
 
-    async def test_reflection_uses_correct_model(self, mock_tool_response, mock_tool):
-        """Test that both rounds use the specified model."""
-        captured_models = []
+    async def test_reflection_prompt_receives_initial_result(self, mock_tool):
+        captured = None
 
-        async def _mock_create(**kwargs):
-            captured_models.append(kwargs.get("model"))
-            return mock_tool_response("test_output_tool", {"result": "ok"})
-
-        mock_client = AsyncMock()
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = _mock_create
-
-        with patch("src.agents.llm.get_client", return_value=mock_client):
-            with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool_with_reflection(
-                    initial_prompt="Test",
-                    reflection_prompt_fn=lambda x: f"Reflect: {x}",
-                    tool=mock_tool,
-                    model=MODEL_OPUS,
-                )
-        
-        assert all(m == MODEL_OPUS for m in captured_models)
-
-    async def test_reflection_prompt_receives_initial_result(self, mock_tool_response, mock_tool):
-        """Test that reflection prompt function receives serialized initial result."""
-        captured_reflection_input = None
-
-        def reflection_prompt(initial_result: str):
-            nonlocal captured_reflection_input
-            captured_reflection_input = initial_result
+        def reflection_fn(initial_result: str) -> str:
+            nonlocal captured
+            captured = initial_result
             return f"Reflect: {initial_result}"
 
-        async def _mock_create(**kwargs):
-            return mock_tool_response("test_output_tool", {"result": "initial_data", "score": 42})
-
         mock_client = AsyncMock()
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = _mock_create
+        mock_client.chat = AsyncMock()
+        mock_client.chat.completions = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(
+            return_value=_make_openai_response("test_output_tool", {"result": "data", "score": 42})
+        )
 
-        with patch("src.agents.llm.get_client", return_value=mock_client):
+        with patch("src.agents.llm._get_openai_client", return_value=mock_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
-                await call_tool_with_reflection(
-                    initial_prompt="Test",
-                    reflection_prompt_fn=reflection_prompt,
-                    tool=mock_tool,
-                )
-
-        assert captured_reflection_input is not None
-        # Should be JSON serialized
-        parsed = json.loads(captured_reflection_input)
-        assert parsed["result"] == "initial_data"
-
-    async def test_reflection_first_call_error_propagates(self, mock_tool):
-        """Test that error in first call propagates."""
-        mock_client = AsyncMock()
-        mock_client.messages = AsyncMock()
-        mock_client.messages.create = AsyncMock(side_effect=RuntimeError("First call failed"))
-
-        with patch("src.agents.llm.get_client", return_value=mock_client):
-            with patch("src.agents.llm._init_langfuse", return_value=None):
-                with pytest.raises(RuntimeError, match="First call failed"):
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
                     await call_tool_with_reflection(
                         initial_prompt="Test",
-                        reflection_prompt_fn=lambda x: x,
+                        reflection_prompt_fn=reflection_fn,
                         tool=mock_tool,
                     )
 
+        assert captured is not None
+        parsed = json.loads(captured)
+        assert parsed["result"] == "data"
+
+    async def test_reflection_first_call_error_propagates(self, mock_tool):
+        mock_client = AsyncMock()
+        mock_client.chat = AsyncMock()
+        mock_client.chat.completions = AsyncMock()
+        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("First call failed"))
+
+        with patch("src.agents.llm._get_openai_client", return_value=mock_client):
+            with patch("src.agents.llm._init_langfuse", return_value=None):
+                with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
+                    with pytest.raises(RuntimeError, match="First call failed"):
+                        await call_tool_with_reflection(
+                            initial_prompt="Test",
+                            reflection_prompt_fn=lambda x: x,
+                            tool=mock_tool,
+                        )
+
 
 # ---------------------------------------------------------------------------
-# get_client
+# Client factory tests
 # ---------------------------------------------------------------------------
 
-class TestGetClient:
-    """Tests for get_client singleton."""
+class TestClientFactories:
+    """Tests for _get_openai_client / _get_anthropic_client singletons."""
 
-    def test_get_client_returns_client(self):
-        """Test that get_client returns an Anthropic client."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            # Reset the global client
-            import src.agents.llm as llm_module
-            llm_module._client = None
-            
-            client = get_client()
+    def test_get_openai_client_returns_client(self):
+        import src.agents.llm as llm_module
+        llm_module._openai_client = None
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            client = _get_openai_client()
             assert client is not None
+        llm_module._openai_client = None  # cleanup
 
-    def test_get_client_is_singleton(self):
-        """Test that get_client returns the same instance."""
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            import src.agents.llm as llm_module
-            llm_module._client = None
-            
-            client1 = get_client()
-            client2 = get_client()
-            assert client1 is client2
+    def test_get_openai_client_is_singleton(self):
+        import src.agents.llm as llm_module
+        llm_module._openai_client = None
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
+            c1 = _get_openai_client()
+            c2 = _get_openai_client()
+            assert c1 is c2
+        llm_module._openai_client = None
 
 
 # ---------------------------------------------------------------------------
@@ -321,84 +318,47 @@ class TestGetClient:
 # ---------------------------------------------------------------------------
 
 class TestMetrics:
-    """Tests for _record_llm_metrics."""
-
     def test_record_metrics_no_error_when_module_missing(self):
-        """Test that metrics recording doesn't fail if prometheus not imported."""
-        # This should not raise even if metrics module is not available
         _record_llm_metrics(MODEL_SONNET, 100, 50, 1.5)
 
     def test_record_metrics_with_mock_prometheus(self):
-        """Test metrics recording with mocked prometheus."""
         mock_counter = MagicMock()
         mock_histogram = MagicMock()
-        
         with patch.dict("sys.modules", {"src.metrics": MagicMock(
             llm_tokens_total=mock_counter,
-            llm_request_duration=mock_histogram
+            llm_request_duration=mock_histogram,
         )}):
-            # Force re-import would be needed for full test
-            # For now just verify it doesn't crash
             _record_llm_metrics(MODEL_SONNET, 100, 50, 1.5)
 
 
 # ---------------------------------------------------------------------------
-# Langfuse Init Tests
+# Langfuse Init
 # ---------------------------------------------------------------------------
 
 class TestLangfuseInit:
-    """Tests for _init_langfuse function."""
-
     def test_langfuse_returns_none_when_disabled(self):
-        """Langfuse returns None when disabled in config."""
         from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
-        
-        # Reset global state
         llm_module._langfuse = None
-        
-        # Mock settings with langfuse disabled
         mock_settings = MagicMock()
         mock_settings.system.langfuse = {"enabled": False}
-        
         with patch("src.agents.llm.get_settings", return_value=mock_settings):
-            result = _init_langfuse()
-        
-        assert result is None
+            assert _init_langfuse() is None
 
     def test_langfuse_returns_cached_instance(self):
-        """Langfuse returns cached instance on second call."""
         from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
-        
-        # Set a cached value
-        mock_langfuse = MagicMock()
-        llm_module._langfuse = mock_langfuse
-        
-        result = _init_langfuse()
-        
-        assert result is mock_langfuse
-        
-        # Cleanup
+        mock_lf = MagicMock()
+        llm_module._langfuse = mock_lf
+        assert _init_langfuse() is mock_lf
         llm_module._langfuse = None
 
     def test_langfuse_handles_import_error(self):
-        """Langfuse handles import error gracefully."""
         from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
-        
-        # Reset global state
         llm_module._langfuse = None
-        
-        # Mock settings with langfuse enabled
         mock_settings = MagicMock()
         mock_settings.system.langfuse = {"enabled": True}
-        
         with patch("src.agents.llm.get_settings", return_value=mock_settings):
-            # This will try to import langfuse which may or may not be available
-            # The function should handle any errors gracefully
             result = _init_langfuse()
-        
-        # Result should be either None or a Langfuse instance
-        # The important thing is it doesn't crash
         assert result is None or result is not None

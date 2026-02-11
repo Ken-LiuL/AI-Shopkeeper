@@ -2,6 +2,18 @@
 
 from __future__ import annotations
 
+# ---------------------------------------------------------------------------
+# Stub heavy dependencies that are not installed in test environment
+# ---------------------------------------------------------------------------
+import sys
+import types as _types
+
+for _mod_name in ("neo4j",):
+    if _mod_name not in sys.modules:
+        sys.modules[_mod_name] = _types.ModuleType(_mod_name)
+
+# ---------------------------------------------------------------------------
+
 import json
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch

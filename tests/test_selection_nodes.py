@@ -562,8 +562,9 @@ class TestScorerNode:
             await scorer_node(state)
             
             call_kwargs = mock_reflect.call_args.kwargs
-            # Should use MODEL_OPUS
-            assert "opus" in call_kwargs["model"].lower()
+            # Should use MODEL_OPUS (the highest-tier model)
+            from src.agents.llm import MODEL_OPUS
+            assert call_kwargs["model"] == MODEL_OPUS
 
     async def test_error_handling(self):
         """Appends error on exception."""
