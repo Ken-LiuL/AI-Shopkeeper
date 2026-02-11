@@ -98,7 +98,7 @@ class TestRouting:
 
     async def test_human_transfer_keyword(self):
         state: CustomerServiceState = {
-            "user_message": "转人工",
+            "user_message": "我要投诉",
             "intent": {"intent": "product_inquiry", "confidence": 0.9, "requires_human": False},
         }
         result = await route_node(state)
