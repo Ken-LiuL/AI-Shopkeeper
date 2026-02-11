@@ -31,12 +31,12 @@ def _init_langfuse():
     if _langfuse is not None:
         return _langfuse
     
-    settings = get_settings()
-    lf_config = settings.system.langfuse
-    if not lf_config.get("enabled"):
-        return None
-    
     try:
+        settings = get_settings()
+        lf_config = settings.system.langfuse
+        if not lf_config.get("enabled"):
+            return None
+        
         from langfuse import Langfuse
         _langfuse = Langfuse(
             public_key=lf_config.get("public_key") or os.environ.get("LANGFUSE_PUBLIC_KEY"),

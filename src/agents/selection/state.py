@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+import operator
+from typing import Annotated, Any, TypedDict
+
+
+def _merge_lists(a: list, b: list) -> list:
+    """合并两个列表（用于并行节点写入同一 key）"""
+    return a + b
 
 
 class SelectionState(TypedDict, total=False):
@@ -44,7 +50,7 @@ class SelectionState(TypedDict, total=False):
     # Phase 4 最终推荐
     recommendations: dict[str, Any]
 
-    # 元数据
-    errors: list[str]
+    # 元数据 — errors 使用 Annotated 合并，因为并行节点可能同时写入
+    errors: Annotated[list[str], _merge_lists]
     current_date: str
     current_season: str
