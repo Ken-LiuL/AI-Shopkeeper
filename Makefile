@@ -1,11 +1,17 @@
-.PHONY: setup dev test lint seed migrate-pg migrate-neo4j docker-build docker-up
+.PHONY: setup setup-dev dev test lint seed migrate-pg migrate-neo4j docker-build docker-up health-check
 
 setup:
 	pip install -e ".[dev]"
 
+setup-dev:
+	bash scripts/setup-dev.sh
+
 dev:
 	docker compose up -d postgres neo4j redis
 	uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
+
+health-check:
+	bash scripts/health-check.sh
 
 test:
 	pytest -v --tb=short
