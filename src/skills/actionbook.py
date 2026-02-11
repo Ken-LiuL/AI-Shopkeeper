@@ -925,14 +925,52 @@ class ActionBookSkill:
         self,
         store_id: str,
         radius_km: float = 3.0,
+        keyword: str = "医疗器械",
+        location: Optional[tuple] = None,
     ) -> List[CompetitorStore]:
         """获取周边竞品店铺。
 
-        ⚠️ MOCK 数据 — 美团牵牛花不提供竞品店铺 API。
-        竞品分析需要通过美团外卖 C 端页面手动调研，或使用第三方数据服务。
-        未来可考虑接入：餐眼、美团到店等第三方竞品分析工具。
+        通过美团 H5 搜索采集，失败时降级为 mock 数据。
         """
         self._check_rate("competitor_stores")
+
+        # 尝试 H5 采集
+        if await self._ensure_extension():
+            try:
+                from src.skills.meituan_h5 import MeituanH5Scraper
+                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+                products = await scraper.search_products(keyword, location, limit=50)
+                if products:
+                    # 聚合到店铺维度
+                    store_map: dict[str, CompetitorStore] = {}
+                    for p in products:
+                        key = p.store_name or p.product_id
+                        if key not in store_map:
+                            store_map[key] = CompetitorStore(
+                                store_id=p.product_id,
+                                name=p.store_name or p.name,
+                                distance_km=0.0,
+                                rating=0.0,
+                                monthly_sales=p.monthly_sales,
+                                product_count=1,
+                                threat_level="medium",
+                            )
+                        else:
+                            store_map[key].monthly_sales += p.monthly_sales
+                            store_map[key].product_count += 1
+
+                    stores = sorted(store_map.values(), key=lambda s: s.monthly_sales, reverse=True)
+                    # 按月销量判断威胁等级
+                    for s in stores:
+                        if s.monthly_sales > 500:
+                            s.threat_level = "high"
+                        elif s.monthly_sales < 100:
+                            s.threat_level = "low"
+                    return [s for s in stores if s.distance_km <= radius_km or radius_km >= 3.0][:20]
+            except Exception as e:
+                logger.warning(f"H5 competitor_stores failed, using mock: {e}")
+
+        # Mock fallback
         mock = [
             CompetitorStore(store_id="CS001", name="健康大药房", distance_km=1.2, rating=4.6, monthly_sales=15000, product_count=320, threat_level="high"),
             CompetitorStore(store_id="CS002", name="百姓大药房", distance_km=2.1, rating=4.3, monthly_sales=8000, product_count=210, threat_level="medium"),
@@ -945,19 +983,62 @@ class ActionBookSkill:
         store_id: str,
         competitor_store_id: Optional[str] = None,
         category: Optional[str] = None,
+        keyword: str = "医疗器械",
+        location: Optional[tuple] = None,
         limit: int = 20,
     ) -> List[CompetitorProduct]:
         """获取竞品商品列表。
 
-        ⚠️ MOCK 数据 — 美团牵牛花不提供竞品商品 API。
-        竞品商品数据需要通过 C 端页面爬取或第三方数据服务获取。
+        通过美团 H5 搜索采集，失败时降级为 mock 数据。
         """
         self._check_rate("competitor_products")
+
+        # 尝试 H5 采集
+        if await self._ensure_extension():
+            try:
+                from src.skills.meituan_h5 import MeituanH5Scraper
+                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+
+                if competitor_store_id:
+                    products = await scraper.get_store_products(competitor_store_id, location)
+                else:
+                    search_kw = category or keyword
+                    products = await scraper.search_products(search_kw, location, limit)
+
+                if products:
+                    return products[:limit]
+            except Exception as e:
+                logger.warning(f"H5 competitor_products failed, using mock: {e}")
+
+        # Mock fallback
         mock = [
             CompetitorProduct(product_id="CP001", name="鱼跃血压计", price=189.0, monthly_sales=450, store_name="健康大药房"),
             CompetitorProduct(product_id="CP002", name="欧姆龙体温计", price=35.9, monthly_sales=980, store_name="健康大药房"),
         ]
         return mock[:limit]
+
+    async def meituan_hot_keywords(
+        self,
+        category: str = "",
+        location: Optional[tuple] = None,
+    ) -> List[str]:
+        """获取美团 H5 热搜词。
+
+        通过 H5 搜索页提取热搜词/联想词，失败时返回预设列表。
+        """
+        # 尝试 H5 采集
+        if await self._ensure_extension():
+            try:
+                from src.skills.meituan_h5 import MeituanH5Scraper
+                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+                keywords = await scraper.search_hot_keywords(category)
+                if keywords:
+                    return keywords
+            except Exception as e:
+                logger.warning(f"H5 hot_keywords failed, using mock: {e}")
+
+        # Mock fallback
+        return ["电子血压计", "体温计", "血糖试纸", "口罩", "制氧机", "雾化器", "血氧仪"]
 
     # ── 1688 ─────────────────────────────────────────────────────────────
 
