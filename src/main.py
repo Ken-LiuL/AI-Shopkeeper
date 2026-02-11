@@ -9,6 +9,14 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from src.api.alerts import router as alerts_router
+from src.api.bundles import router as bundles_router
+from src.api.customer_service import router as cs_router
+from src.api.dashboard import router as dashboard_router
+from src.api.errors import register_error_handlers
+from src.api.listing import router as listing_router
+from src.api.products import router as products_router
+from src.api.selection import router as selection_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
 from src.db import postgres as pg_db
@@ -108,3 +116,16 @@ async def readiness_check() -> dict[str, str | bool]:
 
     all_ok = all(checks.values())
     return {"status": "ok" if all_ok else "degraded", **checks}  # type: ignore[return-value]
+
+
+# ─── Register API routers ───────────────────────────────────
+app.include_router(selection_router)
+app.include_router(cs_router)
+app.include_router(alerts_router)
+app.include_router(bundles_router)
+app.include_router(listing_router)
+app.include_router(products_router)
+app.include_router(dashboard_router)
+
+# ─── Unified error handling ─────────────────────────────────
+register_error_handlers(app)
