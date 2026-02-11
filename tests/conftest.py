@@ -8,7 +8,7 @@ from __future__ import annotations
 import sys
 import types as _types
 
-for _mod_name in ("neo4j",):
+for _mod_name in ("neo4j", "aiohttp"):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = _types.ModuleType(_mod_name)
 
