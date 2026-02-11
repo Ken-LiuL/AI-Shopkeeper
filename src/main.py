@@ -67,6 +67,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to start scheduler", exc_info=True)
 
+    # Init and register skills for customer service agent
+    try:
+        from src.skills.embedding import EmbeddingSkill
+        from src.skills.neo4j_skill import Neo4jSkill
+        from src.skills.reranker import RerankerSkill
+        from src.agents.customer_service.skills_registry import register_skills
+
+        neo4j_skill = Neo4jSkill(driver=neo4j_db.get_driver())
+        embedding_skill = EmbeddingSkill()
+        reranker_skill = RerankerSkill()
+        register_skills(neo4j=neo4j_skill, embedding=embedding_skill, reranker=reranker_skill)
+        logger.info("Customer service skills registered ✓")
+    except Exception:
+        logger.warning("Failed to register customer service skills", exc_info=True)
+
     logger.info("All services initialised ✓")
 
     yield
