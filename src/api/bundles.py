@@ -18,6 +18,37 @@ router = APIRouter(prefix="/api/bundles", tags=["bundles"])
 logger = logging.getLogger(__name__)
 
 
+@router.get("/{bundle_id}", response_model=APIResponse[dict])
+async def get_bundle(bundle_id: str) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    row = await pool.fetchrow("SELECT * FROM bundles WHERE bundle_id = $1", bundle_id)
+    if not row:
+        raise NotFoundError("Bundle", bundle_id)
+    return APIResponse(data=dict(row))
+
+
+@router.post("/{bundle_id}/activate", response_model=APIResponse[dict])
+async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    row = await pool.fetchrow(
+        "UPDATE bundles SET status = 'active' WHERE bundle_id = $1 RETURNING *", bundle_id,
+    )
+    if not row:
+        raise NotFoundError("Bundle", bundle_id)
+    return APIResponse(data=dict(row), message="Bundle activated")
+
+
+@router.post("/{bundle_id}/deactivate", response_model=APIResponse[dict])
+async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    row = await pool.fetchrow(
+        "UPDATE bundles SET status = 'inactive' WHERE bundle_id = $1 RETURNING *", bundle_id,
+    )
+    if not row:
+        raise NotFoundError("Bundle", bundle_id)
+    return APIResponse(data=dict(row), message="Bundle deactivated")
+
+
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_bundles() -> APIResponse[list[dict]]:
     pool = pg.get_pool()

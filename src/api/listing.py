@@ -14,8 +14,81 @@ from .deps import gen_id, get_orchestrator
 from .errors import NotFoundError
 from .schemas import APIResponse, ListingCreateRequest, ListingDetail, ListingParseRequest, TaskCreatedResponse
 
+from .schemas import PaginatedResponse
+
 router = APIRouter(prefix="/api/listing", tags=["listing"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("", response_model=PaginatedResponse[dict])
+async def list_listings(
+    page: int = 1,
+    page_size: int = 20,
+    status: str | None = None,
+) -> PaginatedResponse[dict]:
+    pool = pg.get_pool()
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+    if status:
+        conditions.append(f"status = ${idx}")
+        params.append(status)
+        idx += 1
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+    total = await pool.fetchval(f"SELECT COUNT(*) FROM listings{where}", *params)
+    offset = (page - 1) * page_size
+    rows = await pool.fetch(
+        f"SELECT * FROM listings{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
+        *params, page_size, offset,
+    )
+    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+
+
+@router.put("/{listing_id}", response_model=APIResponse[dict])
+async def update_listing(listing_id: str, body: dict) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    sets = []
+    params = []
+    idx = 1
+    for k, v in body.items():
+        if k in ("source_url", "platform", "product_data", "status"):
+            sets.append(f"{k} = ${idx}")
+            params.append(v if k != "product_data" else json.dumps(v))
+            idx += 1
+    if not sets:
+        return APIResponse(success=False, message="No valid fields")
+    params.append(listing_id)
+    row = await pool.fetchrow(
+        f"UPDATE listings SET {', '.join(sets)} WHERE listing_id = ${idx} RETURNING *",
+        *params,
+    )
+    if not row:
+        raise NotFoundError("Listing", listing_id)
+    return APIResponse(data=dict(row))
+
+
+@router.post("/{listing_id}/publish", response_model=APIResponse[dict])
+async def publish_listing(listing_id: str) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    row = await pool.fetchrow(
+        "UPDATE listings SET status = 'published', finished_at = NOW() WHERE listing_id = $1 RETURNING *",
+        listing_id,
+    )
+    if not row:
+        raise NotFoundError("Listing", listing_id)
+    return APIResponse(data=dict(row), message="Listing published")
+
+
+@router.delete("/{listing_id}", response_model=APIResponse[dict])
+async def delete_listing(listing_id: str) -> APIResponse[dict]:
+    pool = pg.get_pool()
+    row = await pool.fetchrow(
+        "UPDATE listings SET status = 'deleted' WHERE listing_id = $1 AND status = 'processing' RETURNING *",
+        listing_id,
+    )
+    if not row:
+        raise NotFoundError("Listing", listing_id)
+    return APIResponse(data=dict(row), message="Draft deleted")
 
 
 @router.post("/parse", response_model=APIResponse[dict])

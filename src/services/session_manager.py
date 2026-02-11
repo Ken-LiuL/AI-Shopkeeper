@@ -1,0 +1,156 @@
+"""Session manager for customer service — Redis-backed session lifecycle."""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any
+
+import redis.asyncio as aioredis
+
+logger = logging.getLogger(__name__)
+
+# Redis key prefixes
+_SESSION_META = "cs:session:meta:"     # hash: customer_id, created_at, updated_at
+_SESSION_MSGS = "cs:session:msgs:"     # list of JSON messages
+_SESSION_LOCK = "cs:session:lock:"     # distributed lock
+_SESSION_INDEX = "cs:sessions"         # sorted set: session_id scored by updated_at
+_CUSTOMER_INDEX = "cs:customer:"       # sorted set per customer_id
+
+SESSION_TTL = 86400  # 24 hours
+
+
+class SessionManager:
+    """Encapsulates all Redis session operations for customer service."""
+
+    def __init__(self, redis: aioredis.Redis) -> None:
+        self._r = redis
+
+    # ── Create ────────────────────────────────────────────────
+
+    async def create_session(
+        self, customer_id: str | None = None, metadata: dict[str, Any] | None = None
+    ) -> tuple[str, str]:
+        """Create a new session. Returns (session_id, created_at)."""
+        session_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+
+        meta = {
+            "customer_id": customer_id or "",
+            "created_at": now,
+            "updated_at": now,
+            "message_count": "0",
+            "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+        }
+        meta_key = f"{_SESSION_META}{session_id}"
+        await self._r.hset(meta_key, mapping=meta)
+        await self._r.expire(meta_key, SESSION_TTL)
+
+        # Index by time
+        ts = datetime.now(timezone.utc).timestamp()
+        await self._r.zadd(_SESSION_INDEX, {session_id: ts})
+        if customer_id:
+            await self._r.zadd(f"{_CUSTOMER_INDEX}{customer_id}", {session_id: ts})
+
+        logger.info("Created session %s (customer=%s)", session_id, customer_id)
+        return session_id, now
+
+    # ── Messages ──────────────────────────────────────────────
+
+    async def get_history(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        """Return the last *limit* messages for a session."""
+        key = f"{_SESSION_MSGS}{session_id}"
+        raw = await self._r.lrange(key, -limit, -1)
+        return [json.loads(m) for m in raw]
+
+    async def add_message(self, session_id: str, role: str, content: str) -> None:
+        """Append a message (user or assistant) and refresh TTL."""
+        msg_key = f"{_SESSION_MSGS}{session_id}"
+        meta_key = f"{_SESSION_META}{session_id}"
+        now = datetime.now(timezone.utc).isoformat()
+
+        entry = json.dumps({"role": role, "content": content, "timestamp": now}, ensure_ascii=False)
+        await self._r.rpush(msg_key, entry)
+        await self._r.expire(msg_key, SESSION_TTL)
+
+        # Update meta
+        await self._r.hset(meta_key, mapping={"updated_at": now})
+        await self._r.hincrby(meta_key, "message_count", 1)
+        await self._r.expire(meta_key, SESSION_TTL)
+
+        # Update index score
+        ts = datetime.now(timezone.utc).timestamp()
+        await self._r.zadd(_SESSION_INDEX, {session_id: ts})
+
+    # ── Locking ───────────────────────────────────────────────
+
+    async def acquire_lock(self, session_id: str, timeout: int = 30) -> bool:
+        """Acquire a distributed lock for a session via SETNX. Returns True if acquired."""
+        key = f"{_SESSION_LOCK}{session_id}"
+        acquired = await self._r.set(key, "1", nx=True, ex=timeout)
+        return bool(acquired)
+
+    async def release_lock(self, session_id: str) -> None:
+        """Release the session lock."""
+        key = f"{_SESSION_LOCK}{session_id}"
+        await self._r.delete(key)
+
+    # ── List / Close ──────────────────────────────────────────
+
+    async def list_sessions(
+        self, customer_id: str | None = None, limit: int = 20
+    ) -> list[dict[str, Any]]:
+        """List recent sessions, optionally filtered by customer_id."""
+        if customer_id:
+            index_key = f"{_CUSTOMER_INDEX}{customer_id}"
+        else:
+            index_key = _SESSION_INDEX
+
+        # Most recent first
+        session_ids = await self._r.zrevrange(index_key, 0, limit - 1)
+        results: list[dict[str, Any]] = []
+        for sid in session_ids:
+            meta = await self._r.hgetall(f"{_SESSION_META}{sid}")
+            if not meta:
+                continue
+            # Get last message preview
+            last_raw = await self._r.lindex(f"{_SESSION_MSGS}{sid}", -1)
+            last_message = ""
+            if last_raw:
+                last_msg = json.loads(last_raw)
+                last_message = last_msg.get("content", "")[:100]
+
+            results.append({
+                "session_id": sid,
+                "customer_id": meta.get("customer_id") or None,
+                "last_message": last_message,
+                "message_count": int(meta.get("message_count", 0)),
+                "created_at": meta.get("created_at", ""),
+                "updated_at": meta.get("updated_at", ""),
+            })
+        return results
+
+    async def close_session(self, session_id: str) -> bool:
+        """Delete all data for a session. Returns True if session existed."""
+        meta_key = f"{_SESSION_META}{session_id}"
+        meta = await self._r.hgetall(meta_key)
+        if not meta:
+            return False
+
+        customer_id = meta.get("customer_id")
+        pipe = self._r.pipeline()
+        pipe.delete(meta_key)
+        pipe.delete(f"{_SESSION_MSGS}{session_id}")
+        pipe.delete(f"{_SESSION_LOCK}{session_id}")
+        pipe.zrem(_SESSION_INDEX, session_id)
+        if customer_id:
+            pipe.zrem(f"{_CUSTOMER_INDEX}{customer_id}", session_id)
+        await pipe.execute()
+        logger.info("Closed session %s", session_id)
+        return True
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Check if a session exists."""
+        return bool(await self._r.exists(f"{_SESSION_META}{session_id}"))

@@ -19,7 +19,11 @@ from src.api.products import router as products_router
 from src.api.knowledge import router as knowledge_router
 from src.api.metrics_api import router as metrics_router
 from src.api.selection import router as selection_router
+from src.api.competitors import router as competitors_router
+from src.api.orders import router as orders_router
+from src.api.reports import router as reports_router
 from src.api.sync import router as sync_router
+from src.api.system import router as system_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
 from src.db import postgres as pg_db
@@ -166,6 +170,10 @@ app.include_router(dashboard_router)
 app.include_router(sync_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
+app.include_router(orders_router)
+app.include_router(reports_router)
+app.include_router(system_router)
+app.include_router(competitors_router)
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)

@@ -56,10 +56,19 @@ class SelectionRunDetail(SelectionRunSummary):
 
 # ── Customer Service ─────────────────────────────────────────
 
+class CreateSessionRequest(BaseModel):
+    customer_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CreateSessionResponse(BaseModel):
+    session_id: str
+    created_at: str
+
+
 class ChatRequest(BaseModel):
     session_id: str
     message: str
-    conversation_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -67,6 +76,15 @@ class ChatResponse(BaseModel):
     reply: str
     intent: str | None = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SessionListItem(BaseModel):
+    session_id: str
+    customer_id: str | None = None
+    last_message: str = ""
+    message_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
 
 
 class SessionHistory(BaseModel):

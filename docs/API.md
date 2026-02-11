@@ -590,3 +590,97 @@
   ]
 }
 ```
+
+---
+
+## 新增 API Endpoints
+
+### 商品管理扩展
+
+| Method | Path | 说明 |
+|--------|------|------|
+| DELETE | `/api/products/{product_id}` | 软删除商品 |
+| POST | `/api/products/import` | 批量导入商品（JSON body: ProductCreateRequest[]） |
+| GET | `/api/products/export` | 导出商品列表（CSV），可选 `?status=active` |
+| GET | `/api/products/categories` | 商品品类列表（含商品数量） |
+| GET | `/api/products/{product_id}/competitors` | 某商品的竞品对比 |
+| PATCH | `/api/products/{product_id}/price` | 调价，body: `{retail_price?, cost_price?}` |
+| GET | `/api/products/low-stock` | 低库存商品，`?threshold=10&page=1&page_size=20` |
+
+### 订单分析 (`/api/orders`)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/orders` | 订单列表，`?page&page_size&status&start_date&end_date` |
+| GET | `/api/orders/stats` | 订单统计，`?days=30` → 总额/均价/退货率 |
+| GET | `/api/orders/trend` | 订单趋势，`?days=30&granularity=day\|week\|month` |
+| GET | `/api/orders/{order_id}` | 订单详情（含 items） |
+| GET | `/api/orders/refunds` | 退货退款列表（分页） |
+
+### 上架管理扩展
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/listing` | 上架列表，`?page&page_size&status` |
+| PUT | `/api/listing/{listing_id}` | 编辑上架信息 |
+| POST | `/api/listing/{listing_id}/publish` | 发布上架 |
+| DELETE | `/api/listing/{listing_id}` | 删除草稿 |
+
+### 套餐管理扩展
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/bundles/{bundle_id}` | 套餐详情 |
+| POST | `/api/bundles/{bundle_id}/activate` | 启用套餐 |
+| POST | `/api/bundles/{bundle_id}/deactivate` | 停用套餐 |
+
+### 数据同步扩展
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/sync/history` | 同步历史记录 |
+| GET | `/api/sync/{syncer_name}/status` | 单个 syncer 状态 |
+| POST | `/api/sync/{syncer_name}/trigger` | 触发单个 syncer |
+
+### 报表 (`/api/reports`)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/reports/daily` | 每日经营日报 |
+| GET | `/api/reports/weekly` | 周报汇总 |
+| GET | `/api/reports/monthly` | 月报汇总 |
+| GET | `/api/reports/product-performance` | 商品绩效排名，`?days=30&limit=20` |
+| GET | `/api/reports/category-analysis` | 品类分析，`?days=30` |
+| POST | `/api/reports/export` | 导出报表，`?report_type&format=csv\|json` |
+
+### 系统配置 (`/api/system`)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/system/config` | 获取系统配置 |
+| PATCH | `/api/system/config` | 更新系统配置 |
+| GET | `/api/system/tasks` | 定时任务列表和状态 |
+| POST | `/api/system/tasks/{task_name}/trigger` | 手动触发定时任务 |
+| GET | `/api/system/logs` | 系统日志，`?limit=100&level=INFO\|WARNING\|ERROR` |
+
+### 知识图谱扩展
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/knowledge/products` | 图谱中的商品列表 |
+| POST | `/api/knowledge/products` | 添加商品到图谱 |
+| GET | `/api/knowledge/products/{product_id}/graph` | 某商品的关联图谱 |
+| POST | `/api/knowledge/faq` | 添加 FAQ |
+| GET | `/api/knowledge/faq` | FAQ 列表，`?category&limit` |
+| PUT | `/api/knowledge/faq/{faq_id}` | 更新 FAQ |
+| DELETE | `/api/knowledge/faq/{faq_id}` | 删除 FAQ |
+
+### 竞品分析 (`/api/competitors`)
+
+| Method | Path | 说明 |
+|--------|------|------|
+| GET | `/api/competitors/stores` | 竞品店铺列表（分页） |
+| GET | `/api/competitors/stores/{store_id}/products` | 竞品店铺商品（分页） |
+| GET | `/api/competitors/products` | 竞品商品搜索，`?q&category&page&page_size` |
+| GET | `/api/competitors/keywords` | 热门关键词，`?limit=20` |
+| GET | `/api/competitors/price-comparison` | 价格对比分析，`?product_id&category&limit` |

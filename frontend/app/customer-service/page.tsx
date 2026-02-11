@@ -3,7 +3,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Header } from '@/components/layout/header';
 import { ChatBubble } from '@/components/ui/chat-bubble';
 import { Loading } from '@/components/ui/loading';
-import { sendChatMessage, getChatSessions, getChatHistory } from '@/lib/api';
+import { sendChatMessage, getChatSessions, getChatHistory, createChatSession, deleteChatSession } from '@/lib/api';
 import type { ChatMessage, ChatSession } from '@/lib/types';
 
 export default function CustomerServicePage() {
@@ -36,10 +36,19 @@ export default function CustomerServicePage() {
     setActiveSession(sessionId);
     try {
       const res = await getChatHistory(sessionId);
-      setMessages(res.data || []);
+      setMessages(res.data?.messages || []);
     } catch {
       setMessages([]);
     }
+  };
+
+  const ensureSession = async (): Promise<string> => {
+    if (activeSession) return activeSession;
+    const res = await createChatSession();
+    const newId = res.data.session_id;
+    setActiveSession(newId);
+    loadSessions();
+    return newId;
   };
 
   const handleSend = async () => {
@@ -52,7 +61,8 @@ export default function CustomerServicePage() {
     setSending(true);
 
     try {
-      const res = await sendChatMessage(text, activeSession || undefined);
+      const sessionId = await ensureSession();
+      const res = await sendChatMessage(text, sessionId);
       const data = res.data;
       const assistantMsg: ChatMessage = {
         role: 'assistant',
@@ -62,11 +72,7 @@ export default function CustomerServicePage() {
         timestamp: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, assistantMsg]);
-
-      if (!activeSession && data.session_id) {
-        setActiveSession(data.session_id);
-        loadSessions();
-      }
+      loadSessions();
     } catch {
       setMessages((prev) => [...prev, { role: 'assistant', content: '⚠️ 请求失败，请稍后重试。' }]);
     } finally {
@@ -74,10 +80,22 @@ export default function CustomerServicePage() {
     }
   };
 
-  const handleNewChat = () => {
+  const handleNewChat = async () => {
     setActiveSession(null);
     setMessages([]);
     setInput('');
+  };
+
+  const handleDeleteSession = async (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await deleteChatSession(sessionId);
+      if (activeSession === sessionId) {
+        setActiveSession(null);
+        setMessages([]);
+      }
+      loadSessions();
+    } catch {}
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -108,18 +126,29 @@ export default function CustomerServicePage() {
               <p className="text-center text-gray-600 text-xs py-8">暂无历史对话</p>
             ) : (
               sessions.map((s) => (
-                <button
+                <div
                   key={s.session_id}
                   onClick={() => loadHistory(s.session_id)}
-                  className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors ${
+                  className={`group w-full text-left px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer flex items-center ${
                     activeSession === s.session_id
                       ? 'bg-amber-500/10 text-amber-400'
                       : 'text-gray-400 hover:bg-white/[0.04] hover:text-white'
                   }`}
                 >
-                  <div className="truncate font-medium">{s.title || '对话'}</div>
-                  <div className="truncate text-xs text-gray-600 mt-0.5">{s.last_message || ''}</div>
-                </button>
+                  <div className="flex-1 min-w-0">
+                    <div className="truncate font-medium">{s.last_message || '新对话'}</div>
+                    <div className="truncate text-xs text-gray-600 mt-0.5">
+                      {s.message_count} 条消息
+                    </div>
+                  </div>
+                  <button
+                    onClick={(e) => handleDeleteSession(s.session_id, e)}
+                    className="opacity-0 group-hover:opacity-100 ml-2 text-gray-500 hover:text-red-400 transition-all text-xs"
+                    title="删除会话"
+                  >
+                    ✕
+                  </button>
+                </div>
               ))
             )}
           </div>

@@ -67,14 +67,25 @@ export const deleteBundle = (id: string) =>
   request<any>(`/api/bundles/${id}`, { method: 'DELETE' });
 
 // Customer Service
-export const sendChatMessage = (message: string, sessionId?: string) =>
+export const createChatSession = (customerId?: string) =>
+  request<any>('/api/customer-service/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ customer_id: customerId }),
+  });
+export const sendChatMessage = (message: string, sessionId: string) =>
   request<any>('/api/customer-service/chat', {
     method: 'POST',
     body: JSON.stringify({ message, session_id: sessionId }),
   });
-export const getChatSessions = () => request<any>('/api/customer-service/sessions');
+export const getChatSessions = (customerId?: string) => {
+  const sp = new URLSearchParams();
+  if (customerId) sp.set('customer_id', customerId);
+  return request<any>(`/api/customer-service/sessions?${sp.toString()}`);
+};
 export const getChatHistory = (sessionId: string) =>
   request<any>(`/api/customer-service/sessions/${sessionId}/messages`);
+export const deleteChatSession = (sessionId: string) =>
+  request<any>(`/api/customer-service/sessions/${sessionId}`, { method: 'DELETE' });
 
 // Listing
 export const getListings = (params?: { status?: string; page?: number; page_size?: number }) => {
