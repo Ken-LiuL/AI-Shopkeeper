@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ..llm import MODEL_HAIKU, MODEL_SONNET, call_tool
+from ..llm import MODEL_FLASH, MODEL_DEEPSEEK, MODEL_SONNET, call_tool
 from ..prompts.listing import compliance_prompt, filler_prompt, matcher_prompt, parser_prompt
 from ..tools import COMPLIANCE_CHECK_TOOL, LISTING_INFO_TOOL, PARSED_PRODUCT_TOOL
 from .state import ListingState
@@ -47,7 +47,7 @@ async def matcher_node(state: ListingState) -> dict:
         from ..llm import get_client
         client = get_client()
         response = await client.messages.create(
-            model=MODEL_HAIKU,
+            model=MODEL_FLASH,
             max_tokens=1024,
             messages=[{"role": "user", "content": prompt}],
         )
@@ -76,7 +76,7 @@ async def filler_node(state: ListingState) -> dict:
             competitor_prices=state.get("competitor_prices", "暂无数据"),
             market_avg_price=state.get("market_avg_price", 0),
         )
-        result = await call_tool(prompt, LISTING_INFO_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, LISTING_INFO_TOOL, model=MODEL_DEEPSEEK)
         return {"listing_info": result}
     except Exception as e:
         logger.error(f"Filler failed: {e}")

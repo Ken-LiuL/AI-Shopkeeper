@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ..llm import MODEL_HAIKU, MODEL_SONNET, call_tool
+from ..llm import MODEL_FLASH, MODEL_SONNET, call_tool
 from ..prompts.customer_service import FAQ_TEMPLATES, HUMAN_TRANSFER_KEYWORDS, intent_prompt, reply_prompt
 from ..tools import INTENT_TOOL, REPLY_TOOL
 from .state import CustomerServiceState
@@ -22,7 +22,7 @@ async def intent_recognition_node(state: CustomerServiceState) -> dict:
             user_message=state["user_message"],
             conversation_history=history_str,
         )
-        result = await call_tool(prompt, INTENT_TOOL, model=MODEL_HAIKU)
+        result = await call_tool(prompt, INTENT_TOOL, model=MODEL_FLASH)
         return {"intent": result}
     except Exception as e:
         logger.error(f"Intent recognition failed: {e}")

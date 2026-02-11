@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ..llm import MODEL_OPUS, MODEL_SONNET, call_tool
+from ..llm import MODEL_PRO, MODEL_SONNET, call_tool
 from ..prompts.alert import action_prompt, anomaly_detection_prompt, root_cause_prompt
 from ..tools import ACTIONS_TOOL, ANOMALIES_TOOL, ROOT_CAUSES_TOOL
 from .state import AlertState
@@ -65,7 +65,7 @@ async def root_cause_node(state: AlertState) -> dict:
                 external_factors="需要从Skills层获取",
                 operation_metrics="需要从Skills层获取",
             )
-            result = await call_tool(prompt, ROOT_CAUSES_TOOL, model=MODEL_OPUS)
+            result = await call_tool(prompt, ROOT_CAUSES_TOOL, model=MODEL_PRO)
             existing_causes.append(result)
         except Exception as e:
             logger.error(f"Root cause analysis failed for {anomaly.get('anomaly_id')}: {e}")

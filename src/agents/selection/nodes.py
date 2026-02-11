@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from ..llm import MODEL_HAIKU, MODEL_OPUS, MODEL_SONNET, call_tool, call_tool_with_reflection
+from ..llm import MODEL_FLASH, MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.selection import (
     competitor_analysis_prompt,
     gap_identification_prompt,
@@ -66,7 +66,7 @@ async def market_analysis_node(state: SelectionState) -> dict:
             products_data=state.get("raw_products_data", "暂无数据"),
             categories=", ".join(state.get("categories", ["医疗器械"])),
         )
-        result = await call_tool(prompt, MARKET_ANALYSIS_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, MARKET_ANALYSIS_TOOL, model=MODEL_PRO)
         return {"market_analysis": result}
     except Exception as e:
         logger.error(f"Market analysis failed: {e}")
@@ -82,7 +82,7 @@ async def competitor_analysis_node(state: SelectionState) -> dict:
             stockouts=state.get("raw_stockouts", "暂无数据"),
             our_products=state.get("raw_our_products", "暂无数据"),
         )
-        result = await call_tool(prompt, COMPETITOR_ANALYSIS_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, COMPETITOR_ANALYSIS_TOOL, model=MODEL_PRO)
         return {"competitor_analysis": result}
     except Exception as e:
         logger.error(f"Competitor analysis failed: {e}")
@@ -96,7 +96,7 @@ async def inventory_analysis_node(state: SelectionState) -> dict:
             products=state.get("raw_our_products", "暂无数据"),
             sales_data=state.get("raw_sales_data", "暂无数据"),
         )
-        result = await call_tool(prompt, INVENTORY_ANALYSIS_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, INVENTORY_ANALYSIS_TOOL, model=MODEL_PRO)
         return {"inventory_analysis": result}
     except Exception as e:
         logger.error(f"Inventory analysis failed: {e}")
@@ -113,7 +113,7 @@ async def seasonal_analysis_node(state: SelectionState) -> dict:
             weather_forecast=state.get("raw_weather_forecast", "暂无数据"),
             trending_events=state.get("raw_trending_events", "无"),
         )
-        result = await call_tool(prompt, SEASONAL_FACTORS_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, SEASONAL_FACTORS_TOOL, model=MODEL_PRO)
         return {"seasonal_factors": result}
     except Exception as e:
         logger.error(f"Seasonal analysis failed: {e}")
@@ -133,7 +133,7 @@ async def gap_identification_node(state: SelectionState) -> dict:
             inventory_data=json.dumps(state.get("inventory_analysis", {}), ensure_ascii=False),
             seasonal_data=json.dumps(state.get("seasonal_factors", {}), ensure_ascii=False),
         )
-        result = await call_tool(prompt, GAP_OPPORTUNITIES_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, GAP_OPPORTUNITIES_TOOL, model=MODEL_PRO)
         return {"gap_opportunities": result}
     except Exception as e:
         logger.error(f"Gap identification failed: {e}")
@@ -168,7 +168,7 @@ async def supplier_evaluation_node(state: SelectionState) -> dict:
                 alibaba_results=alibaba_data,
                 pdd_results=pdd_data,
             )
-            result = await call_tool(prompt, SUPPLIER_EVALUATION_TOOL, model=MODEL_SONNET)
+            result = await call_tool(prompt, SUPPLIER_EVALUATION_TOOL, model=MODEL_PRO)
             evaluations.append(result)
         except Exception as e:
             logger.error(f"Supplier eval failed for {keyword}: {e}")
@@ -200,7 +200,7 @@ async def scorer_node(state: SelectionState) -> dict:
             initial_prompt=initial_prompt,
             reflection_prompt_fn=scorer_reflection_prompt,
             tool=RECOMMENDATIONS_TOOL,
-            model=MODEL_OPUS,
+            model=MODEL_SONNET,
         )
         return {"recommendations": result}
     except Exception as e:

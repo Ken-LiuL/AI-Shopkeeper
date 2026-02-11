@@ -6,7 +6,7 @@ import json
 import logging
 from typing import Any
 
-from ..llm import MODEL_SONNET, call_tool
+from ..llm import MODEL_DEEPSEEK, MODEL_PRO, call_tool
 from ..prompts.bundle import order_mining_prompt, pricing_prompt, scene_design_prompt
 from ..tools import ASSOCIATION_RULES_TOOL, BUNDLE_PRICING_TOOL, BUNDLE_PROPOSALS_TOOL
 from .state import BundleState
@@ -29,7 +29,7 @@ async def order_mining_node(state: BundleState) -> dict:
             orders_summary=state.get("orders_summary", "暂无数据"),
             fp_growth_config=state.get("fp_growth_config", DEFAULT_FP_CONFIG),
         )
-        result = await call_tool(prompt, ASSOCIATION_RULES_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, ASSOCIATION_RULES_TOOL, model=MODEL_PRO)
         return {"association_rules": result}
     except Exception as e:
         logger.error(f"Order mining failed: {e}")
@@ -43,7 +43,7 @@ async def scene_design_node(state: BundleState) -> dict:
             association_rules=json.dumps(state.get("association_rules", {}), ensure_ascii=False),
             product_details=state.get("product_details", "暂无数据"),
         )
-        result = await call_tool(prompt, BUNDLE_PROPOSALS_TOOL, model=MODEL_SONNET)
+        result = await call_tool(prompt, BUNDLE_PROPOSALS_TOOL, model=MODEL_DEEPSEEK)
         return {"bundle_proposals": result}
     except Exception as e:
         logger.error(f"Scene design failed: {e}")
@@ -77,7 +77,7 @@ async def pricing_node(state: BundleState) -> dict:
                 product_costs=state.get("product_costs", "暂无数据"),
                 lift_value=lift_value,
             )
-            result = await call_tool(prompt, BUNDLE_PRICING_TOOL, model=MODEL_SONNET)
+            result = await call_tool(prompt, BUNDLE_PRICING_TOOL, model=MODEL_DEEPSEEK)
             pricing_results.append(result)
         except Exception as e:
             logger.error(f"Pricing failed for bundle {bundle_id}: {e}")

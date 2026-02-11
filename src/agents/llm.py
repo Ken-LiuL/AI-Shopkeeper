@@ -1,7 +1,7 @@
 """
 统一的 LLM 调用封装
-LLM 模型分层: Haiku(意图识别), Sonnet(常规), Opus(评分/归因)
-集成 Langfuse 追踪
+支持 OpenRouter (OpenAI SDK) 和 Anthropic 直连两种模式
+集成 Langfuse 追踪 + Prometheus 指标
 """
 
 import json
@@ -10,18 +10,46 @@ import os
 import time
 from typing import Any
 
-import anthropic
-
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# 模型分层
-MODEL_HAIKU = "claude-haiku-3-5-20241022"
-MODEL_SONNET = "claude-sonnet-4-20250514"
-MODEL_OPUS = "claude-opus-4-20250514"
+# LLM 提供商配置
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "anthropic"
 
-_client: anthropic.AsyncAnthropic | None = None
+# OpenRouter 模型映射（按任务复杂度分层，优化成本）
+_OPENROUTER_MODELS = {
+    "flash": "google/gemini-2.0-flash-001",          # 意图识别、FAQ匹配、简单分类（最便宜）
+    "deepseek": "deepseek/deepseek-chat-v3-0324",    # 文本生成、套餐命名、上架文案（中文强+极便宜）
+    "haiku": "google/gemini-2.0-flash-001",           # 兼容旧引用
+    "sonnet": "anthropic/claude-sonnet-4",              # 客服回复、需要高质量的任务
+    "pro": "google/gemini-2.5-pro-preview",           # 选品分析、复杂推理（性价比）
+    "opus": "anthropic/claude-sonnet-4",              # 降级：Sonnet 够用
+}
+
+# Anthropic 直连模型
+_ANTHROPIC_MODELS = {
+    "flash": "claude-haiku-3-5-20241022",
+    "deepseek": "claude-haiku-3-5-20241022",
+    "haiku": "claude-haiku-3-5-20241022",
+    "sonnet": "claude-sonnet-4-20250514",
+    "pro": "claude-sonnet-4-20250514",
+    "opus": "claude-opus-4-20250514",
+}
+
+def _get_models() -> dict[str, str]:
+    return _OPENROUTER_MODELS if LLM_PROVIDER == "openrouter" else _ANTHROPIC_MODELS
+
+# 模块级常量
+MODEL_FLASH = _get_models()["flash"]
+MODEL_DEEPSEEK = _get_models()["deepseek"]
+MODEL_HAIKU = _get_models()["haiku"]
+MODEL_SONNET = _get_models()["sonnet"]
+MODEL_PRO = _get_models()["pro"]
+MODEL_OPUS = _get_models()["opus"]
+
+_openai_client: Any = None
+_anthropic_client: Any = None
 _langfuse: Any = None
 
 
@@ -30,13 +58,11 @@ def _init_langfuse():
     global _langfuse
     if _langfuse is not None:
         return _langfuse
-    
     try:
         settings = get_settings()
         lf_config = settings.system.langfuse
         if not lf_config.get("enabled"):
             return None
-        
         from langfuse import Langfuse
         _langfuse = Langfuse(
             public_key=lf_config.get("public_key") or os.environ.get("LANGFUSE_PUBLIC_KEY"),
@@ -50,13 +76,111 @@ def _init_langfuse():
     return _langfuse
 
 
-def get_client() -> anthropic.AsyncAnthropic:
-    global _client
-    if _client is None:
-        _client = anthropic.AsyncAnthropic(
-            api_key=os.environ.get("ANTHROPIC_API_KEY"),
+def _get_openai_client():
+    """OpenRouter 使用 OpenAI SDK"""
+    global _openai_client
+    if _openai_client is None:
+        from openai import AsyncOpenAI
+        _openai_client = AsyncOpenAI(
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            base_url="https://openrouter.ai/api/v1",
         )
-    return _client
+    return _openai_client
+
+
+def _get_anthropic_client():
+    """Anthropic 直连"""
+    global _anthropic_client
+    if _anthropic_client is None:
+        import anthropic
+        _anthropic_client = anthropic.AsyncAnthropic(
+            api_key=os.environ.get("ANTHROPIC_API_KEY", ""),
+        )
+    return _anthropic_client
+
+
+def _anthropic_tool_to_openai_function(tool: dict) -> dict:
+    """将 Anthropic tool 格式转为 OpenAI function 格式"""
+    return {
+        "type": "function",
+        "function": {
+            "name": tool["name"],
+            "description": tool.get("description", ""),
+            "parameters": tool["input_schema"],
+        },
+    }
+
+
+async def _call_openrouter(
+    prompt: str,
+    tool: dict,
+    model: str,
+    max_tokens: int,
+    system: str | None,
+) -> tuple[dict[str, Any], int, int]:
+    """通过 OpenRouter (OpenAI SDK) 调用"""
+    client = _get_openai_client()
+    
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    
+    openai_tool = _anthropic_tool_to_openai_function(tool)
+    
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=messages,
+        tools=[openai_tool],
+        tool_choice={"type": "function", "function": {"name": tool["name"]}},
+    )
+    
+    choice = response.choices[0]
+    if choice.message.tool_calls:
+        tc = choice.message.tool_calls[0]
+        result = json.loads(tc.function.arguments)
+    else:
+        raise ValueError(f"No tool call in response: {choice.message}")
+    
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+    return result, input_tokens, output_tokens
+
+
+async def _call_anthropic(
+    prompt: str,
+    tool: dict,
+    model: str,
+    max_tokens: int,
+    system: str | None,
+) -> tuple[dict[str, Any], int, int]:
+    """通过 Anthropic 直连调用"""
+    import anthropic  # noqa: F811
+    client = _get_anthropic_client()
+    
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "tools": [tool],
+        "tool_choice": {"type": "tool", "name": tool["name"]},
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if system:
+        kwargs["system"] = system
+    
+    response = await client.messages.create(**kwargs)
+    
+    result = None
+    for block in response.content:
+        if block.type == "tool_use":
+            result = block.input
+            break
+    
+    if result is None:
+        raise ValueError(f"No tool_use block in response: {response.content}")
+    
+    return result, response.usage.input_tokens, response.usage.output_tokens
 
 
 async def call_tool(
@@ -69,67 +193,47 @@ async def call_tool(
     trace_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    调用 Claude API 并强制使用指定 Tool，返回结构化结果。
-    
-    tool_choice={"type": "tool", "name": "xxx"} 确保 100% 结构化输出。
-    集成 Langfuse 追踪。
+    统一调用接口：根据 LLM_PROVIDER 选择 OpenRouter 或 Anthropic。
+    tool 格式统一用 Anthropic 格式（name + input_schema），内部自动转换。
     """
-    client = get_client()
     langfuse = _init_langfuse()
 
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "max_tokens": max_tokens,
-        "tools": [tool],
-        "tool_choice": {"type": "tool", "name": tool["name"]},
-        "messages": [{"role": "user", "content": prompt}],
-    }
-    if system:
-        kwargs["system"] = system
-
-    # Langfuse trace
     trace = None
     generation = None
     start_time = time.time()
     
     if langfuse:
-        trace = langfuse.trace(
-            name=trace_name or f"call_tool_{tool['name']}",
-            metadata=trace_metadata or {},
-        )
-        generation = trace.generation(
-            name=tool["name"],
-            model=model,
-            input={"prompt": prompt[:500], "system": system[:200] if system else None},
-        )
+        try:
+            trace = langfuse.trace(
+                name=trace_name or f"call_tool_{tool['name']}",
+                metadata=trace_metadata or {},
+            )
+            generation = trace.generation(
+                name=tool["name"],
+                model=model,
+                input={"prompt": prompt[:500], "system": system[:200] if system else None},
+            )
+        except Exception as e:
+            logger.debug(f"Langfuse trace failed: {e}")
 
     try:
-        response = await client.messages.create(**kwargs)
-        
-        # 提取 tool_use block
-        result = None
-        for block in response.content:
-            if block.type == "tool_use":
-                result = block.input
-                break
-        
-        if result is None:
-            raise ValueError(f"No tool_use block in response: {response.content}")
+        if LLM_PROVIDER == "openrouter":
+            result, input_tokens, output_tokens = await _call_openrouter(
+                prompt, tool, model, max_tokens, system
+            )
+        else:
+            result, input_tokens, output_tokens = await _call_anthropic(
+                prompt, tool, model, max_tokens, system
+            )
 
-        # 记录 Langfuse
         if generation:
             generation.end(
                 output=result,
-                usage={
-                    "input": response.usage.input_tokens,
-                    "output": response.usage.output_tokens,
-                },
+                usage={"input": input_tokens, "output": output_tokens},
                 level="DEFAULT",
             )
         
-        # Prometheus 指标
-        _record_llm_metrics(model, response.usage.input_tokens, response.usage.output_tokens, time.time() - start_time)
-        
+        _record_llm_metrics(model, input_tokens, output_tokens, time.time() - start_time)
         return result
         
     except Exception as e:
@@ -146,7 +250,7 @@ def _record_llm_metrics(model: str, input_tokens: int, output_tokens: int, durat
         llm_tokens_total.labels(model=model, type="output").inc(output_tokens)
         llm_request_duration.labels(model=model).observe(duration)
     except ImportError:
-        pass  # metrics module not loaded
+        pass
 
 
 async def call_tool_with_reflection(
@@ -158,12 +262,7 @@ async def call_tool_with_reflection(
     system: str | None = None,
     trace_name: str | None = None,
 ) -> dict[str, Any]:
-    """
-    两轮调用模式 (Self-Reflection):
-    1. 第一轮：生成初始结果
-    2. 第二轮：自我反思并修正
-    """
-    # 第一轮
+    """两轮调用模式 (Self-Reflection)"""
     initial_result = await call_tool(
         prompt=initial_prompt,
         tool=tool,
@@ -174,7 +273,6 @@ async def call_tool_with_reflection(
         trace_metadata={"stage": "initial"},
     )
 
-    # 第二轮：反思
     reflection_prompt = reflection_prompt_fn(json.dumps(initial_result, ensure_ascii=False))
     reflected_result = await call_tool(
         prompt=reflection_prompt,
