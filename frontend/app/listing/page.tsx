@@ -123,7 +123,7 @@ export default function ListingPage() {
             <EmptyState
               icon="🚀"
               title="暂无上架记录"
-              description="点击"新建上架"，输入 1688 或拼多多商品链接，AI 将自动生成标题、描述和 SEO 关键词"
+              description={'点击「新建上架」，输入 1688 或拼多多商品链接，AI 将自动生成标题、描述和 SEO 关键词'}
               action={<Button onClick={() => setShowCreate(true)}>新建上架</Button>}
             />
           ) : (

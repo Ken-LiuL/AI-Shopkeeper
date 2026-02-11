@@ -14,6 +14,9 @@ const colorMap: Record<string, string> = {
   running: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
   completed: 'bg-green-500/20 text-green-400 border-green-500/30',
   failed: 'bg-red-500/20 text-red-400 border-red-500/30',
+  draft: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+  reviewing: 'bg-amber-500/20 text-amber-400 border-amber-500/30',
+  published: 'bg-green-500/20 text-green-400 border-green-500/30',
 };
 
 export function Badge({ value, className = '' }: { value: string; className?: string }) {
