@@ -1,0 +1,50 @@
+# 异常检测参数
+prophet:
+  interval_width: 0.95
+  min_training_days: 14
+  yearly_seasonality: false
+  weekly_seasonality: true
+  daily_seasonality: false
+  changepoint_prior_scale: 0.05
+
+sales_anomaly:
+  severity:
+    critical_deviation: 70
+    warning_deviation: 40
+    zero_sales_is_critical: true
+
+consecutive_drop:
+  days: 3
+  threshold_percent: 50
+
+zero_sales:
+  consecutive_days: 3
+  min_historical_sales: 1
+  severity_mapping:
+    3: warning
+    5: critical
+    7: critical
+
+competitor_price:
+  drop_threshold: 0.10
+  urgency_threshold: 0.20
+  multiple_competitor_threshold: 2
+
+price_gap:
+  threshold: 0.15
+
+margin_warning:
+  warning_threshold: 0.20
+  critical_threshold: 0.10
+
+stockout:
+  urgent_days: 1
+  warning_days: 3
+  overstock_days: 90
+
+exposure_drop:
+  threshold: 0.50
+  consecutive_days: 2
+
+conversion_drop:
+  threshold: 0.50

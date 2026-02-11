@@ -1,0 +1,64 @@
+# 系统参数
+llm:
+  models:
+    simple: claude-haiku
+    default: claude-sonnet-4-20250514
+    complex: claude-opus-4-20250514
+  temperature: 0
+  max_tokens: 4096
+  max_retries: 3
+  retry_delay: [1, 2, 4]
+
+concurrency:
+  data_collection: 4
+  supplier_query: 3
+  db_connection_pool: 20
+  redis_connection_pool: 10
+
+cache:
+  hot_keywords_ttl: 3600
+  competitor_data_ttl: 1800
+  product_info_ttl: 300
+  graph_query_ttl: 600
+  prophet_forecast_ttl: 3600
+
+scheduled_tasks:
+  daily_selection: "0 6 * * *"
+  competitor_crawl_am: "0 8 * * *"
+  competitor_crawl_pm: "0 14 * * *"
+  alert_scan: "*/5 * * * *"
+  bundle_mining: "0 23 * * *"
+  daily_report: "0 22 * * *"
+  prophet_retrain: "0 3 * * 0"
+
+database:
+  postgres:
+    host: ${POSTGRES_HOST:localhost}
+    port: ${POSTGRES_PORT:5432}
+    database: ${POSTGRES_DB:ai_store}
+    user: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD:postgres}
+    min_connections: 5
+    max_connections: 20
+
+  neo4j:
+    uri: ${NEO4J_URI:bolt://localhost:7687}
+    user: ${NEO4J_USER:neo4j}
+    password: ${NEO4J_PASSWORD:neo4j}
+    database: ${NEO4J_DATABASE:neo4j}
+    max_connection_pool_size: 50
+
+  redis:
+    url: ${REDIS_URL:redis://localhost:6379/0}
+    max_connections: 10
+
+langfuse:
+  enabled: true
+  public_key: ${LANGFUSE_PUBLIC_KEY:}
+  secret_key: ${LANGFUSE_SECRET_KEY:}
+  host: ${LANGFUSE_HOST:http://localhost:3000}
+  trace_sample_rate: 1.0
+
+prometheus:
+  enabled: true
+  port: 9090

@@ -1,0 +1,52 @@
+[project]
+name = "ai-store-manager"
+version = "0.1.0"
+description = "AI店长 - 美团即时零售智能运营系统"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph>=0.2.0",
+    "anthropic>=0.39.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "asyncpg>=0.30.0",
+    "neo4j>=5.26.0",
+    "redis[hiredis]>=5.2.0",
+    "prophet>=1.1.6",
+    "sentence-transformers>=3.3.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    "pyyaml>=6.0.2",
+    "langfuse>=2.56.0",
+    "prometheus-client>=0.21.0",
+    "httpx>=0.28.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "A", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

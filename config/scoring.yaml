@@ -1,0 +1,50 @@
+# 选品评分模型参数
+selection_scoring:
+  weights:
+    market_heat: 0.25
+    competition_gap: 0.20
+    supply_chain: 0.20
+    profit_margin: 0.20
+    category_synergy: 0.10
+    seasonal_fit: 0.05
+
+  weight_ranges:
+    market_heat: [0.15, 0.35]
+    competition_gap: [0.10, 0.30]
+    supply_chain: [0.10, 0.30]
+    profit_margin: [0.15, 0.30]
+    category_synergy: [0.05, 0.20]
+    seasonal_fit: [0.00, 0.15]
+
+  thresholds:
+    strong_recommend: 80
+    recommend: 70
+    optional: 60
+    not_recommend: 60
+
+heat_score:
+  volume_thresholds: [1000, 5000, 10000, 50000]
+  volume_scores: [0.2, 0.4, 0.6, 0.8, 1.0]
+  growth_cap: 0.5
+  conversion_baseline: 0.1
+
+supplier_scoring:
+  alibaba:
+    weights:
+      qualification: 0.30
+      price: 0.30
+      moq: 0.20
+      delivery: 0.20
+  pdd:
+    weights:
+      price: 0.40
+      shop_score: 0.25
+      sales: 0.20
+      delivery: 0.15
+
+margin:
+  excellent_threshold: 0.50
+  good_threshold: 0.40
+  fair_threshold: 0.30
+  minimum_threshold: 0.25
+  cost_multiplier: 2.5

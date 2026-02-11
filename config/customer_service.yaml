@@ -1,0 +1,44 @@
+# 客服参数
+intent:
+  model: claude-haiku
+  high_confidence: 0.9
+  low_confidence: 0.7
+  human_handoff_keywords:
+    - 投诉
+    - 举报
+    - "315"
+    - 消协
+    - 退款
+    - 赔偿
+    - 律师
+    - 起诉
+    - 骗子
+    - 假货
+
+retrieval:
+  vector_weight: 0.6
+  keyword_weight: 0.4
+  initial_recall: 50
+  after_rerank: 5
+  rrf_k: 60
+
+reply:
+  max_length: 150
+  max_upsell_products: 2
+  model: claude-sonnet-4-20250514
+
+faq_templates:
+  greeting:
+    - trigger: ["在吗", "你好", "hello", "hi"]
+      reply: "亲，在的呢~请问有什么可以帮您？😊"
+
+  logistics:
+    - trigger: ["多久能到", "什么时候到", "几点送到"]
+      reply: "亲，下单后预计{delivery_time}送达哦~具体以骑手实际配送为准。您可以在订单详情查看实时进度~"
+    - trigger: ["发货了吗", "发了没"]
+      reply: "亲，订单{order_status}。{status_detail}您可以在订单详情查看物流信息~"
+    - trigger: ["能送到吗", "配送范围"]
+      reply: "亲，我们支持3公里内配送~您下单时如果地址显示可配送就没问题的~"
+
+  after_sales_notice:
+    reply: "亲，售后问题这边帮您转接人工客服处理，请稍等~"
