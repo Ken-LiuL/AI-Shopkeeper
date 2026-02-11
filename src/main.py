@@ -53,12 +53,31 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to start Prometheus metrics server", exc_info=True)
 
+    # Init scheduler (if not in test mode)
+    import os
+    if os.environ.get("TESTING") != "1":
+        try:
+            from src.scheduler import init_scheduler, start_scheduler
+            init_scheduler()
+            start_scheduler()
+            logger.info("Scheduler started")
+        except Exception:
+            logger.warning("Failed to start scheduler", exc_info=True)
+
     logger.info("All services initialised ✓")
 
     yield
 
     # ── Shutdown ─────────────────────────────────────────────
     logger.info("Shutting down …")
+    
+    # Shutdown scheduler
+    try:
+        from src.scheduler import shutdown_scheduler
+        shutdown_scheduler()
+    except Exception:
+        pass
+    
     await redis_db.close_redis()
     await neo4j_db.close_driver()
     await pg_db.close_pool()

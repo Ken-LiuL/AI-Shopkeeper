@@ -27,9 +27,12 @@ async def chat(
         session_id=request.session_id,
     )
 
-    reply = result.get("final_response", result.get("response", ""))
-    intent = result.get("intent", None)
-    sources = result.get("sources", [])
+    # Orchestrator 返回的 state 中，reply 是 dict，包含 reply_text
+    reply_data = result.get("reply", {})
+    reply = reply_data.get("reply_text", "") if isinstance(reply_data, dict) else str(reply_data)
+    intent_data = result.get("intent", {})
+    intent = intent_data.get("intent") if isinstance(intent_data, dict) else None
+    sources = result.get("enriched_results", result.get("sources", []))
 
     # Persist to Redis
     import json

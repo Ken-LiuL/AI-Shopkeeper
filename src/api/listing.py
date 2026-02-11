@@ -21,10 +21,14 @@ logger = logging.getLogger(__name__)
 @router.post("/parse", response_model=APIResponse[dict])
 async def parse_url(request: ListingParseRequest) -> APIResponse[dict]:
     """Quick parse of a product URL — returns extracted raw data."""
-    from src.skills.actionbook import parse_product_url  # type: ignore[import-untyped]
+    from src.skills.actionbook import ActionBookSkill
 
-    data = await parse_product_url(request.url, request.platform)
-    return APIResponse(data=data)
+    skill = ActionBookSkill()
+    if request.platform == "alibaba":
+        data = await skill.alibaba_detail(request.url)
+    else:
+        data = await skill.pdd_detail(request.url)
+    return APIResponse(data=data.model_dump())
 
 
 async def _run_listing_create(listing_id: str, request: ListingCreateRequest, orch: Orchestrator) -> None:

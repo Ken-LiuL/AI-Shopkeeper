@@ -87,10 +87,10 @@ export default function BundlesPage() {
                     </div>
 
                     <div className="space-y-1">
-                      {(b.items || []).map((item, i) => (
+                      {(b.products || []).map((item: { name: string; unit_price: number }, i: number) => (
                         <div key={i} className="text-sm text-gray-400 flex justify-between">
-                          <span>{item.product_name}</span>
-                          <span className="text-gray-600">x{item.quantity}</span>
+                          <span>{item.name}</span>
+                          <span className="text-gray-600">¥{item.unit_price}</span>
                         </div>
                       ))}
                     </div>

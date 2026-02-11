@@ -69,12 +69,15 @@ export interface Recommendation {
 
 export interface Alert {
   alert_id: string;
-  product_id: string;
+  product_id: string | null;
   product_name?: string;
   alert_type: string;
   severity: string;
   status: string;
-  message: string;
+  title?: string;
+  description?: string;
+  root_cause?: string;
+  suggestion?: string;
   created_at: string;
   resolved_at: string | null;
 }
@@ -83,18 +86,21 @@ export interface Bundle {
   bundle_id: string;
   name: string;
   tagline?: string;
-  items: BundleItem[];
+  products: BundleItem[];
   original_price: number;
   bundle_price: number;
-  discount?: number;
+  discount_percent?: number;
+  confidence?: number;
+  lift?: number;
   status: string;
   created_at: string;
 }
 
 export interface BundleItem {
   product_id: string;
-  product_name: string;
-  quantity: number;
+  name: string;
+  unit_price: number;
+  role?: string;
 }
 
 export interface TaskCreatedResponse {
