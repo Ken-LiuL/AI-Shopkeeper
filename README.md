@@ -91,6 +91,63 @@ ai-store-manager/
     └── train_prophet.py       # 训练Prophet模型
 ```
 
+## 数据同步模块 (`src/sync/`)
+
+牵牛花（`qnh.meituan.com`）数据采集引擎，支持全量和增量同步。
+
+### 架构
+
+| 文件 | 职责 |
+|------|------|
+| `base.py` | `BaseSyncer` 抽象基类 — 全量/增量/智能选择、重试、状态持久化 |
+| `qnh_auth.py` | 认证管理 — Cookie持久化、CDP提取、滑块验证码、自动重登录 |
+| `qnh_client.py` | HTTP客户端 — csec参数注入、限流、并发控制、auth自动刷新 |
+| `products.py` | 商品主档同步（SPU/SKU/价格/状态） |
+| `orders.py` | 订单数据同步（金额/状态/商品明细） |
+| `metrics.py` | 每日经营指标（订单额/客单价/毛利/渠道分布） |
+| `inventory.py` | 库存快照 + 库存流水增量 |
+| `traffic.py` | 商品流量（曝光/点击/转化） |
+| `reviews.py` | 评价数据（评分/内容/回复） |
+| `scheduler.py` | 定时调度器（cron式调度） |
+
+### 调度策略
+
+```
+products   → 全量 06:00 + 增量 every 4h
+orders     → 增量 every 30min
+metrics    → 全量 23:30
+inventory  → 增量 every 1h
+traffic    → 全量 23:00
+reviews    → 增量 every 4h
+```
+
+### 快速开始
+
+```python
+from src.sync import QNHClient, QNHAuth, ProductSyncer, SyncScheduler
+
+auth = QNHAuth()  # 从环境变量或浏览器CDP获取session
+async with QNHClient(auth=auth) as client:
+    syncer = ProductSyncer(client=client, db_pool=pool)
+    result = await syncer.sync()  # 智能选择全量或增量
+    print(result.summary)
+```
+
+### 数据库迁移
+
+```bash
+psql -f migrations/postgres/002_sync_tables.sql
+```
+
+### 环境变量
+
+| 变量 | 说明 |
+|------|------|
+| `QNH_USERNAME` | 牵牛花登录账号 |
+| `QNH_PASSWORD` | 牵牛花登录密码 |
+| `QNH_SESSION_FILE` | Session持久化路径（默认 `~/.qnh_session.json`） |
+| `QNH_CDP_ENDPOINT` | Chrome CDP端口（默认 `http://127.0.0.1:9222`） |
+
 ## 开发计划
 
 详见 SPEC.md 第十二部分
