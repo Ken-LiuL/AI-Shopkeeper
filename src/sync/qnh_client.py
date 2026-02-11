@@ -121,6 +121,158 @@ class QNHClient:
         """Get pending tasks for all POIs."""
         return await self.post("/api/v2/assistant/getPoiTasksWithTotal", data=self.poi_ids)
 
+    # ── Product APIs ────────────────────────────────────────────────────
+
+    async def get_product_list(
+        self,
+        page: int = 1,
+        page_size: int = 50,
+        status: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get SPU product list (paginated).
+
+        API: POST /qnh-gw3/api/product/spu/list
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "pageNum": page,
+            "pageSize": page_size,
+        }
+        if status:
+            payload["status"] = status
+        resp = await self.post("/qnh-gw3/api/product/spu/list", data=payload)
+        return resp.get("data", {})
+
+    async def get_product_detail(self, spu_id: str) -> dict[str, Any]:
+        """Get SPU detail by ID.
+
+        API: POST /qnh-gw3/api/product/spu/detail
+        """
+        resp = await self.post(
+            "/qnh-gw3/api/product/spu/detail",
+            data={"tenantId": self.tenant_id, "spuId": spu_id},
+        )
+        return resp.get("data", {})
+
+    # ── Order APIs ──────────────────────────────────────────────────────
+
+    async def get_order_list(
+        self,
+        page: int = 1,
+        page_size: int = 50,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        status: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get order list (paginated).
+
+        API: POST /qnh-gw3/api/order/list
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "pageNum": page,
+            "pageSize": page_size,
+            "storeIds": self.poi_ids,
+        }
+        if start_date:
+            payload["startDate"] = start_date
+        if end_date:
+            payload["endDate"] = end_date
+        if status:
+            payload["orderStatus"] = status
+        resp = await self.post("/qnh-gw3/api/order/list", data=payload)
+        return resp.get("data", {})
+
+    # ── Data / Analytics APIs ───────────────────────────────────────────
+
+    async def get_data_overview(
+        self,
+        date: str,
+        date_type: str = "day",
+        channel: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get business data overview for a date.
+
+        API: POST /qnh-gw3/api/data/home/overview
+        Returns: valid order amount/count, avg order value, gross profit, etc.
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "date": date,
+            "dateType": date_type,
+            "storeIds": self.poi_ids,
+        }
+        if channel:
+            payload["channel"] = channel
+        resp = await self.post("/qnh-gw3/api/data/home/overview", data=payload)
+        return resp.get("data", {})
+
+    async def get_realtime_data(self) -> dict[str, Any]:
+        """Get realtime business data.
+
+        API: POST /qnh-gw3/api/data/realtime
+        Returns: today's live orders, revenue, etc.
+        """
+        resp = await self.post(
+            "/qnh-gw3/api/data/realtime",
+            data={"tenantId": self.tenant_id, "storeIds": self.poi_ids},
+        )
+        return resp.get("data", {})
+
+    async def get_data_trend(
+        self,
+        start_date: str,
+        end_date: str,
+        date_type: str = "day",
+        channel: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Get data trend over a date range.
+
+        API: POST /qnh-gw3/api/data/home/trend
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "startDate": start_date,
+            "endDate": end_date,
+            "dateType": date_type,
+            "storeIds": self.poi_ids,
+        }
+        if channel:
+            payload["channel"] = channel
+        resp = await self.post("/qnh-gw3/api/data/home/trend", data=payload)
+        return resp.get("data", {})
+
+    async def get_product_sales_ranking(
+        self,
+        date: str,
+        date_type: str = "day",
+        channel: Optional[str] = None,
+        limit: int = 20,
+    ) -> list[dict[str, Any]]:
+        """Get product sales ranking from data overview.
+
+        Attempts /qnh-gw3/api/data/home/product-ranking or falls back
+        to extracting from overview data.
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "date": date,
+            "dateType": date_type,
+            "storeIds": self.poi_ids,
+            "pageSize": limit,
+        }
+        if channel:
+            payload["channel"] = channel
+
+        try:
+            resp = await self.post("/qnh-gw3/api/data/home/product-ranking", data=payload)
+            data = resp.get("data", {})
+            return data.get("list", data.get("records", []))
+        except Exception:
+            # Fallback: some tenants may not have this endpoint
+            logger.debug("product-ranking endpoint not available, using overview")
+            return []
+
     # ── Internal ────────────────────────────────────────────────────────
 
     async def _request(

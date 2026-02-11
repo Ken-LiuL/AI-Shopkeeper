@@ -307,6 +307,26 @@ def _parse_1688_text(text: str, limit: int = 10) -> list[dict]:
 
         # Price pattern: ¥xx.xx or xx.xx元
         price_match = re.search(r"[¥￥]?\s*(\d+\.?\d*)\s*(?:元|/件|/个)?", line)
+        # Sales pattern: xxx件成交, xxx笔
+        sales_match = re.search(r"(\d+)\s*(?:件|笔|成交)", line)
+        # MOQ pattern: ≥xx件起批, xx件起
+        moq_match = re.search(r"[≥]?\s*(\d+)\s*(?:件起批|件起|个起)", line)
+        # Supplier years: xx年
+        years_match = re.search(r"(\d+)\s*年", line)
+
+        if moq_match and current.get("title"):
+            current["moq"] = int(moq_match.group(1))
+
+        if sales_match and current.get("title"):
+            current["sales"] = int(sales_match.group(1))
+
+        if years_match and current.get("title") and not current.get("supplier_years"):
+            current["supplier_years"] = int(years_match.group(1))
+
+        # Supplier name patterns (xx公司, xx厂, xx有限)
+        supplier_match = re.search(r"([\u4e00-\u9fff]+(?:公司|厂|有限|科技|医疗|商行))", line)
+        if supplier_match and current.get("title") and not current.get("supplier"):
+            current["supplier"] = supplier_match.group(1)
 
         # If we see a substantial text line (potential title) and no current item
         if len(line) > 10 and not current.get("title") and not price_match:
@@ -314,13 +334,8 @@ def _parse_1688_text(text: str, limit: int = 10) -> list[dict]:
         elif price_match and current.get("title") and not current.get("price"):
             current["price"] = float(price_match.group(1))
         elif current.get("title") and current.get("price"):
-            # Look for sales/supplier info
-            sales_match = re.search(r"(\d+)\s*(?:件|笔|成交)", line)
-            if sales_match:
-                current["sales"] = int(sales_match.group(1))
-
             # Commit current product and start new one
-            if len(line) > 10 and not sales_match:
+            if len(line) > 10 and not sales_match and not moq_match and not supplier_match:
                 products.append(current)
                 current = {"title": line[:100]}
 
@@ -346,6 +361,12 @@ def _parse_pdd_text(text: str, limit: int = 10) -> list[dict]:
 
         price_match = re.search(r"[¥￥]?\s*(\d+\.?\d*)", line)
         sales_match = re.search(r"已拼?\s*(\d+(?:\.\d+)?)\s*万?\s*件?", line)
+        # Coupon pattern: 券xx元, 减xx
+        coupon_match = re.search(r"[券减]\s*(\d+\.?\d*)\s*元?", line)
+        # Shop name pattern
+        shop_match = re.search(r"([\u4e00-\u9fff]+(?:旗舰店|专卖店|官方店|店铺|商城))", line)
+        # Review count: xx条评价, xx评
+        review_match = re.search(r"(\d+(?:\.\d+)?)\s*万?\s*(?:条评价|评价|条评|评)", line)
 
         if sales_match and current.get("title"):
             val = float(sales_match.group(1))
@@ -353,11 +374,23 @@ def _parse_pdd_text(text: str, limit: int = 10) -> list[dict]:
                 val *= 10000
             current["sales"] = int(val)
 
+        if coupon_match and current.get("title"):
+            current["coupon"] = float(coupon_match.group(1))
+
+        if shop_match and current.get("title") and not current.get("shop"):
+            current["shop"] = shop_match.group(1)
+
+        if review_match and current.get("title"):
+            val = float(review_match.group(1))
+            if "万" in line:
+                val *= 10000
+            current["reviews"] = int(val)
+
         if len(line) > 8 and not current.get("title") and not price_match:
             current["title"] = line[:100]
         elif price_match and current.get("title") and not current.get("price"):
             current["price"] = float(price_match.group(1))
-        elif current.get("title") and current.get("price") and len(line) > 8:
+        elif current.get("title") and current.get("price") and len(line) > 8 and not sales_match and not coupon_match and not shop_match:
             products.append(current)
             current = {"title": line[:100]}
 
@@ -596,12 +629,18 @@ class ActionBookSkill:
         self,
         rate_limits: Optional[dict[str, int]] = None,
         cdp_url: Optional[str] = None,
+        qnh_client: Optional[Any] = None,
+        db_pool: Optional[Any] = None,
     ):
         limits = {**_DEFAULT_LIMITS, **(rate_limits or {})}
         self._buckets: dict[str, _RateBucket] = {
             name: _RateBucket(max_calls=max_calls)
             for name, max_calls in limits.items()
         }
+
+        # QNH client for meituan data (optional)
+        self._qnh_client = qnh_client
+        self._db_pool = db_pool
 
         # Determine mode
         mode = os.environ.get("ACTIONBOOK_MODE", "extension").lower()
@@ -692,7 +731,13 @@ class ActionBookSkill:
         finally:
             await self._cli.browser_close()
 
-    # ── 美团 (始终 mock，需要商家后台) ────────────────────────────────────
+    # ── 美团 ─────────────────────────────────────────────────────────────
+    # meituan_keywords 和 meituan_rankings 尝试从 QNH (牵牛花) 采集真实数据。
+    # competitor_stores 和 competitor_products 保持 mock（美团不提供竞品API）。
+    #
+    # 使用方式：
+    #   skill = ActionBookSkill(qnh_client=qnh_client, db_pool=pool)
+    # 如果未传入 qnh_client，自动降级为 mock。
 
     async def meituan_keywords(
         self,
@@ -700,8 +745,30 @@ class ActionBookSkill:
         category: Optional[str] = None,
         limit: int = 50,
     ) -> List[MeituanKeyword]:
-        """获取美团热搜词（mock - 需要美团商家后台权限）。"""
+        """获取美团热搜词。
+
+        数据来源：QNH 数据概览 → 从品类销售数据提取热门品类关键词。
+        牵牛花没有直接的"热搜词"API，这里通过商品品类销量推导。
+        无 QNH 连接时降级为 mock。
+        """
         self._check_rate("meituan_keywords")
+
+        if self._qnh_client:
+            try:
+                from datetime import datetime, timedelta, timezone
+                cst = timezone(timedelta(hours=8))
+                today = datetime.now(cst).strftime("%Y-%m-%d")
+
+                overview = await self._qnh_client.get_data_overview(today, date_type="day")
+                if overview:
+                    keywords = self._extract_keywords_from_overview(overview, category, limit)
+                    if keywords:
+                        logger.info(f"Meituan keywords: got {len(keywords)} from QNH overview")
+                        return keywords
+            except Exception as e:
+                logger.warning(f"QNH keywords fetch failed, using mock: {e}")
+
+        # Mock fallback
         mock = [
             MeituanKeyword(keyword="电子血压计", search_volume=12000, growth_rate=0.15, conversion_rate=0.12, category="血压监测"),
             MeituanKeyword(keyword="血糖试纸", search_volume=8500, growth_rate=0.22, conversion_rate=0.18, category="血糖监测"),
@@ -711,14 +778,142 @@ class ActionBookSkill:
         ]
         return mock[:limit]
 
+    def _extract_keywords_from_overview(
+        self,
+        overview: dict,
+        category: Optional[str],
+        limit: int,
+    ) -> List[MeituanKeyword]:
+        """从 QNH 数据概览提取品类关键词。"""
+        keywords = []
+
+        # Try category distribution data
+        cat_data = (
+            overview.get("categoryDistribution")
+            or overview.get("categoryData")
+            or overview.get("categoryRanking")
+            or []
+        )
+
+        if isinstance(cat_data, list):
+            for item in cat_data:
+                cat_name = item.get("categoryName", item.get("name", ""))
+                if not cat_name:
+                    continue
+                if category and category not in cat_name:
+                    continue
+                keywords.append(MeituanKeyword(
+                    keyword=cat_name,
+                    search_volume=int(item.get("orderCount", item.get("salesCount", 0))),
+                    growth_rate=float(item.get("growthRate", item.get("orderCountRate", 0))),
+                    conversion_rate=float(item.get("conversionRate", 0)),
+                    category=item.get("parentCategory", cat_name),
+                ))
+
+        # Also try product-level data as keyword source
+        product_data = overview.get("productRanking", overview.get("hotProducts", []))
+        if isinstance(product_data, list):
+            for item in product_data:
+                name = item.get("name", item.get("productName", ""))
+                if not name:
+                    continue
+                # Use product names as pseudo-keywords
+                keywords.append(MeituanKeyword(
+                    keyword=name,
+                    search_volume=int(item.get("salesCount", item.get("orderCount", 0))),
+                    growth_rate=float(item.get("growthRate", 0)),
+                    conversion_rate=float(item.get("conversionRate", 0)),
+                    category=item.get("category", ""),
+                ))
+
+        return keywords[:limit]
+
     async def meituan_rankings(
         self,
         store_id: str,
         category: Optional[str] = None,
         limit: int = 20,
     ) -> List[MeituanProduct]:
-        """获取美团商品排行榜（mock）。"""
+        """获取美团商品排行榜。
+
+        数据来源优先级：
+        1. QNH API 商品销量排行 (product-ranking endpoint)
+        2. 本地 DB 中已同步的 sales_history 数据
+        3. Mock fallback
+        """
         self._check_rate("meituan_rankings")
+
+        # Strategy 1: QNH API
+        if self._qnh_client:
+            try:
+                from datetime import datetime, timedelta, timezone
+                cst = timezone(timedelta(hours=8))
+                today = datetime.now(cst).strftime("%Y-%m-%d")
+
+                items = await self._qnh_client.get_product_sales_ranking(
+                    today, date_type="day", limit=limit
+                )
+                if items:
+                    products = []
+                    for item in items[:limit]:
+                        products.append(MeituanProduct(
+                            product_id=str(item.get("spuId", item.get("productId", item.get("id", "")))),
+                            name=item.get("name", item.get("productName", item.get("spuName", ""))),
+                            price=float(item.get("price", item.get("retailPrice", 0))),
+                            monthly_sales=int(item.get("salesCount", item.get("monthlySales", item.get("orderCount", 0)))),
+                            rating=float(item.get("rating", item.get("score", 0))),
+                            store_name=item.get("storeName", item.get("poiName", "")),
+                        ))
+                    if products:
+                        logger.info(f"Meituan rankings: got {len(products)} from QNH API")
+                        return products
+            except Exception as e:
+                logger.warning(f"QNH rankings fetch failed: {e}")
+
+        # Strategy 2: Local DB (synced data)
+        if self._db_pool:
+            try:
+                rows = await self._db_pool.fetch(
+                    """
+                    SELECT p.spu_id, p.name, p.retail_price,
+                           COALESCE(s.total_sales, 0) as monthly_sales,
+                           COALESCE(r.avg_rating, 0) as rating
+                    FROM qnh_products p
+                    LEFT JOIN (
+                        SELECT spu_id, SUM(sales_count) as total_sales
+                        FROM qnh_sales_history
+                        WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
+                        GROUP BY spu_id
+                    ) s ON p.spu_id = s.spu_id
+                    LEFT JOIN (
+                        SELECT spu_id, AVG(rating) as avg_rating
+                        FROM qnh_reviews
+                        GROUP BY spu_id
+                    ) r ON p.spu_id = r.spu_id
+                    WHERE p.tenant_id = $1
+                    ORDER BY monthly_sales DESC
+                    LIMIT $2
+                    """,
+                    self._qnh_client.tenant_id if self._qnh_client else "1011766",
+                    limit,
+                )
+                if rows:
+                    products = [
+                        MeituanProduct(
+                            product_id=str(row["spu_id"]),
+                            name=row["name"] or "",
+                            price=float(row["retail_price"] or 0),
+                            monthly_sales=int(row["monthly_sales"]),
+                            rating=float(row["rating"] or 0),
+                        )
+                        for row in rows
+                    ]
+                    logger.info(f"Meituan rankings: got {len(products)} from local DB")
+                    return products
+            except Exception as e:
+                logger.warning(f"DB rankings query failed: {e}")
+
+        # Strategy 3: Mock fallback
         mock = [
             MeituanProduct(product_id="MT001", name="鱼跃电子血压计YE680A", price=199.0, monthly_sales=520, rating=4.9, store_name="鱼跃旗舰店"),
             MeituanProduct(product_id="MT002", name="欧姆龙体温计MC-246", price=39.9, monthly_sales=1200, rating=4.8, store_name="欧姆龙旗舰店"),
@@ -731,7 +926,12 @@ class ActionBookSkill:
         store_id: str,
         radius_km: float = 3.0,
     ) -> List[CompetitorStore]:
-        """获取周边竞品店铺（mock）。"""
+        """获取周边竞品店铺。
+
+        ⚠️ MOCK 数据 — 美团牵牛花不提供竞品店铺 API。
+        竞品分析需要通过美团外卖 C 端页面手动调研，或使用第三方数据服务。
+        未来可考虑接入：餐眼、美团到店等第三方竞品分析工具。
+        """
         self._check_rate("competitor_stores")
         mock = [
             CompetitorStore(store_id="CS001", name="健康大药房", distance_km=1.2, rating=4.6, monthly_sales=15000, product_count=320, threat_level="high"),
@@ -747,7 +947,11 @@ class ActionBookSkill:
         category: Optional[str] = None,
         limit: int = 20,
     ) -> List[CompetitorProduct]:
-        """获取竞品商品列表（mock）。"""
+        """获取竞品商品列表。
+
+        ⚠️ MOCK 数据 — 美团牵牛花不提供竞品商品 API。
+        竞品商品数据需要通过 C 端页面爬取或第三方数据服务获取。
+        """
         self._check_rate("competitor_products")
         mock = [
             CompetitorProduct(product_id="CP001", name="鱼跃血压计", price=189.0, monthly_sales=450, store_name="健康大药房"),
