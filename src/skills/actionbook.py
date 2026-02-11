@@ -1,9 +1,9 @@
 """ActionBook Skill — 数据采集（美团/1688/拼多多）with rate limiting.
 
-## 方案：ActionBook Extension 模式 + Mock Fallback
+## 方案：ActionBook Extension 模式 + 重试 + 告警
 
 通过 ActionBook CLI（Extension 模式）控制用户已登录的 Chrome 浏览器，
-在真实页面上执行 snapshot/text 提取数据。采集失败时降级为 mock 数据。
+在真实页面上执行 snapshot/text 提取数据。采集失败时重试，最终失败返回空列表+告警。
 
 ### 使用方式
 1. 安装 ActionBook Chrome 扩展：actionbook extension install
@@ -30,9 +30,48 @@ from dataclasses import dataclass, field
 from typing import Any, List, Optional
 from urllib.parse import quote
 
+from pathlib import Path
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+# ── 延迟导入反检测模块（避免循环依赖）────────────────────────────────────────
+_anti_detect_loaded = False
+_fingerprint_mgr = None
+_behavior_sim = None
+_captcha_handler = None
+_scheduler = None
+_proxy_pool = None
+_stealth_js = ""
+
+def _ensure_anti_detect():
+    """延迟加载反检测模块。"""
+    global _anti_detect_loaded, _fingerprint_mgr, _behavior_sim, _captcha_handler, _scheduler, _proxy_pool, _stealth_js
+    if _anti_detect_loaded:
+        return
+    try:
+        from src.anti_detect.fingerprint import FingerprintManager
+        from src.anti_detect.behavior import BehaviorSimulator
+        from src.anti_detect.captcha import CaptchaHandler
+        from src.anti_detect.scheduler import SmartScheduler
+        from src.anti_detect.proxy_pool import ProxyPool
+
+        _fingerprint_mgr = FingerprintManager()
+        _behavior_sim = BehaviorSimulator()
+        _captcha_handler = CaptchaHandler()
+        _scheduler = SmartScheduler()
+        _proxy_pool = ProxyPool()
+
+        stealth_path = Path(__file__).parent.parent / "anti_detect" / "stealth.js"
+        if stealth_path.exists():
+            _stealth_js = stealth_path.read_text()
+
+        _anti_detect_loaded = True
+        logger.info("Anti-detect modules loaded")
+    except Exception as e:
+        logger.warning(f"Failed to load anti-detect modules: {e}")
+        _anti_detect_loaded = True  # Don't retry
 
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
@@ -82,7 +121,6 @@ class AlibabaProduct(BaseModel):
     return_rate: float = 0.0
     url: str = ""
     images: List[str] = Field(default_factory=list)
-    is_mock: bool = False
 
 class AlibabaSupplier(BaseModel):
     supplier_id: str
@@ -108,7 +146,6 @@ class PddProduct(BaseModel):
     has_coupon: bool = False
     coupon_amount: float = 0.0
     review_count: int = 0
-    is_mock: bool = False
 
 class PddShop(BaseModel):
     shop_id: str
@@ -536,93 +573,14 @@ _JS_EXTRACT_PDD_DETAIL = """(() => {
 })()"""
 
 
-# ── Mock Data ────────────────────────────────────────────────────────────────
-
-def _mock_alibaba_search(keyword: str, limit: int) -> List[AlibabaProduct]:
-    """返回 mock 数据，标记 is_mock=True。"""
-    mock = [
-        AlibabaProduct(
-            product_id="AL001", title=f"{keyword} 医用级", price=45.0,
-            min_order_qty=10, sales_count=5000, supplier_name="深圳康泰医疗",
-            supplier_years=8, is_power_seller=True, shop_score=4.9,
-            trade_level="gold", return_rate=0.35,
-            url="https://detail.1688.com/mock/AL001", is_mock=True,
-        ),
-        AlibabaProduct(
-            product_id="AL002", title=f"{keyword} 家用款", price=32.0,
-            min_order_qty=20, sales_count=3200, supplier_name="广州瑞康科技",
-            supplier_years=5, is_power_seller=True, shop_score=4.7,
-            trade_level="silver", return_rate=0.25,
-            url="https://detail.1688.com/mock/AL002", is_mock=True,
-        ),
-        AlibabaProduct(
-            product_id="AL003", title=f"{keyword} 批发", price=28.0,
-            min_order_qty=50, sales_count=8000, supplier_name="江苏鱼跃医疗",
-            supplier_years=12, is_power_seller=True, shop_score=4.8,
-            trade_level="gold", return_rate=0.40,
-            url="https://detail.1688.com/mock/AL003", is_mock=True,
-        ),
-    ]
-    return mock[:limit]
-
-
-def _mock_pdd_search(keyword: str, limit: int) -> List[PddProduct]:
-    """返回 mock 数据，标记 is_mock=True。"""
-    mock = [
-        PddProduct(
-            product_id="PDD001", title=f"{keyword} 家用精准",
-            price=89.9, original_price=129.0, sales_count=10000,
-            shop_name="鱼跃医疗旗舰店", shop_score=4.9,
-            url="https://mobile.yangkeduo.com/mock/PDD001",
-            has_coupon=True, coupon_amount=10, review_count=5200, is_mock=True,
-        ),
-        PddProduct(
-            product_id="PDD002", title=f"{keyword} 医用级",
-            price=69.9, original_price=99.0, sales_count=6500,
-            shop_name="欧姆龙官方店", shop_score=4.8,
-            url="https://mobile.yangkeduo.com/mock/PDD002",
-            has_coupon=False, coupon_amount=0, review_count=3100, is_mock=True,
-        ),
-    ]
-    return mock[:limit]
-
-
-def _mock_alibaba_detail(url: str) -> AlibabaProduct:
-    return AlibabaProduct(
-        product_id="AL001", title="鱼跃电子血压计 医用级",
-        price=45.0, min_order_qty=10, sales_count=5000,
-        supplier_name="深圳康泰医疗", supplier_years=8,
-        is_power_seller=True, shop_score=4.9, trade_level="gold",
-        return_rate=0.35, url=url,
-        images=["https://img.1688.com/mock1.jpg"], is_mock=True,
-    )
-
-
-def _mock_pdd_detail(url: str) -> PddProduct:
-    return PddProduct(
-        product_id="PDD001", title="鱼跃电子血压计 家用精准",
-        price=89.9, original_price=129.0, sales_count=10000,
-        shop_name="鱼跃医疗旗舰店", shop_score=4.9, url=url,
-        images=["https://img.pddpic.com/mock1.jpg"],
-        has_coupon=True, coupon_amount=10, review_count=5200, is_mock=True,
-    )
-
-
 # ── Skill ────────────────────────────────────────────────────────────────────
 
 class ActionBookSkill:
     """ActionBook RPA 采集技能。
 
     通过 ActionBook CLI（Extension 或 CDP 模式）控制浏览器采集数据。
-    采集失败时自动降级为 mock 数据（标记 is_mock=True）。
-
-    支持两种模式：
-    1. Extension 模式（默认）：通过 Chrome 扩展控制用户已登录的浏览器
-       - 需要先安装扩展并启动 bridge：actionbook extension serve
-    2. CDP 模式：通过 Chrome DevTools Protocol 连接
-       - 设置 ACTIONBOOK_MODE=cdp 和 CDP_URL
-
-    美团数据始终使用 mock（需要商家后台权限）。
+    采集失败时重试（最多3次指数退避），最终失败返回空列表+告警。
+    绝不返回 mock 假数据。
     """
 
     def __init__(
@@ -631,6 +589,7 @@ class ActionBookSkill:
         cdp_url: Optional[str] = None,
         qnh_client: Optional[Any] = None,
         db_pool: Optional[Any] = None,
+        notifier: Optional[Any] = None,
     ):
         limits = {**_DEFAULT_LIMITS, **(rate_limits or {})}
         self._buckets: dict[str, _RateBucket] = {
@@ -641,6 +600,7 @@ class ActionBookSkill:
         # QNH client for meituan data (optional)
         self._qnh_client = qnh_client
         self._db_pool = db_pool
+        self._notifier = notifier
 
         # Determine mode
         mode = os.environ.get("ACTIONBOOK_MODE", "extension").lower()
@@ -656,6 +616,17 @@ class ActionBookSkill:
         if bucket and not bucket.acquire():
             raise RuntimeError(f"Rate limit exceeded for {method}")
 
+    async def _alert(self, source: str, keyword: str, error: str) -> None:
+        """发送采集失败告警。"""
+        try:
+            from src.skills.alert_on_failure import alert_scrape_failure
+            await alert_scrape_failure(
+                source=source, keyword=keyword, error=error,
+                db_pool=self._db_pool, notifier=self._notifier,
+            )
+        except Exception as e:
+            logger.error(f"Failed to send alert: {e}")
+
     async def _ensure_extension(self) -> bool:
         """Check extension availability (cached)."""
         if not self._extension_checked:
@@ -664,40 +635,89 @@ class ActionBookSkill:
             if self._extension_available:
                 logger.info("ActionBook extension bridge is connected")
             else:
-                logger.warning("ActionBook extension not available, will use mock fallback")
+                logger.warning("ActionBook extension not available")
         return self._extension_available
+
+    async def _inject_anti_detect(self, session_key: str = "default") -> None:
+        """注入反检测脚本到当前页面。"""
+        _ensure_anti_detect()
+        try:
+            if _stealth_js:
+                await self._cli.browser_eval(_stealth_js)
+            if _fingerprint_mgr:
+                fp = _fingerprint_mgr.get_fingerprint(session_key)
+                await self._cli.browser_eval(fp.generate_inject_js())
+        except Exception as e:
+            logger.debug(f"Anti-detect injection error: {e}")
+
+    async def _smart_wait(self, domain: str, base_seconds: float = 3.0) -> None:
+        """智能等待：结合行为模拟和调度器。"""
+        _ensure_anti_detect()
+        if _behavior_sim:
+            stay_ms = _behavior_sim.estimate_page_stay()
+            import random as _rnd
+            await asyncio.sleep(stay_ms * _rnd.uniform(0.8, 1.3) / 1000)
+        else:
+            await asyncio.sleep(base_seconds)
 
     async def _scrape_with_actionbook(
         self,
         url: str,
         js_extract: str,
         wait_seconds: float = 3.0,
+        domain: str = "",
     ) -> list[dict]:
-        """Generic scrape: open URL → wait → eval JS → close → return parsed items."""
+        """Generic scrape: open URL → inject anti-detect → wait → eval JS → close."""
         if not await self._ensure_extension():
             return []
 
+        _ensure_anti_detect()
+
+        # 智能调度
+        if _scheduler and domain:
+            if not await _scheduler.wait_for_slot(domain):
+                logger.warning(f"Scheduler: {domain} daily limit reached")
+                return []
+
         try:
             await self._cli.browser_open(url)
-            # Wait for page to load
-            await asyncio.sleep(wait_seconds)
 
-            # Try JS extraction first (more structured)
+            # 注入反检测
+            session_key = f"{domain}_{hash(url) % 10000}"
+            await self._inject_anti_detect(session_key)
+
+            # 智能等待
+            await self._smart_wait(domain, wait_seconds)
+
+            # 检测验证码
+            if _captcha_handler:
+                result = await _captcha_handler.detect_and_handle(self._cli.browser_eval)
+                if result and not result.success:
+                    logger.warning(f"Captcha not solved for {url}")
+                    if _scheduler:
+                        _scheduler.report_failure(domain, is_anti_crawl=True)
+                    return []
+
+            # Try JS extraction
             raw = await self._cli.browser_eval(js_extract)
             if raw:
                 try:
                     items = json.loads(raw)
                     if isinstance(items, list) and items:
+                        if _scheduler and domain:
+                            _scheduler.report_success(domain)
                         return items
                 except json.JSONDecodeError:
                     pass
 
-            # Fallback: get page text and try to parse
+            # Fallback: get page text
             text = await self._cli.browser_text()
-            return []  # Text parsing is too unreliable as a secondary fallback
+            return []
 
         except Exception as e:
             logger.warning(f"ActionBook scraping failed for {url}: {e}")
+            if _scheduler and domain:
+                _scheduler.report_failure(domain, is_anti_crawl="403" in str(e) or "验证" in str(e))
             return []
         finally:
             await self._cli.browser_close()
@@ -707,37 +727,52 @@ class ActionBookSkill:
         url: str,
         js_extract: str,
         wait_seconds: float = 3.0,
+        domain: str = "",
     ) -> Optional[dict]:
-        """Scrape a single detail page."""
+        """Scrape a single detail page with anti-detect."""
         if not await self._ensure_extension():
             return None
 
+        _ensure_anti_detect()
+        if _scheduler and domain:
+            if not await _scheduler.wait_for_slot(domain):
+                return None
+
         try:
             await self._cli.browser_open(url)
-            await asyncio.sleep(wait_seconds)
+            await self._inject_anti_detect(f"{domain}_detail")
+            await self._smart_wait(domain, wait_seconds)
+
+            if _captcha_handler:
+                result = await _captcha_handler.detect_and_handle(self._cli.browser_eval)
+                if result and not result.success:
+                    if _scheduler and domain:
+                        _scheduler.report_failure(domain, is_anti_crawl=True)
+                    return None
 
             raw = await self._cli.browser_eval(js_extract)
             if raw:
                 try:
                     data = json.loads(raw)
                     if isinstance(data, dict) and data.get("title"):
+                        if _scheduler and domain:
+                            _scheduler.report_success(domain)
                         return data
                 except json.JSONDecodeError:
                     pass
             return None
         except Exception as e:
             logger.warning(f"ActionBook detail scraping failed for {url}: {e}")
+            if _scheduler and domain:
+                _scheduler.report_failure(domain, is_anti_crawl="403" in str(e))
             return None
         finally:
             await self._cli.browser_close()
 
     # ── 美团 ─────────────────────────────────────────────────────────────
-    # meituan_keywords 和 meituan_rankings 尝试从 QNH (牵牛花) 采集真实数据。
-    # competitor_stores 和 competitor_products 保持 mock（美团不提供竞品API）。
-    #
-    # 使用方式：
-    #   skill = ActionBookSkill(qnh_client=qnh_client, db_pool=pool)
-    # 如果未传入 qnh_client，自动降级为 mock。
+    # meituan_keywords 和 meituan_rankings 从 QNH (牵牛花) 采集真实数据。
+    # competitor_stores 和 competitor_products 优先查 DB，其次 H5 采集。
+    # 采集失败返回空列表 + 告警，绝不返回假数据。
 
     async def meituan_keywords(
         self,
@@ -749,7 +784,7 @@ class ActionBookSkill:
 
         数据来源：QNH 数据概览 → 从品类销售数据提取热门品类关键词。
         牵牛花没有直接的"热搜词"API，这里通过商品品类销量推导。
-        无 QNH 连接时降级为 mock。
+        无 QNH 连接时返回空列表 + 告警。
         """
         self._check_rate("meituan_keywords")
 
@@ -766,17 +801,11 @@ class ActionBookSkill:
                         logger.info(f"Meituan keywords: got {len(keywords)} from QNH overview")
                         return keywords
             except Exception as e:
-                logger.warning(f"QNH keywords fetch failed, using mock: {e}")
+                logger.error(f"QNH keywords fetch failed: {e}")
+                await self._alert("meituan_qnh", f"keywords/{category or 'all'}", str(e))
 
-        # Mock fallback
-        mock = [
-            MeituanKeyword(keyword="电子血压计", search_volume=12000, growth_rate=0.15, conversion_rate=0.12, category="血压监测"),
-            MeituanKeyword(keyword="血糖试纸", search_volume=8500, growth_rate=0.22, conversion_rate=0.18, category="血糖监测"),
-            MeituanKeyword(keyword="体温计", search_volume=35000, growth_rate=0.08, conversion_rate=0.25, category="体温监测"),
-            MeituanKeyword(keyword="雾化器", search_volume=5200, growth_rate=0.35, conversion_rate=0.10, category="呼吸治疗"),
-            MeituanKeyword(keyword="制氧机", search_volume=3800, growth_rate=0.28, conversion_rate=0.08, category="呼吸治疗"),
-        ]
-        return mock[:limit]
+        logger.warning("Meituan keywords: no data available, returning empty list")
+        return []
 
     def _extract_keywords_from_overview(
         self,
@@ -839,7 +868,8 @@ class ActionBookSkill:
         数据来源优先级：
         1. QNH API 商品销量排行 (product-ranking endpoint)
         2. 本地 DB 中已同步的 sales_history 数据
-        3. Mock fallback
+        2. 本地 DB 中已同步的 sales_history 数据
+        无数据时返回空列表 + 告警。
         """
         self._check_rate("meituan_rankings")
 
@@ -868,7 +898,8 @@ class ActionBookSkill:
                         logger.info(f"Meituan rankings: got {len(products)} from QNH API")
                         return products
             except Exception as e:
-                logger.warning(f"QNH rankings fetch failed: {e}")
+                logger.error(f"QNH rankings fetch failed: {e}")
+                await self._alert("meituan_qnh", f"rankings/{store_id}", str(e))
 
         # Strategy 2: Local DB (synced data)
         if self._db_pool:
@@ -911,15 +942,11 @@ class ActionBookSkill:
                     logger.info(f"Meituan rankings: got {len(products)} from local DB")
                     return products
             except Exception as e:
-                logger.warning(f"DB rankings query failed: {e}")
+                logger.error(f"DB rankings query failed: {e}")
 
-        # Strategy 3: Mock fallback
-        mock = [
-            MeituanProduct(product_id="MT001", name="鱼跃电子血压计YE680A", price=199.0, monthly_sales=520, rating=4.9, store_name="鱼跃旗舰店"),
-            MeituanProduct(product_id="MT002", name="欧姆龙体温计MC-246", price=39.9, monthly_sales=1200, rating=4.8, store_name="欧姆龙旗舰店"),
-            MeituanProduct(product_id="MT003", name="三诺血糖仪GA-3", price=89.0, monthly_sales=380, rating=4.7, store_name="三诺旗舰店"),
-        ]
-        return mock[:limit]
+        logger.warning("Meituan rankings: no data available, returning empty list")
+        await self._alert("meituan", f"rankings/{store_id}", "No data from QNH or DB")
+        return []
 
     async def competitor_stores(
         self,
@@ -933,7 +960,7 @@ class ActionBookSkill:
         数据来源优先级：
         1. competitor_stores 表（RPC 设备采集的真实数据）
         2. H5 搜索采集
-        3. Mock fallback
+        采集失败返回空列表 + 告警。
         """
         self._check_rate("competitor_stores")
 
@@ -1003,15 +1030,11 @@ class ActionBookSkill:
                             s.threat_level = "low"
                     return [s for s in stores if s.distance_km <= radius_km or radius_km >= 3.0][:20]
             except Exception as e:
-                logger.warning(f"H5 competitor_stores failed, using mock: {e}")
+                logger.error(f"H5 competitor_stores failed: {e}")
+                await self._alert("meituan_h5", keyword, str(e))
 
-        # Mock fallback
-        mock = [
-            CompetitorStore(store_id="CS001", name="健康大药房", distance_km=1.2, rating=4.6, monthly_sales=15000, product_count=320, threat_level="high"),
-            CompetitorStore(store_id="CS002", name="百姓大药房", distance_km=2.1, rating=4.3, monthly_sales=8000, product_count=210, threat_level="medium"),
-            CompetitorStore(store_id="CS003", name="仁和药房", distance_km=2.8, rating=4.1, monthly_sales=5000, product_count=150, threat_level="low"),
-        ]
-        return [s for s in mock if s.distance_km <= radius_km]
+        logger.warning("Competitor stores: no data available, returning empty list")
+        return []
 
     async def competitor_products(
         self,
@@ -1027,7 +1050,7 @@ class ActionBookSkill:
         数据来源优先级：
         1. competitor_products 表（RPC 设备采集的真实数据）
         2. H5 搜索采集
-        3. Mock fallback
+        采集失败返回空列表 + 告警。
         """
         self._check_rate("competitor_products")
 
@@ -1077,14 +1100,11 @@ class ActionBookSkill:
                 if products:
                     return products[:limit]
             except Exception as e:
-                logger.warning(f"H5 competitor_products failed, using mock: {e}")
+                logger.error(f"H5 competitor_products failed: {e}")
+                await self._alert("meituan_h5", category or keyword, str(e))
 
-        # Mock fallback
-        mock = [
-            CompetitorProduct(product_id="CP001", name="鱼跃血压计", price=189.0, monthly_sales=450, store_name="健康大药房"),
-            CompetitorProduct(product_id="CP002", name="欧姆龙体温计", price=35.9, monthly_sales=980, store_name="健康大药房"),
-        ]
-        return mock[:limit]
+        logger.warning("Competitor products: no data available, returning empty list")
+        return []
 
     async def meituan_hot_keywords(
         self,
@@ -1104,10 +1124,11 @@ class ActionBookSkill:
                 if keywords:
                     return keywords
             except Exception as e:
-                logger.warning(f"H5 hot_keywords failed, using mock: {e}")
+                logger.error(f"H5 hot_keywords failed: {e}")
+                await self._alert("meituan_h5", f"hot_keywords/{category}", str(e))
 
-        # Mock fallback
-        return ["电子血压计", "体温计", "血糖试纸", "口罩", "制氧机", "雾化器", "血氧仪"]
+        logger.warning("Meituan hot keywords: no data available, returning empty list")
+        return []
 
     async def meituan_search_keywords(
         self,
@@ -1117,7 +1138,7 @@ class ActionBookSkill:
         """获取美团搜索关键词热度数据。
 
         数据来源：competitor_keywords 表（RPC 设备采集）。
-        无数据时 fallback mock。
+        无数据时返回空列表。
         """
         self._check_rate("meituan_keywords")
 
@@ -1149,17 +1170,10 @@ class ActionBookSkill:
                     logger.info(f"Search keywords: got {len(keywords)} from RPC DB")
                     return keywords
             except Exception as e:
-                logger.warning(f"DB competitor_keywords query failed: {e}")
+                logger.error(f"DB competitor_keywords query failed: {e}")
 
-        # Mock fallback
-        mock = [
-            MeituanKeyword(keyword="电子血压计", search_volume=12000, growth_rate=0.15, category="血压监测"),
-            MeituanKeyword(keyword="血糖试纸", search_volume=8500, growth_rate=0.22, category="血糖监测"),
-            MeituanKeyword(keyword="体温计", search_volume=35000, growth_rate=0.08, category="体温监测"),
-            MeituanKeyword(keyword="雾化器", search_volume=5200, growth_rate=0.35, category="呼吸治疗"),
-            MeituanKeyword(keyword="制氧机", search_volume=3800, growth_rate=0.28, category="呼吸治疗"),
-        ]
-        return mock[:limit]
+        logger.warning("Meituan search keywords: no data available, returning empty list")
+        return []
 
     # ── 1688 ─────────────────────────────────────────────────────────────
 
@@ -1169,64 +1183,84 @@ class ActionBookSkill:
         sort_by: str = "sales",
         limit: int = 10,
     ) -> List[AlibabaProduct]:
-        """搜索1688商品。通过 ActionBook 采集，失败时返回 mock。"""
+        """搜索1688商品。通过 ActionBook 采集，失败时重试+告警。"""
         self._check_rate("alibaba_search")
 
         url = f"https://s.1688.com/selloffer/offer_search.htm?keywords={quote(keyword)}"
         js = _JS_EXTRACT_1688 % limit
-        raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0)
 
-        if not raw_items:
-            logger.info(f"1688 search '{keyword}': no results, using mock")
-            return _mock_alibaba_search(keyword, limit)
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0, domain="alibaba")
+                if raw_items:
+                    products = []
+                    for i, item in enumerate(raw_items):
+                        products.append(AlibabaProduct(
+                            product_id=f"AL{i+1:03d}",
+                            title=item.get("title", ""),
+                            price=item.get("price", 0.0),
+                            min_order_qty=item.get("moq", 1),
+                            sales_count=item.get("sales", 0),
+                            supplier_name=item.get("supplier", ""),
+                            url=item.get("url", ""),
+                        ))
+                    logger.info(f"1688 search '{keyword}': got {len(products)} results")
+                    return products
+                last_err = "empty results"
+            except Exception as e:
+                last_err = str(e)
 
-        products = []
-        for i, item in enumerate(raw_items):
-            products.append(AlibabaProduct(
-                product_id=f"AL{i+1:03d}",
-                title=item.get("title", ""),
-                price=item.get("price", 0.0),
-                min_order_qty=item.get("moq", 1),
-                sales_count=item.get("sales", 0),
-                supplier_name=item.get("supplier", ""),
-                url=item.get("url", ""),
-                is_mock=False,
-            ))
-        logger.info(f"1688 search '{keyword}': got {len(products)} real results")
-        return products
+            if attempt < 3:
+                wait = 1.0 * (2 ** (attempt - 1))
+                logger.warning(f"1688 search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                await asyncio.sleep(wait)
+
+        logger.error(f"1688 search '{keyword}' failed after 3 attempts: {last_err}")
+        await self._alert("1688", keyword, last_err or "unknown error")
+        return []
 
     async def alibaba_detail(self, url: str) -> AlibabaProduct:
-        """获取1688商品详情。通过 ActionBook 采集，失败时返回 mock。"""
+        """获取1688商品详情。采集失败时重试+告警，最终失败抛异常。"""
         self._check_rate("alibaba_detail")
 
-        data = await self._scrape_detail_with_actionbook(
-            url, _JS_EXTRACT_1688_DETAIL, wait_seconds=4.0
-        )
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                data = await self._scrape_detail_with_actionbook(
+                    url, _JS_EXTRACT_1688_DETAIL, wait_seconds=4.0, domain="alibaba"
+                )
+                if data:
+                    return AlibabaProduct(
+                        product_id="AL001",
+                        title=data.get("title", ""),
+                        price=data.get("price", 0.0),
+                        min_order_qty=data.get("moq", 1),
+                        sales_count=data.get("sales", 0),
+                        supplier_name=data.get("supplier", ""),
+                        url=url,
+                        images=data.get("images", []),
+                    )
+                last_err = "empty result"
+            except Exception as e:
+                last_err = str(e)
 
-        if not data:
-            return _mock_alibaba_detail(url)
+            if attempt < 3:
+                wait = 1.0 * (2 ** (attempt - 1))
+                logger.warning(f"1688 detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                await asyncio.sleep(wait)
 
-        return AlibabaProduct(
-            product_id="AL001",
-            title=data.get("title", ""),
-            price=data.get("price", 0.0),
-            min_order_qty=data.get("moq", 1),
-            sales_count=data.get("sales", 0),
-            supplier_name=data.get("supplier", ""),
-            url=url,
-            images=data.get("images", []),
-            is_mock=False,
-        )
+        error_msg = f"1688 detail failed after 3 attempts for {url}: {last_err}"
+        logger.error(error_msg)
+        await self._alert("1688", url, last_err or "unknown error")
+        raise RuntimeError(error_msg)
 
     async def alibaba_supplier(self, supplier_id: str) -> AlibabaSupplier:
-        """获取1688供应商信息（mock - 需要专门的供应商页面解析）。"""
+        """获取1688供应商信息。TODO: 实现供应商页面解析。"""
         self._check_rate("alibaba_supplier")
-        return AlibabaSupplier(
-            supplier_id=supplier_id, name="深圳康泰医疗",
-            years=8, is_power_seller=True, shop_score=4.9,
-            trade_level="gold", return_rate=0.35,
-            main_products=["电子血压计", "血糖仪", "体温计"],
-            location="广东深圳",
+        raise NotImplementedError(
+            f"alibaba_supplier not yet implemented for supplier_id={supplier_id}. "
+            "需要实现供应商页面解析。"
         )
 
     # ── 拼多多 ───────────────────────────────────────────────────────────
@@ -1237,62 +1271,84 @@ class ActionBookSkill:
         sort_by: str = "sales",
         limit: int = 10,
     ) -> List[PddProduct]:
-        """搜索拼多多商品。通过 ActionBook 采集，失败时返回 mock。"""
+        """搜索拼多多商品。采集失败时重试+告警。"""
         self._check_rate("pdd_search")
 
         url = f"https://mobile.yangkeduo.com/search_result.html?search_key={quote(keyword)}"
         js = _JS_EXTRACT_PDD % limit
-        raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0)
 
-        if not raw_items:
-            logger.info(f"PDD search '{keyword}': no results, using mock")
-            return _mock_pdd_search(keyword, limit)
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0, domain="pdd")
+                if raw_items:
+                    products = []
+                    for i, item in enumerate(raw_items):
+                        products.append(PddProduct(
+                            product_id=f"PDD{i+1:03d}",
+                            title=item.get("title", ""),
+                            price=item.get("price", 0.0),
+                            sales_count=item.get("sales", 0),
+                            shop_name=item.get("shop", ""),
+                            url=item.get("url", ""),
+                        ))
+                    logger.info(f"PDD search '{keyword}': got {len(products)} results")
+                    return products
+                last_err = "empty results"
+            except Exception as e:
+                last_err = str(e)
 
-        products = []
-        for i, item in enumerate(raw_items):
-            products.append(PddProduct(
-                product_id=f"PDD{i+1:03d}",
-                title=item.get("title", ""),
-                price=item.get("price", 0.0),
-                sales_count=item.get("sales", 0),
-                shop_name=item.get("shop", ""),
-                url=item.get("url", ""),
-                is_mock=False,
-            ))
-        logger.info(f"PDD search '{keyword}': got {len(products)} real results")
-        return products
+            if attempt < 3:
+                wait = 1.0 * (2 ** (attempt - 1))
+                logger.warning(f"PDD search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                await asyncio.sleep(wait)
+
+        logger.error(f"PDD search '{keyword}' failed after 3 attempts: {last_err}")
+        await self._alert("pdd", keyword, last_err or "unknown error")
+        return []
 
     async def pdd_detail(self, url: str) -> PddProduct:
-        """获取拼多多商品详情。通过 ActionBook 采集，失败时返回 mock。"""
+        """获取拼多多商品详情。采集失败时重试+告警，最终失败抛异常。"""
         self._check_rate("pdd_detail")
 
-        data = await self._scrape_detail_with_actionbook(
-            url, _JS_EXTRACT_PDD_DETAIL, wait_seconds=4.0
-        )
+        last_err = None
+        for attempt in range(1, 4):
+            try:
+                data = await self._scrape_detail_with_actionbook(
+                    url, _JS_EXTRACT_PDD_DETAIL, wait_seconds=4.0, domain="pdd"
+                )
+                if data:
+                    return PddProduct(
+                        product_id="PDD001",
+                        title=data.get("title", ""),
+                        price=data.get("price", 0.0),
+                        original_price=data.get("origPrice", 0.0),
+                        sales_count=data.get("sales", 0),
+                        shop_name=data.get("shop", ""),
+                        url=url,
+                        images=data.get("images", []),
+                        review_count=data.get("reviews", 0),
+                    )
+                last_err = "empty result"
+            except Exception as e:
+                last_err = str(e)
 
-        if not data:
-            return _mock_pdd_detail(url)
+            if attempt < 3:
+                wait = 1.0 * (2 ** (attempt - 1))
+                logger.warning(f"PDD detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                await asyncio.sleep(wait)
 
-        return PddProduct(
-            product_id="PDD001",
-            title=data.get("title", ""),
-            price=data.get("price", 0.0),
-            original_price=data.get("origPrice", 0.0),
-            sales_count=data.get("sales", 0),
-            shop_name=data.get("shop", ""),
-            url=url,
-            images=data.get("images", []),
-            review_count=data.get("reviews", 0),
-            is_mock=False,
-        )
+        error_msg = f"PDD detail failed after 3 attempts for {url}: {last_err}"
+        logger.error(error_msg)
+        await self._alert("pdd", url, last_err or "unknown error")
+        raise RuntimeError(error_msg)
 
     async def pdd_shop(self, shop_id: str) -> PddShop:
-        """获取拼多多店铺信息（mock - 需要专门的店铺页面解析）。"""
+        """获取拼多多店铺信息。TODO: 实现店铺页面解析。"""
         self._check_rate("pdd_shop")
-        return PddShop(
-            shop_id=shop_id, name="鱼跃医疗旗舰店",
-            score=4.9, product_count=156, sales_count=85000,
-            location="江苏南京",
+        raise NotImplementedError(
+            f"pdd_shop not yet implemented for shop_id={shop_id}. "
+            "需要实现店铺页面解析。"
         )
 
     async def cleanup(self):

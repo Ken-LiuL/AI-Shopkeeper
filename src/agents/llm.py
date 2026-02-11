@@ -128,24 +128,34 @@ async def _call_openrouter(
     
     openai_tool = _anthropic_tool_to_openai_function(tool)
     
-    response = await client.chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=messages,
-        tools=[openai_tool],
-        tool_choice={"type": "function", "function": {"name": tool["name"]}},
-    )
+    max_retries = 2
+    for attempt in range(1, max_retries + 1):
+        response = await client.chat.completions.create(
+            model=model,
+            max_tokens=max_tokens,
+            messages=messages,
+            tools=[openai_tool],
+            tool_choice={"type": "function", "function": {"name": tool["name"]}},
+        )
+        
+        choice = response.choices[0]
+        if choice.message.tool_calls:
+            tc = choice.message.tool_calls[0]
+            result = json.loads(tc.function.arguments)
+            input_tokens = response.usage.prompt_tokens if response.usage else 0
+            output_tokens = response.usage.completion_tokens if response.usage else 0
+            return result, input_tokens, output_tokens
+        
+        # Empty tool_call — known issue with Gemini 2.5 Pro, retry
+        if attempt < max_retries:
+            logger.warning(
+                f"OpenRouter empty tool_call (attempt {attempt}/{max_retries}), "
+                f"model={model}, retrying in 1s..."
+            )
+            import asyncio
+            await asyncio.sleep(1)
     
-    choice = response.choices[0]
-    if choice.message.tool_calls:
-        tc = choice.message.tool_calls[0]
-        result = json.loads(tc.function.arguments)
-    else:
-        raise ValueError(f"No tool call in response: {choice.message}")
-    
-    input_tokens = response.usage.prompt_tokens if response.usage else 0
-    output_tokens = response.usage.completion_tokens if response.usage else 0
-    return result, input_tokens, output_tokens
+    raise ValueError(f"No tool call in response after {max_retries} attempts: {choice.message}")
 
 
 async def _call_anthropic(

@@ -68,7 +68,8 @@ class CompetitorSyncer(BaseSyncer):
                         total_stores += len(stores)
                 except Exception as e:
                     errors.append(f"{kw}: {e}")
-                    logger.warning(f"Competitor sync failed for '{kw}': {e}")
+                    logger.error(f"Competitor sync failed for '{kw}': {e}")
+                    await self._record_sync_error(kw, str(e))
 
             # 2. 采集热搜词
             try:
@@ -150,6 +151,23 @@ class CompetitorSyncer(BaseSyncer):
                 """,
                 kw,
             )
+
+    async def _record_sync_error(self, keyword: str, error: str):
+        """记录同步错误到 sync_state 表。"""
+        if not self._db_pool:
+            return
+        try:
+            await self._db_pool.execute(
+                """
+                INSERT INTO sync_state (syncer_name, status, error_message, keyword, updated_at)
+                VALUES ($1, 'error', $2, $3, NOW())
+                ON CONFLICT (syncer_name, keyword) DO UPDATE
+                SET status = 'error', error_message = $2, updated_at = NOW()
+                """,
+                self.name, error, keyword,
+            )
+        except Exception as e:
+            logger.error(f"Failed to record sync error: {e}")
 
     @staticmethod
     def _aggregate_stores(products: list) -> list[dict]:

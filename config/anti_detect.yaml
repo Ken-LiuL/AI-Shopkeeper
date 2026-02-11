@@ -1,0 +1,21 @@
+fingerprint:
+  rotate_every: 3600  # 每小时换一次指纹
+  resolution_pool: [[1920,1080], [1440,900], [1366,768], [1536,864]]
+
+behavior:
+  typing_speed: [50, 200]  # ms per char
+  scroll_pause: [1000, 5000]  # ms
+  page_stay: [3000, 30000]  # ms
+
+proxy:
+  enabled: false
+  provider: "file"  # file | api
+  file_path: "config/proxies.txt"
+
+scheduler:
+  active_hours: [8, 23]
+  max_requests_per_hour:
+    meituan: 30
+    alibaba: 20
+    pdd: 20
+  failure_backoff_multiplier: 2

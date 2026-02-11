@@ -17,12 +17,21 @@ import logging
 import random
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Optional, Tuple
 from urllib.parse import quote
 
 from src.skills.actionbook import CompetitorProduct, CompetitorStore, _ActionBookCLI
+from src.anti_detect.fingerprint import FingerprintManager
+from src.anti_detect.behavior import BehaviorSimulator, BehaviorConfig
+from src.anti_detect.captcha import CaptchaHandler
+from src.anti_detect.scheduler import SmartScheduler
 
 logger = logging.getLogger(__name__)
+
+# ── 加载 stealth.js ──────────────────────────────────────────────────────────
+_STEALTH_JS_PATH = Path(__file__).parent.parent / "anti_detect" / "stealth.js"
+_STEALTH_JS = _STEALTH_JS_PATH.read_text() if _STEALTH_JS_PATH.exists() else ""
 
 # ── 默认定位：光谷 ──────────────────────────────────────────────────────────
 DEFAULT_LOCATION = (114.43, 30.51)  # (lng, lat)
@@ -220,6 +229,7 @@ class MeituanH5Scraper:
 
     通过 ActionBook Extension 模式控制 Chrome 浏览器，
     在美团外卖 H5 页面搜索并提取数据。
+    集成反检测模块：指纹伪装、行为模拟、验证码处理、智能调度。
 
     所有方法采集失败时返回空列表，不抛异常。
     """
@@ -228,9 +238,43 @@ class MeituanH5Scraper:
         self,
         cli: Optional[_ActionBookCLI] = None,
         default_location: Tuple[float, float] = DEFAULT_LOCATION,
+        fingerprint_mgr: Optional[FingerprintManager] = None,
+        behavior_sim: Optional[BehaviorSimulator] = None,
+        captcha_handler: Optional[CaptchaHandler] = None,
+        scheduler: Optional[SmartScheduler] = None,
     ):
         self._cli = cli or _ActionBookCLI(use_extension=True, timeout=30)
         self._default_location = default_location
+        self._fp_mgr = fingerprint_mgr or FingerprintManager()
+        self._behavior = behavior_sim or BehaviorSimulator()
+        self._captcha = captcha_handler or CaptchaHandler()
+        self._scheduler = scheduler or SmartScheduler()
+
+    async def _inject_anti_detect(self, session_key: str = "meituan") -> None:
+        """注入反检测脚本：stealth.js + 指纹伪装。"""
+        try:
+            # 注入 stealth.js
+            if _STEALTH_JS:
+                await self._cli.browser_eval(_STEALTH_JS)
+            # 注入指纹
+            fp = self._fp_mgr.get_fingerprint(session_key)
+            await self._cli.browser_eval(fp.generate_inject_js())
+        except Exception as e:
+            logger.debug(f"Anti-detect injection error: {e}")
+
+    async def _smart_delay(self, content_length: int = 0) -> None:
+        """基于行为模型的智能延迟（替代固定延迟）。"""
+        stay_ms = self._behavior.estimate_page_stay(content_length)
+        # 加入随机性
+        jitter = random.uniform(0.8, 1.3)
+        await asyncio.sleep(stay_ms * jitter / 1000)
+
+    async def _check_and_handle_captcha(self) -> bool:
+        """检测并处理验证码。返回 True 表示已处理/无验证码。"""
+        result = await self._captcha.detect_and_handle(self._cli.browser_eval)
+        if result is None:
+            return True  # 无验证码
+        return result.success
 
     def _build_search_url(self, keyword: str, location: Optional[Tuple[float, float]] = None) -> str:
         lng, lat = location or self._default_location
@@ -257,17 +301,28 @@ class MeituanH5Scraper:
             CompetitorProduct 列表，采集失败返回空列表
         """
         try:
+            # 智能调度：等待可用时隙
+            if not await self._scheduler.wait_for_slot("meituan"):
+                logger.warning("Scheduler: meituan daily limit reached")
+                return []
+
             url = self._build_search_url(keyword, location)
             logger.info(f"H5 search: '{keyword}' at {url}")
 
             await self._cli.browser_open(url)
             await asyncio.sleep(1)
 
+            # 注入反检测脚本
+            await self._inject_anti_detect(f"meituan_search_{keyword}")
+
             # 注入 XHR 拦截器
             await self._cli.browser_eval(_JS_INJECT_XHR_INTERCEPTOR)
 
-            # 等待页面加载和 API 请求完成
-            await _random_delay(3.0, 5.0)
+            # 检测验证码
+            await self._check_and_handle_captcha()
+
+            # 基于行为模型的等待（替代固定 3-5s）
+            await self._smart_delay()
 
             # 策略 1：尝试从拦截的 XHR 中提取
             products = await self._extract_from_xhr(limit)
@@ -288,17 +343,19 @@ class MeituanH5Scraper:
                 return products
 
             logger.warning(f"H5 search '{keyword}': no results from any strategy")
+            self._scheduler.report_failure("meituan", is_anti_crawl=False)
             return []
 
         except Exception as e:
             logger.error(f"H5 search '{keyword}' failed: {e}")
+            self._scheduler.report_failure("meituan", is_anti_crawl="403" in str(e) or "验证" in str(e))
             return []
         finally:
             try:
                 await self._cli.browser_close()
             except Exception:
                 pass
-            await _random_delay(2.0, 4.0)
+            await self._smart_delay()
 
     async def _extract_from_xhr(self, limit: int) -> List[CompetitorProduct]:
         """从拦截的 XHR 响应中提取数据。"""
@@ -441,11 +498,16 @@ class MeituanH5Scraper:
             CompetitorProduct 列表
         """
         try:
+            if not await self._scheduler.wait_for_slot("meituan"):
+                return []
+
             url = self._build_store_url(store_id, location)
             logger.info(f"H5 store products: store_id={store_id}")
 
             await self._cli.browser_open(url)
-            await _random_delay(3.0, 5.0)
+            await self._inject_anti_detect(f"meituan_store_{store_id}")
+            await self._check_and_handle_captcha()
+            await self._smart_delay()
 
             # JS DOM 提取
             raw = await self._cli.browser_eval(_JS_EXTRACT_STORE_PRODUCTS)
@@ -469,13 +531,14 @@ class MeituanH5Scraper:
 
         except Exception as e:
             logger.error(f"Store {store_id} products failed: {e}")
+            self._scheduler.report_failure("meituan", is_anti_crawl="403" in str(e))
             return []
         finally:
             try:
                 await self._cli.browser_close()
             except Exception:
                 pass
-            await _random_delay(2.0, 4.0)
+            await self._smart_delay()
 
     async def get_category_ranking(
         self,
