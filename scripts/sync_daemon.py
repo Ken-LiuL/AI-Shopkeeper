@@ -108,13 +108,15 @@ async def fetch_golden_data(
         }
     )
 
+    # body 需要作为字符串传给 fetch，转义单引号
+    body_escaped = body.replace("'", "\\'")
     js = f"""
         window.{key} = 'pending';
         fetch('{api_path}?yodaReady=h5&csecplatform=4&csecversion=4.2.0', {{
             method: 'POST',
             headers: {{'Content-Type': 'application/json'}},
             credentials: 'include',
-            body: {body}
+            body: '{body_escaped}'
         }}).then(r => r.json())
           .then(d => {{ window.{key} = JSON.stringify(d); }})
           .catch(e => {{ window.{key} = JSON.stringify({{_error: true, message: e.message}}); }});
@@ -254,18 +256,34 @@ async def main() -> None:
     # 加载 cookies
     cookies_path = os.path.join(os.path.dirname(__file__), "..", "config", "qnh_cookies.json")
     page = await browser.get("https://qnh.meituan.com")
-    cookies = json.load(open(cookies_path))
+    await page.sleep(2)
+    with open(cookies_path) as f:
+        cookies = json.load(f)
     for name, value in cookies.items():
         await page.send(
             nodriver.cdp.network.set_cookie(
                 name=name, value=str(value), domain=".meituan.com", path="/"
             )
         )
+    logger.info("已加载 %d 个 cookies", len(cookies))
 
-    # 导航到首页，等 h5guard 初始化
+    # 重新导航让 cookies 生效 + h5guard 初始化
     page = await browser.get("https://qnh.meituan.com/home.html")
-    logger.info("等待 h5guard 初始化 (10s)...")
-    await page.sleep(10)
+    logger.info("等待页面加载和 h5guard 初始化...")
+    await page.sleep(15)
+
+    # 验证登录
+    title = await page.evaluate("document.title")
+    logger.info("页面标题: %s", title)
+    await page.evaluate("""
+        window.__lc = 'pending';
+        fetch('/api/v1/isLogined?yodaReady=h5&csecplatform=4&csecversion=4.2.0', {credentials:'include'})
+            .then(r=>r.json()).then(d=>{window.__lc=JSON.stringify(d)})
+            .catch(e=>{window.__lc=JSON.stringify({err:e.message})});
+    """)
+    await page.sleep(3)
+    login = await page.evaluate("window.__lc")
+    logger.info("登录检查: %s", login)
     logger.info("✅ 浏览器就绪")
 
     try:
