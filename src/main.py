@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -49,8 +50,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
 
-    import os
-
     # Determine vector store backend
     vector_store_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
 
@@ -94,13 +93,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             import asyncio as _asyncio
 
-            pool = pg_db.get_pool()
-            count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
-            if count == 0:
-                logger.info("Empty database detected, launching full sync in background…")
-                _asyncio.create_task(_initial_full_sync(pool))
+            # Skip sync on server — sync runs locally via nodriver daemon
+            if os.environ.get("DISABLE_SYNC", "").lower() in ("1", "true", "yes"):
+                logger.info("DISABLE_SYNC=true, skipping initial sync (use local daemon instead)")
             else:
-                logger.info("Database has %d products, skipping initial full sync", count)
+                pool = pg_db.get_pool()
+                count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+                if count == 0:
+                    logger.info("Empty database detected, launching full sync in background…")
+                    _asyncio.create_task(_initial_full_sync(pool))
+                else:
+                    logger.info("Database has %d products, skipping initial full sync", count)
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
@@ -190,7 +193,6 @@ def _split_sql_statements(sql: str) -> list[str]:
 
 async def _run_migrations(pool: Any) -> None:
     """Auto-run SQL migration files in order."""
-    import os
     from pathlib import Path
 
     migrations_dir = Path(__file__).resolve().parent.parent / "migrations" / "postgres"
@@ -540,9 +542,7 @@ async def readiness_check() -> dict[str, str | bool]:
         checks["postgres"] = False
 
     # Neo4j (only check if using neo4j backend)
-    import os as _os
-
-    if _os.environ.get("VECTOR_STORE", "postgres").lower() == "neo4j":
+    if os.environ.get("VECTOR_STORE", "postgres").lower() == "neo4j":
         try:
             await neo4j_db.query("RETURN 1 AS n")
             checks["neo4j"] = True

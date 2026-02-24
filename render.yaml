@@ -8,6 +8,8 @@ services:
     plan: free
     healthCheckPath: /health
     envVars:
+      - key: DISABLE_SYNC
+        value: "true"
       - key: VECTOR_STORE
         value: postgres
       - key: OPENROUTER_API_KEY
