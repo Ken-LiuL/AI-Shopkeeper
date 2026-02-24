@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class HeatScoreResult(BaseModel):
     keyword: str
@@ -17,10 +17,12 @@ class HeatScoreResult(BaseModel):
     heat_score: float
     trend: str = "stable"  # rising/stable/declining
 
+
 class SupplierScoreResult(BaseModel):
     source: str  # alibaba/pdd
     total_score: float
-    breakdown: Dict[str, float]
+    breakdown: dict[str, float]
+
 
 class MarginResult(BaseModel):
     cost: float
@@ -28,16 +30,18 @@ class MarginResult(BaseModel):
     gross_margin: float
     margin_grade: str  # excellent/good/fair/poor
 
+
 class ComprehensiveScore(BaseModel):
     keyword: str
     final_score: float
-    breakdown: Dict[str, float] = Field(default_factory=dict)
+    breakdown: dict[str, float] = Field(default_factory=dict)
     recommendation: str = ""  # strong_recommend/recommend/optional/not_recommend
+
 
 class RRFResult(BaseModel):
     id: str
     score: float
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
 # ── Config (from scoring.yaml) ──────────────────────────────────────────────
@@ -76,7 +80,7 @@ _MIN_MARGIN = 0.25
 class CalculatorSkill:
     """评分与计算技能。"""
 
-    def __init__(self, weights: Optional[Dict[str, float]] = None):
+    def __init__(self, weights: dict[str, float] | None = None):
         self._weights = weights or _DIMENSION_WEIGHTS
 
     # ── 热度评分 ─────────────────────────────────────────────────────────
@@ -100,7 +104,9 @@ class CalculatorSkill:
         growth_factor = 1 + min(growth_rate, _GROWTH_CAP)
 
         # 转化率因子
-        conv_factor = min(conversion_rate / _CONVERSION_BASELINE, 1.0) if _CONVERSION_BASELINE > 0 else 1.0
+        conv_factor = (
+            min(conversion_rate / _CONVERSION_BASELINE, 1.0) if _CONVERSION_BASELINE > 0 else 1.0
+        )
 
         score = round(normalized * growth_factor * conv_factor * 100, 1)
         score = min(score, 100.0)
@@ -135,7 +141,7 @@ class CalculatorSkill:
         price_rank: str = "average",  # lowest/second/average
     ) -> SupplierScoreResult:
         """1688 供应商评分（满分100）。"""
-        breakdown: Dict[str, float] = {}
+        breakdown: dict[str, float] = {}
 
         # 实力商家 (20)
         breakdown["qualification"] = 20.0 if is_power_seller else 0.0
@@ -191,7 +197,7 @@ class CalculatorSkill:
         review_count: int = 0,
     ) -> SupplierScoreResult:
         """拼多多商品评分（满分100）。"""
-        breakdown: Dict[str, float] = {}
+        breakdown: dict[str, float] = {}
 
         # 店铺评分 (25)
         if shop_score >= 4.8:
@@ -246,7 +252,11 @@ class CalculatorSkill:
         else:
             total_cost = cost
 
-        suggested_price = max(total_cost * _COST_MULTIPLIER, market_price * 0.95) if market_price > 0 else total_cost * _COST_MULTIPLIER
+        suggested_price = (
+            max(total_cost * _COST_MULTIPLIER, market_price * 0.95)
+            if market_price > 0
+            else total_cost * _COST_MULTIPLIER
+        )
 
         if suggested_price > 0:
             gross_margin = (suggested_price - total_cost) / suggested_price
@@ -271,7 +281,7 @@ class CalculatorSkill:
     def comprehensive_score(
         self,
         keyword: str,
-        scores: Dict[str, float],
+        scores: dict[str, float],
     ) -> ComprehensiveScore:
         """6维度加权综合评分。
 
@@ -281,7 +291,7 @@ class CalculatorSkill:
                     supply_chain / profit_margin / category_synergy / seasonal_fit。
         """
         weighted_sum = 0.0
-        breakdown: Dict[str, float] = {}
+        breakdown: dict[str, float] = {}
         for dim, weight in self._weights.items():
             raw = scores.get(dim, 0.0)
             weighted = raw * weight
@@ -300,21 +310,23 @@ class CalculatorSkill:
             rec = "not_recommend"
 
         return ComprehensiveScore(
-            keyword=keyword, final_score=final,
-            breakdown=breakdown, recommendation=rec,
+            keyword=keyword,
+            final_score=final,
+            breakdown=breakdown,
+            recommendation=rec,
         )
 
     # ── RRF 融合 ─────────────────────────────────────────────────────────
 
     @staticmethod
     def rrf_merge(
-        *result_lists: List[Dict[str, Any]],
+        *result_lists: list[dict[str, Any]],
         id_field: str = "id",
         k: int = 60,
-    ) -> List[RRFResult]:
+    ) -> list[RRFResult]:
         """Reciprocal Rank Fusion 融合多路排序结果。"""
-        scores: Dict[str, float] = {}
-        data_map: Dict[str, Dict[str, Any]] = {}
+        scores: dict[str, float] = {}
+        data_map: dict[str, dict[str, Any]] = {}
 
         for result_list in result_lists:
             for rank, item in enumerate(result_list, start=1):
@@ -325,6 +337,5 @@ class CalculatorSkill:
 
         sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
         return [
-            RRFResult(id=sid, score=round(scores[sid], 6), data=data_map[sid])
-            for sid in sorted_ids
+            RRFResult(id=sid, score=round(scores[sid], 6), data=data_map[sid]) for sid in sorted_ids
         ]

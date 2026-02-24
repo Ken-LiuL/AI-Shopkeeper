@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -22,25 +21,30 @@ def mock_pool():
 @pytest.fixture
 def mock_orch():
     orch = AsyncMock()
-    orch.run_selection = AsyncMock(return_value={
-        "scoring_summary": {"total_evaluated": 3, "recommended_count": 2},
-        "recommendations": [
-            {"rank": 1, "keyword": "血压计", "final_score": 87.5},
-            {"rank": 2, "keyword": "制氧机", "final_score": 72.0},
-        ],
-    })
+    orch.run_selection = AsyncMock(
+        return_value={
+            "scoring_summary": {"total_evaluated": 3, "recommended_count": 2},
+            "recommendations": [
+                {"rank": 1, "keyword": "血压计", "final_score": 87.5},
+                {"rank": 2, "keyword": "制氧机", "final_score": 72.0},
+            ],
+        }
+    )
     return orch
 
 
 @pytest.fixture
 def selection_client(mock_pool, mock_orch):
-    import src.db.postgres
     import src.api.deps
     import src.api.selection
+    import src.db.postgres
 
-    with patch.object(src.db.postgres, "get_pool", return_value=mock_pool), \
-         patch.object(src.api.deps, "get_orchestrator", return_value=mock_orch):
+    with (
+        patch.object(src.db.postgres, "get_pool", return_value=mock_pool),
+        patch.object(src.api.deps, "get_orchestrator", return_value=mock_orch),
+    ):
         from src.api.errors import register_error_handlers
+
         app = FastAPI()
         app.include_router(src.api.selection.router)
         register_error_handlers(app)
@@ -48,12 +52,14 @@ def selection_client(mock_pool, mock_orch):
 
 
 class TestSelectionE2E:
-
     def test_trigger_selection_run(self, selection_client, mock_pool):
         """Trigger a selection run and get task_id."""
-        res = selection_client.post("/api/selection/run", json={
-            "keywords": ["血压计", "体温计"],
-        })
+        res = selection_client.post(
+            "/api/selection/run",
+            json={
+                "keywords": ["血压计", "体温计"],
+            },
+        )
         assert res.status_code == 200
         data = res.json()
         assert data["task_id"].startswith("sel_")
@@ -73,10 +79,18 @@ class TestSelectionE2E:
 
     def test_list_runs_with_data(self, selection_client, mock_pool):
         """List runs returns stored runs."""
-        mock_pool.fetch = AsyncMock(return_value=[
-            {"run_id": "sel_001", "status": "completed", "keywords": ["血压计"],
-             "categories": [], "result_count": 2, "created_at": "2026-01-01T00:00:00"},
-        ])
+        mock_pool.fetch = AsyncMock(
+            return_value=[
+                {
+                    "run_id": "sel_001",
+                    "status": "completed",
+                    "keywords": ["血压计"],
+                    "categories": [],
+                    "result_count": 2,
+                    "created_at": "2026-01-01T00:00:00",
+                },
+            ]
+        )
         res = selection_client.get("/api/selection/runs")
         assert res.status_code == 200
         assert len(res.json()["data"]) == 1
@@ -88,11 +102,17 @@ class TestSelectionE2E:
 
     def test_get_run_detail(self, selection_client, mock_pool):
         """Get a completed run with recommendations."""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "run_id": "sel_001", "status": "completed", "keywords": ["血压计"],
-            "categories": [], "result_count": 2, "created_at": "2026-01-01T00:00:00",
-            "result": {"recommendations": [{"rank": 1, "keyword": "血压计"}]},
-        })
+        mock_pool.fetchrow = AsyncMock(
+            return_value={
+                "run_id": "sel_001",
+                "status": "completed",
+                "keywords": ["血压计"],
+                "categories": [],
+                "result_count": 2,
+                "created_at": "2026-01-01T00:00:00",
+                "result": {"recommendations": [{"rank": 1, "keyword": "血压计"}]},
+            }
+        )
         res = selection_client.get("/api/selection/runs/sel_001")
         assert res.status_code == 200
         data = res.json()["data"]

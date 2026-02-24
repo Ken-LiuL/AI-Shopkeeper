@@ -8,7 +8,6 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Optional
 
 import aiohttp
 
@@ -18,10 +17,12 @@ logger = logging.getLogger(__name__)
 COOKIE_CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "qnh_cookies.json"
 
 # Session file for persistence across restarts
-SESSION_FILE = Path(os.environ.get(
-    "QNH_SESSION_FILE",
-    os.path.expanduser("~/.qnh_session.json"),
-))
+SESSION_FILE = Path(
+    os.environ.get(
+        "QNH_SESSION_FILE",
+        os.path.expanduser("~/.qnh_session.json"),
+    )
+)
 
 QNH_BASE = "https://qnh.meituan.com"
 
@@ -37,9 +38,9 @@ class QNHAuth:
 
     def __init__(
         self,
-        username: Optional[str] = None,
-        password: Optional[str] = None,
-        phone: Optional[str] = None,
+        username: str | None = None,
+        password: str | None = None,
+        phone: str | None = None,
     ) -> None:
         self.username = username or os.environ.get("QNH_USERNAME", "")
         self.password = password or os.environ.get("QNH_PASSWORD", "")
@@ -65,7 +66,9 @@ class QNHAuth:
                     logger.info("Loaded cookies from config file (%s)", COOKIE_CONFIG_FILE)
                     return self._cookies
                 else:
-                    logger.warning("Config file cookies failed session check, but using them anyway")
+                    logger.warning(
+                        "Config file cookies failed session check, but using them anyway"
+                    )
                     # Still use them — the check endpoint might not be reliable
                     return self._cookies
 
@@ -78,10 +81,9 @@ class QNHAuth:
                 return self._cookies
 
             # 3. Try loading from session file
-            if self._load_session_file():
-                if await self._check_session():
-                    logger.info("Restored session from file")
-                    return self._cookies
+            if self._load_session_file() and await self._check_session():
+                logger.info("Restored session from file")
+                return self._cookies
 
             # No valid cookies found
             raise RuntimeError(
@@ -138,19 +140,19 @@ class QNHAuth:
         if not self._cookies:
             return False
         try:
-            async with aiohttp.ClientSession(
-                cookies=self._cookies
-            ) as session:
-                async with session.post(
+            async with (
+                aiohttp.ClientSession(cookies=self._cookies) as session,
+                session.post(
                     f"{QNH_BASE}/api/v1/sac/account/auth",
                     params={"yodaReady": "h5", "csecplatform": "4", "csecversion": "4.2.0"},
                     timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if data.get("code") == 0 or data.get("data"):
-                            self._session_expires = time.time() + 7200
-                            return True
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data.get("code") == 0 or data.get("data"):
+                        self._session_expires = time.time() + 7200
+                        return True
             return False
         except Exception as e:
             logger.debug("Session check failed: %s", e)
@@ -177,11 +179,15 @@ class QNHAuth:
         """Persist session to local file."""
         try:
             SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-            SESSION_FILE.write_text(json.dumps({
-                "cookies": self._cookies,
-                "expires": self._session_expires,
-                "saved_at": time.time(),
-            }))
+            SESSION_FILE.write_text(
+                json.dumps(
+                    {
+                        "cookies": self._cookies,
+                        "expires": self._session_expires,
+                        "saved_at": time.time(),
+                    }
+                )
+            )
             SESSION_FILE.chmod(0o600)
         except Exception as e:
             logger.warning("Failed to save session file: %s", e)

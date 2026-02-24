@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import aiohttp
@@ -19,13 +18,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProxyInfo:
     """单个代理信息。"""
+
     url: str  # http://ip:port or socks5://ip:port
     protocol: str = "http"  # http | socks5
     alive: bool = True
     last_check: float = 0
     fail_count: int = 0
     latency_ms: float = 0
-    _domain_locks: Dict[str, float] = field(default_factory=dict)
+    _domain_locks: dict[str, float] = field(default_factory=dict)
 
     @property
     def host(self) -> str:
@@ -59,8 +59,8 @@ class ProxyPool:
         self,
         enabled: bool = False,
         provider: str = "file",
-        file_path: Optional[str] = None,
-        api_url: Optional[str] = None,
+        file_path: str | None = None,
+        api_url: str | None = None,
         health_check_interval: int = 300,
         check_url: str = "https://httpbin.org/ip",
     ):
@@ -71,9 +71,9 @@ class ProxyPool:
         self.health_check_interval = health_check_interval
         self.check_url = check_url
 
-        self._proxies: List[ProxyInfo] = []
-        self._domain_sticky: Dict[str, ProxyInfo] = {}
-        self._session_sticky: Dict[str, ProxyInfo] = {}
+        self._proxies: list[ProxyInfo] = []
+        self._domain_sticky: dict[str, ProxyInfo] = {}
+        self._session_sticky: dict[str, ProxyInfo] = {}
         self._loaded = False
 
     async def load(self) -> int:
@@ -87,7 +87,7 @@ class ProxyPool:
         logger.info(f"Proxy pool loaded: {len(self._proxies)} proxies")
         return len(self._proxies)
 
-    def _load_from_file(self, path: str) -> List[ProxyInfo]:
+    def _load_from_file(self, path: str) -> list[ProxyInfo]:
         """从文件加载代理列表。
 
         格式：每行一个代理 URL
@@ -112,7 +112,7 @@ class ProxyPool:
 
         return proxies
 
-    async def _load_from_api(self, api_url: str) -> List[ProxyInfo]:
+    async def _load_from_api(self, api_url: str) -> list[ProxyInfo]:
         """从 API 加载代理列表。"""
         proxies = []
         try:
@@ -132,9 +132,9 @@ class ProxyPool:
 
     def get_proxy(
         self,
-        domain: Optional[str] = None,
-        session_key: Optional[str] = None,
-    ) -> Optional[str]:
+        domain: str | None = None,
+        session_key: str | None = None,
+    ) -> str | None:
         """获取代理 URL。
 
         Args:
@@ -201,7 +201,7 @@ class ProxyPool:
                     }
                 return
 
-    async def health_check(self) -> Dict[str, int]:
+    async def health_check(self) -> dict[str, int]:
         """对所有代理执行健康检查。"""
         alive_count = 0
         dead_count = 0
@@ -210,17 +210,19 @@ class ProxyPool:
             nonlocal alive_count, dead_count
             try:
                 start = time.time()
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(
+                async with (
+                    aiohttp.ClientSession() as session,
+                    session.get(
                         self.check_url,
                         proxy=proxy.url if proxy.protocol == "http" else None,
                         timeout=aiohttp.ClientTimeout(total=10),
-                    ) as resp:
-                        if resp.status == 200:
-                            proxy.latency_ms = (time.time() - start) * 1000
-                            proxy.mark_success()
-                            alive_count += 1
-                            return
+                    ) as resp,
+                ):
+                    if resp.status == 200:
+                        proxy.latency_ms = (time.time() - start) * 1000
+                        proxy.mark_success()
+                        alive_count += 1
+                        return
             except Exception:
                 pass
             proxy.mark_failure()
@@ -233,7 +235,7 @@ class ProxyPool:
         return {"alive": alive_count, "dead": dead_count}
 
     @property
-    def stats(self) -> Dict[str, Any]:
+    def stats(self) -> dict[str, Any]:
         alive = sum(1 for p in self._proxies if p.alive)
         return {
             "total": len(self._proxies),

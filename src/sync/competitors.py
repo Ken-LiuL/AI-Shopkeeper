@@ -4,17 +4,29 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
-from src.sync.base import BaseSyncer, SyncMode, SyncResult, CST
+from src.sync.base import CST, BaseSyncer, SyncMode, SyncResult
 
 logger = logging.getLogger(__name__)
 
 # 预设搜索关键词
 COMPETITOR_KEYWORDS = [
-    "血压计", "体温计", "血糖仪", "口罩", "制氧机",
-    "雾化器", "血氧仪", "轮椅", "护腰带", "助听器",
-    "医用纱布", "消毒液", "退热贴", "创可贴", "酒精棉片",
+    "血压计",
+    "体温计",
+    "血糖仪",
+    "口罩",
+    "制氧机",
+    "雾化器",
+    "血氧仪",
+    "轮椅",
+    "护腰带",
+    "助听器",
+    "医用纱布",
+    "消毒液",
+    "退热贴",
+    "创可贴",
+    "酒精棉片",
 ]
 
 # 默认定位：光谷
@@ -35,7 +47,7 @@ class CompetitorSyncer(BaseSyncer):
         self,
         db_pool: Any,
         location: tuple = DEFAULT_LOCATION,
-        keywords: Optional[list[str]] = None,
+        keywords: list[str] | None = None,
     ):
         super().__init__()
         self._db_pool = db_pool
@@ -52,6 +64,7 @@ class CompetitorSyncer(BaseSyncer):
 
         try:
             from src.skills.meituan_h5 import MeituanH5Scraper
+
             scraper = MeituanH5Scraper(default_location=self._location)
 
             # 1. 搜索每个关键词
@@ -122,7 +135,12 @@ class CompetitorSyncer(BaseSyncer):
                     (product_id, name, price, monthly_sales, store_name, keyword)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 """,
-                p.product_id, p.name, p.price, p.monthly_sales, p.store_name, keyword,
+                p.product_id,
+                p.name,
+                p.price,
+                p.monthly_sales,
+                p.store_name,
+                keyword,
             )
 
     async def _save_stores(self, stores: list[dict], keyword: str):
@@ -136,8 +154,12 @@ class CompetitorSyncer(BaseSyncer):
                     (store_id, name, monthly_sales, product_count, threat_level, keyword)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 """,
-                s["store_id"], s["name"], s["monthly_sales"],
-                s["product_count"], s["threat_level"], keyword,
+                s["store_id"],
+                s["name"],
+                s["monthly_sales"],
+                s["product_count"],
+                s["threat_level"],
+                keyword,
             )
 
     async def _save_keywords(self, keywords: list[str]):
@@ -164,7 +186,9 @@ class CompetitorSyncer(BaseSyncer):
                 ON CONFLICT (syncer_name, keyword) DO UPDATE
                 SET status = 'error', error_message = $2, updated_at = NOW()
                 """,
-                self.name, error, keyword,
+                self.name,
+                error,
+                keyword,
             )
         except Exception as e:
             logger.error(f"Failed to record sync error: {e}")

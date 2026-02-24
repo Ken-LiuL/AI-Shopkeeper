@@ -12,9 +12,14 @@ from src.db import postgres as pg
 
 from .deps import gen_id, get_orchestrator
 from .errors import NotFoundError
-from .schemas import APIResponse, ListingCreateRequest, ListingDetail, ListingParseRequest, TaskCreatedResponse
-
-from .schemas import PaginatedResponse
+from .schemas import (
+    APIResponse,
+    ListingCreateRequest,
+    ListingDetail,
+    ListingParseRequest,
+    PaginatedResponse,
+    TaskCreatedResponse,
+)
 
 router = APIRouter(prefix="/api/listing", tags=["listing"])
 logger = logging.getLogger(__name__)
@@ -38,10 +43,14 @@ async def list_listings(
     total = await pool.fetchval(f"SELECT COUNT(*) FROM listings{where}", *params)
     offset = (page - 1) * page_size
     rows = await pool.fetch(
-        f"SELECT * FROM listings{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
-        *params, page_size, offset,
+        f"SELECT * FROM listings{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        *params,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.put("/{listing_id}", response_model=APIResponse[dict])
@@ -104,7 +113,9 @@ async def parse_url(request: ListingParseRequest) -> APIResponse[dict]:
     return APIResponse(data=data.model_dump())
 
 
-async def _run_listing_create(listing_id: str, request: ListingCreateRequest, orch: Orchestrator) -> None:
+async def _run_listing_create(
+    listing_id: str, request: ListingCreateRequest, orch: Orchestrator
+) -> None:
     try:
         result = await orch.run_listing(
             source_url=request.source_url,
@@ -115,13 +126,15 @@ async def _run_listing_create(listing_id: str, request: ListingCreateRequest, or
         await pool.execute(
             """UPDATE listings SET status = 'completed', product_data = $1::jsonb, finished_at = NOW()
                WHERE listing_id = $2""",
-            json.dumps(result, default=str), listing_id,
+            json.dumps(result, default=str),
+            listing_id,
         )
     except Exception:
         logger.exception("Listing create %s failed", listing_id)
         pool = pg.get_pool()
         await pool.execute(
-            "UPDATE listings SET status = 'failed', finished_at = NOW() WHERE listing_id = $1", listing_id,
+            "UPDATE listings SET status = 'failed', finished_at = NOW() WHERE listing_id = $1",
+            listing_id,
         )
 
 
@@ -135,7 +148,9 @@ async def create_listing(
     pool = pg.get_pool()
     await pool.execute(
         "INSERT INTO listings (listing_id, status, source_url, platform, created_at) VALUES ($1, 'processing', $2, $3, NOW())",
-        listing_id, request.source_url, request.platform,
+        listing_id,
+        request.source_url,
+        request.platform,
     )
     bg.add_task(_run_listing_create, listing_id, request, orch)
     return TaskCreatedResponse(task_id=listing_id, message="Listing creation started")

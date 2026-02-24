@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
-from typing import Any, Optional
-from urllib.parse import urlencode
+from typing import Any
 
 import aiohttp
 
@@ -46,21 +44,21 @@ class QNHClient:
 
     def __init__(
         self,
-        auth: Optional[QNHAuth] = None,
+        auth: QNHAuth | None = None,
         tenant_id: str = DEFAULT_TENANT_ID,
-        poi_ids: Optional[list[int]] = None,
+        poi_ids: list[int] | None = None,
     ) -> None:
         self.auth = auth or QNHAuth()
         self.tenant_id = tenant_id
         self.poi_ids = poi_ids or DEFAULT_POI_IDS
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self._last_request_time: float = 0
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT)
         self._request_count = 0
 
     # ── Lifecycle ───────────────────────────────────────────────────────
 
-    async def __aenter__(self) -> "QNHClient":
+    async def __aenter__(self) -> QNHClient:
         await self._ensure_session()
         return self
 
@@ -97,7 +95,7 @@ class QNHClient:
     async def get(
         self,
         path: str,
-        params: Optional[dict[str, Any]] = None,
+        params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """GET request with auth, csec params, and rate limiting."""
@@ -106,8 +104,8 @@ class QNHClient:
     async def post(
         self,
         path: str,
-        data: Optional[Any] = None,
-        params: Optional[dict[str, Any]] = None,
+        data: Any | None = None,
+        params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """POST request with auth, csec params, and rate limiting."""
@@ -127,7 +125,7 @@ class QNHClient:
         self,
         page: int = 1,
         page_size: int = 50,
-        status: Optional[str] = None,
+        status: str | None = None,
     ) -> dict[str, Any]:
         """Get SPU product list (paginated).
 
@@ -160,9 +158,9 @@ class QNHClient:
         self,
         page: int = 1,
         page_size: int = 50,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        status: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        status: str | None = None,
     ) -> dict[str, Any]:
         """Get order list (paginated).
 
@@ -189,7 +187,7 @@ class QNHClient:
         self,
         date: str,
         date_type: str = "day",
-        channel: Optional[str] = None,
+        channel: str | None = None,
     ) -> dict[str, Any]:
         """Get business data overview for a date.
 
@@ -224,7 +222,7 @@ class QNHClient:
         start_date: str,
         end_date: str,
         date_type: str = "day",
-        channel: Optional[str] = None,
+        channel: str | None = None,
     ) -> dict[str, Any]:
         """Get data trend over a date range.
 
@@ -246,7 +244,7 @@ class QNHClient:
         self,
         date: str,
         date_type: str = "day",
-        channel: Optional[str] = None,
+        channel: str | None = None,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
         """Get product sales ranking from data overview.
@@ -279,8 +277,8 @@ class QNHClient:
         self,
         method: str,
         path: str,
-        params: Optional[dict[str, Any]] = None,
-        json_data: Optional[Any] = None,
+        params: dict[str, Any] | None = None,
+        json_data: Any | None = None,
         retry_on_auth: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
@@ -315,8 +313,12 @@ class QNHClient:
                     await self.auth.invalidate()
                     await self.close()
                     return await self._request(
-                        method, path, params=params,
-                        json_data=json_data, retry_on_auth=False, **kwargs
+                        method,
+                        path,
+                        params=params,
+                        json_data=json_data,
+                        retry_on_auth=False,
+                        **kwargs,
                     )
                 raise
             finally:
@@ -336,11 +338,11 @@ class QNHClient:
 
         try:
             data = await resp.json()
-        except Exception:
+        except Exception as exc:
             text = await resp.text()
             if "login" in text.lower() or "epassport" in text.lower():
-                raise AuthExpiredError("Response contains login redirect")
-            raise QNHAPIError(f"Non-JSON response: {text[:200]}")
+                raise AuthExpiredError("Response contains login redirect") from exc
+            raise QNHAPIError(f"Non-JSON response: {text[:200]}") from exc
 
         # QNH API error codes
         code = data.get("code")
@@ -359,9 +361,11 @@ class QNHClient:
 
 class QNHAPIError(Exception):
     """QNH API returned an error."""
+
     pass
 
 
 class AuthExpiredError(QNHAPIError):
     """Session/auth has expired, need re-login."""
+
     pass

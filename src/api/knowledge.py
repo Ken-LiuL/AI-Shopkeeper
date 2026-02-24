@@ -59,11 +59,16 @@ async def product_graph(product_id: str) -> APIResponse[dict]:
 async def add_faq(body: dict) -> APIResponse[dict]:
     try:
         import uuid
+
         faq_id = f"faq_{uuid.uuid4().hex[:12]}"
         await neo4j_db.query(
             """CREATE (f:FAQ {id: $id, question: $question, answer: $answer, category: $category})""",
-            {"id": faq_id, "question": body["question"], "answer": body["answer"],
-             "category": body.get("category", "general")},
+            {
+                "id": faq_id,
+                "question": body["question"],
+                "answer": body["answer"],
+                "category": body.get("category", "general"),
+            },
         )
         return APIResponse(data={"faq_id": faq_id}, message="FAQ created")
     except Exception as e:
@@ -96,8 +101,12 @@ async def update_faq(faq_id: str, body: dict) -> APIResponse[dict]:
     try:
         await neo4j_db.query(
             """MATCH (f:FAQ {id: $id}) SET f.question = $question, f.answer = $answer, f.category = $category""",
-            {"id": faq_id, "question": body["question"], "answer": body["answer"],
-             "category": body.get("category", "general")},
+            {
+                "id": faq_id,
+                "question": body["question"],
+                "answer": body["answer"],
+                "category": body.get("category", "general"),
+            },
         )
         return APIResponse(data={"faq_id": faq_id}, message="FAQ updated")
     except Exception as e:

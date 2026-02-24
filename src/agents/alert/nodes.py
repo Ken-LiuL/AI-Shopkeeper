@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from ..llm import MODEL_PRO, MODEL_SONNET, call_tool
 from ..prompts.alert import action_prompt, anomaly_detection_prompt, root_cause_prompt
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 async def anomaly_detection_node(state: AlertState) -> dict:
     """
     Anomaly Sub-Agent: 综合 Prophet + 规则检测结果。
-    
+
     实际的 Prophet 预测和规则检测在 Skills 层完成，
     这里用 LLM 综合分析、去重、判断多因素叠加。
     """

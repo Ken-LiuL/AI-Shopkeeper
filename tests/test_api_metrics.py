@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sys
 import types
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Ensure stubs for db imports
 _neo4j_stub = sys.modules.get("neo4j") or types.ModuleType("neo4j")
@@ -35,12 +36,14 @@ from src.api.metrics_api import router
 @pytest.fixture
 def mock_pool():
     pool = AsyncMock()
-    pool.fetchrow = AsyncMock(return_value={
-        "total_input_tokens": 10000,
-        "total_output_tokens": 5000,
-        "total_cost_usd": 1.23,
-        "total_requests": 42,
-    })
+    pool.fetchrow = AsyncMock(
+        return_value={
+            "total_input_tokens": 10000,
+            "total_output_tokens": 5000,
+            "total_cost_usd": 1.23,
+            "total_requests": 42,
+        }
+    )
     pool.fetch = AsyncMock(return_value=[])
     return pool
 
@@ -75,7 +78,13 @@ class TestLLMMetrics:
     def test_with_model_breakdown(self, client):
         tc, mock_pool = client
         model_rows = [
-            {"model": "gpt-4", "input_tokens": 8000, "output_tokens": 4000, "cost_usd": 1.0, "requests": 30},
+            {
+                "model": "gpt-4",
+                "input_tokens": 8000,
+                "output_tokens": 4000,
+                "cost_usd": 1.0,
+                "requests": 30,
+            },
         ]
         mock_pool.fetch = AsyncMock(side_effect=[model_rows, [], []])
         resp = tc.get("/api/metrics/llm")

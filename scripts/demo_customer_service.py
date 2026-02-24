@@ -4,8 +4,6 @@ CustomerService Agent Demo
 """
 
 import asyncio
-import json
-import os
 import sys
 from pathlib import Path
 
@@ -15,17 +13,20 @@ sys.path.insert(0, str(project_root))
 
 # Load .env
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 
 # ── Mock data injection for search nodes ─────────────────────────────────────
+
 
 def _patch_search_nodes():
     """
     Patch hybrid_search, reranker, and graphrag nodes to use mock skills
     instead of requiring real Neo4j/Embedding/Reranker services.
     """
-    from src.skills.factory import create_skills, MockEmbeddingSkill
+    from src.skills.factory import create_skills
+
     skills = create_skills(mode="mock")
 
     import src.agents.customer_service.nodes as cs_nodes
@@ -58,7 +59,10 @@ def _patch_search_nodes():
             keywords=keywords,
             limit=10,
         )
-        search_results = [{"id": r.id, "name": r.name, "description": r.description, "score": r.score} for r in results]
+        search_results = [
+            {"id": r.id, "name": r.name, "description": r.description, "score": r.score}
+            for r in results
+        ]
         return {"search_results": search_results}
 
     async def patched_reranker(state):
@@ -94,6 +98,7 @@ def _patch_search_nodes():
 
 # ── Demo ─────────────────────────────────────────────────────────────────────
 
+
 async def main():
     print("=" * 70)
     print("💬 CustomerService Agent Demo — 多轮客服对话")
@@ -104,6 +109,7 @@ async def main():
 
     # Compile graph
     from src.agents.customer_service.graph import compile_customer_service_graph
+
     graph = compile_customer_service_graph()
 
     # Test scenarios
@@ -132,7 +138,9 @@ async def main():
 
         # Print intent
         intent = result.get("intent", {})
-        print(f"\n  🎯 意图: {intent.get('intent', '?')} (置信度: {intent.get('confidence', 0):.0%})")
+        print(
+            f"\n  🎯 意图: {intent.get('intent', '?')} (置信度: {intent.get('confidence', 0):.0%})"
+        )
         if intent.get("extracted_entities"):
             ents = intent["extracted_entities"]
             ent_str = ", ".join(f"{k}={v}" for k, v in ents.items() if v)

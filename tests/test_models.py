@@ -6,12 +6,12 @@ from decimal import Decimal
 
 import pytest
 
-from src.models.product import Product, ProductStatus
 from src.models.alert import Alert, AlertSeverity, AlertStatus
 from src.models.bundle import Bundle, BundleItem
-
+from src.models.product import Product, ProductStatus
 
 # ── Product ──────────────────────────────────────────────────────────────────
+
 
 class TestProduct:
     def test_create_minimal(self):
@@ -23,16 +23,23 @@ class TestProduct:
 
     def test_create_full(self):
         p = Product(
-            product_id="BP001", name="欧姆龙血压计",
-            barcode="1234567890", category="血压计", brand="欧姆龙",
-            cost_price=Decimal("198"), retail_price=Decimal("329"),
-            stock=45, monthly_sales=62,
+            product_id="BP001",
+            name="欧姆龙血压计",
+            barcode="1234567890",
+            category="血压计",
+            brand="欧姆龙",
+            cost_price=Decimal("198"),
+            retail_price=Decimal("329"),
+            stock=45,
+            monthly_sales=62,
         )
         assert p.brand == "欧姆龙"
         assert p.retail_price == Decimal("329")
 
     def test_gross_margin(self):
-        p = Product(product_id="P1", name="T", cost_price=Decimal("100"), retail_price=Decimal("200"))
+        p = Product(
+            product_id="P1", name="T", cost_price=Decimal("100"), retail_price=Decimal("200")
+        )
         assert p.gross_margin == pytest.approx(0.5)
 
     def test_gross_margin_none_when_no_price(self):
@@ -71,6 +78,7 @@ class TestProduct:
 
 # ── Alert ────────────────────────────────────────────────────────────────────
 
+
 class TestAlert:
     def test_create(self):
         a = Alert(alert_id="ALT001", alert_type="sales_drop", severity=AlertSeverity.WARNING)
@@ -94,6 +102,7 @@ class TestAlert:
 
 # ── Bundle ───────────────────────────────────────────────────────────────────
 
+
 class TestBundle:
     def test_create(self):
         items = [
@@ -101,20 +110,24 @@ class TestBundle:
             BundleItem(product_id="BG004", name="试纸", unit_price=Decimal("68")),
         ]
         b = Bundle(
-            bundle_id="BDL001", name="血糖管理套装",
+            bundle_id="BDL001",
+            name="血糖管理套装",
             products=items,
             original_price=Decimal("167"),
             bundle_price=Decimal("149"),
             discount_percent=10.78,
-            confidence=0.72, lift=3.2,
+            confidence=0.72,
+            lift=3.2,
         )
         assert b.savings == Decimal("18")
         assert len(b.products) == 2
 
     def test_savings_property(self):
         b = Bundle(
-            bundle_id="B1", name="T",
-            original_price=Decimal("200"), bundle_price=Decimal("180"),
+            bundle_id="B1",
+            name="T",
+            original_price=Decimal("200"),
+            bundle_price=Decimal("180"),
         )
         assert b.savings == Decimal("20")
 
@@ -123,5 +136,7 @@ class TestBundle:
         assert item.role == "主品"
 
     def test_default_status(self):
-        b = Bundle(bundle_id="B1", name="T", original_price=Decimal("100"), bundle_price=Decimal("90"))
+        b = Bundle(
+            bundle_id="B1", name="T", original_price=Decimal("100"), bundle_price=Decimal("90")
+        )
         assert b.status == "active"

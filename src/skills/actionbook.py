@@ -27,10 +27,9 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
-from urllib.parse import quote
-
 from pathlib import Path
+from typing import Any
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 
@@ -45,17 +44,25 @@ _scheduler = None
 _proxy_pool = None
 _stealth_js = ""
 
+
 def _ensure_anti_detect():
     """延迟加载反检测模块。"""
-    global _anti_detect_loaded, _fingerprint_mgr, _behavior_sim, _captcha_handler, _scheduler, _proxy_pool, _stealth_js
+    global \
+        _anti_detect_loaded, \
+        _fingerprint_mgr, \
+        _behavior_sim, \
+        _captcha_handler, \
+        _scheduler, \
+        _proxy_pool, \
+        _stealth_js
     if _anti_detect_loaded:
         return
     try:
-        from src.anti_detect.fingerprint import FingerprintManager
         from src.anti_detect.behavior import BehaviorSimulator
         from src.anti_detect.captcha import CaptchaHandler
-        from src.anti_detect.scheduler import SmartScheduler
+        from src.anti_detect.fingerprint import FingerprintManager
         from src.anti_detect.proxy_pool import ProxyPool
+        from src.anti_detect.scheduler import SmartScheduler
 
         _fingerprint_mgr = FingerprintManager()
         _behavior_sim = BehaviorSimulator()
@@ -76,12 +83,14 @@ def _ensure_anti_detect():
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
 
+
 class MeituanKeyword(BaseModel):
     keyword: str
     search_volume: int
     growth_rate: float = Field(description="环比增长率")
     conversion_rate: float = 0.0
     category: str = ""
+
 
 class MeituanProduct(BaseModel):
     product_id: str
@@ -90,6 +99,7 @@ class MeituanProduct(BaseModel):
     monthly_sales: int
     rating: float = 0.0
     store_name: str = ""
+
 
 class CompetitorStore(BaseModel):
     store_id: str
@@ -100,12 +110,14 @@ class CompetitorStore(BaseModel):
     product_count: int = 0
     threat_level: str = "medium"
 
+
 class CompetitorProduct(BaseModel):
     product_id: str
     name: str
     price: float
     monthly_sales: int
     store_name: str = ""
+
 
 class AlibabaProduct(BaseModel):
     product_id: str
@@ -120,7 +132,8 @@ class AlibabaProduct(BaseModel):
     trade_level: str = ""
     return_rate: float = 0.0
     url: str = ""
-    images: List[str] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
+
 
 class AlibabaSupplier(BaseModel):
     supplier_id: str
@@ -130,8 +143,9 @@ class AlibabaSupplier(BaseModel):
     shop_score: float = 0.0
     trade_level: str = ""
     return_rate: float = 0.0
-    main_products: List[str] = Field(default_factory=list)
+    main_products: list[str] = Field(default_factory=list)
     location: str = ""
+
 
 class PddProduct(BaseModel):
     product_id: str
@@ -142,10 +156,11 @@ class PddProduct(BaseModel):
     shop_name: str = ""
     shop_score: float = 0.0
     url: str = ""
-    images: List[str] = Field(default_factory=list)
+    images: list[str] = Field(default_factory=list)
     has_coupon: bool = False
     coupon_amount: float = 0.0
     review_count: int = 0
+
 
 class PddShop(BaseModel):
     shop_id: str
@@ -157,6 +172,7 @@ class PddShop(BaseModel):
 
 
 # ── Rate Limiter ─────────────────────────────────────────────────────────────
+
 
 @dataclass
 class _RateBucket:
@@ -190,6 +206,7 @@ _DEFAULT_LIMITS: dict[str, int] = {
 
 # ── ActionBook CLI Helper ────────────────────────────────────────────────────
 
+
 class _ActionBookCLI:
     """Manages ActionBook CLI calls via subprocess."""
 
@@ -205,7 +222,7 @@ class _ActionBookCLI:
         args.append("--json")
         return args
 
-    async def _run(self, *args: str, timeout: Optional[int] = None) -> dict:
+    async def _run(self, *args: str, timeout: int | None = None) -> dict:
         """Run an actionbook CLI command and return parsed JSON output."""
         cmd = self._base_args() + list(args)
         to = timeout or self.timeout
@@ -220,10 +237,12 @@ class _ActionBookCLI:
 
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=to)
-        except asyncio.TimeoutError:
+        except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise TimeoutError(f"ActionBook command timed out after {to}s: {' '.join(args)}")
+            raise TimeoutError(
+                f"ActionBook command timed out after {to}s: {' '.join(args)}"
+            ) from exc
 
         stdout_str = stdout.decode("utf-8", errors="replace").strip()
         stderr_str = stderr.decode("utf-8", errors="replace").strip()
@@ -241,7 +260,7 @@ class _ActionBookCLI:
                 return {"raw": stdout_str}
         return {}
 
-    async def _run_text(self, *args: str, timeout: Optional[int] = None) -> str:
+    async def _run_text(self, *args: str, timeout: int | None = None) -> str:
         """Run an actionbook CLI command and return raw text output."""
         cmd_base = ["actionbook"]
         if self.use_extension:
@@ -259,10 +278,10 @@ class _ActionBookCLI:
 
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=to)
-        except asyncio.TimeoutError:
+        except TimeoutError as exc:
             proc.kill()
             await proc.wait()
-            raise TimeoutError(f"ActionBook command timed out after {to}s")
+            raise TimeoutError(f"ActionBook command timed out after {to}s") from exc
 
         if proc.returncode != 0:
             stderr_str = stderr.decode("utf-8", errors="replace").strip()
@@ -321,6 +340,7 @@ class _ActionBookCLI:
 
 
 # ── Data Extraction Helpers ──────────────────────────────────────────────────
+
 
 def _parse_1688_text(text: str, limit: int = 10) -> list[dict]:
     """Parse 1688 search results from page text/snapshot.
@@ -427,7 +447,14 @@ def _parse_pdd_text(text: str, limit: int = 10) -> list[dict]:
             current["title"] = line[:100]
         elif price_match and current.get("title") and not current.get("price"):
             current["price"] = float(price_match.group(1))
-        elif current.get("title") and current.get("price") and len(line) > 8 and not sales_match and not coupon_match and not shop_match:
+        elif (
+            current.get("title")
+            and current.get("price")
+            and len(line) > 8
+            and not sales_match
+            and not coupon_match
+            and not shop_match
+        ):
             products.append(current)
             current = {"title": line[:100]}
 
@@ -575,6 +602,7 @@ _JS_EXTRACT_PDD_DETAIL = """(() => {
 
 # ── Skill ────────────────────────────────────────────────────────────────────
 
+
 class ActionBookSkill:
     """ActionBook RPA 采集技能。
 
@@ -585,16 +613,15 @@ class ActionBookSkill:
 
     def __init__(
         self,
-        rate_limits: Optional[dict[str, int]] = None,
-        cdp_url: Optional[str] = None,
-        qnh_client: Optional[Any] = None,
-        db_pool: Optional[Any] = None,
-        notifier: Optional[Any] = None,
+        rate_limits: dict[str, int] | None = None,
+        cdp_url: str | None = None,
+        qnh_client: Any | None = None,
+        db_pool: Any | None = None,
+        notifier: Any | None = None,
     ):
         limits = {**_DEFAULT_LIMITS, **(rate_limits or {})}
         self._buckets: dict[str, _RateBucket] = {
-            name: _RateBucket(max_calls=max_calls)
-            for name, max_calls in limits.items()
+            name: _RateBucket(max_calls=max_calls) for name, max_calls in limits.items()
         }
 
         # QNH client for meituan data (optional)
@@ -620,9 +647,13 @@ class ActionBookSkill:
         """发送采集失败告警。"""
         try:
             from src.skills.alert_on_failure import alert_scrape_failure
+
             await alert_scrape_failure(
-                source=source, keyword=keyword, error=error,
-                db_pool=self._db_pool, notifier=self._notifier,
+                source=source,
+                keyword=keyword,
+                error=error,
+                db_pool=self._db_pool,
+                notifier=self._notifier,
             )
         except Exception as e:
             logger.error(f"Failed to send alert: {e}")
@@ -656,6 +687,7 @@ class ActionBookSkill:
         if _behavior_sim:
             stay_ms = _behavior_sim.estimate_page_stay()
             import random as _rnd
+
             await asyncio.sleep(stay_ms * _rnd.uniform(0.8, 1.3) / 1000)
         else:
             await asyncio.sleep(base_seconds)
@@ -674,10 +706,9 @@ class ActionBookSkill:
         _ensure_anti_detect()
 
         # 智能调度
-        if _scheduler and domain:
-            if not await _scheduler.wait_for_slot(domain):
-                logger.warning(f"Scheduler: {domain} daily limit reached")
-                return []
+        if _scheduler and domain and not await _scheduler.wait_for_slot(domain):
+            logger.warning(f"Scheduler: {domain} daily limit reached")
+            return []
 
         try:
             await self._cli.browser_open(url)
@@ -711,7 +742,7 @@ class ActionBookSkill:
                     pass
 
             # Fallback: get page text
-            text = await self._cli.browser_text()
+            await self._cli.browser_text()
             return []
 
         except Exception as e:
@@ -728,15 +759,14 @@ class ActionBookSkill:
         js_extract: str,
         wait_seconds: float = 3.0,
         domain: str = "",
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """Scrape a single detail page with anti-detect."""
         if not await self._ensure_extension():
             return None
 
         _ensure_anti_detect()
-        if _scheduler and domain:
-            if not await _scheduler.wait_for_slot(domain):
-                return None
+        if _scheduler and domain and not await _scheduler.wait_for_slot(domain):
+            return None
 
         try:
             await self._cli.browser_open(url)
@@ -777,9 +807,9 @@ class ActionBookSkill:
     async def meituan_keywords(
         self,
         store_id: str,
-        category: Optional[str] = None,
+        category: str | None = None,
         limit: int = 50,
-    ) -> List[MeituanKeyword]:
+    ) -> list[MeituanKeyword]:
         """获取美团热搜词。
 
         数据来源：QNH 数据概览 → 从品类销售数据提取热门品类关键词。
@@ -791,6 +821,7 @@ class ActionBookSkill:
         if self._qnh_client:
             try:
                 from datetime import datetime, timedelta, timezone
+
                 cst = timezone(timedelta(hours=8))
                 today = datetime.now(cst).strftime("%Y-%m-%d")
 
@@ -810,9 +841,9 @@ class ActionBookSkill:
     def _extract_keywords_from_overview(
         self,
         overview: dict,
-        category: Optional[str],
+        category: str | None,
         limit: int,
-    ) -> List[MeituanKeyword]:
+    ) -> list[MeituanKeyword]:
         """从 QNH 数据概览提取品类关键词。"""
         keywords = []
 
@@ -831,13 +862,15 @@ class ActionBookSkill:
                     continue
                 if category and category not in cat_name:
                     continue
-                keywords.append(MeituanKeyword(
-                    keyword=cat_name,
-                    search_volume=int(item.get("orderCount", item.get("salesCount", 0))),
-                    growth_rate=float(item.get("growthRate", item.get("orderCountRate", 0))),
-                    conversion_rate=float(item.get("conversionRate", 0)),
-                    category=item.get("parentCategory", cat_name),
-                ))
+                keywords.append(
+                    MeituanKeyword(
+                        keyword=cat_name,
+                        search_volume=int(item.get("orderCount", item.get("salesCount", 0))),
+                        growth_rate=float(item.get("growthRate", item.get("orderCountRate", 0))),
+                        conversion_rate=float(item.get("conversionRate", 0)),
+                        category=item.get("parentCategory", cat_name),
+                    )
+                )
 
         # Also try product-level data as keyword source
         product_data = overview.get("productRanking", overview.get("hotProducts", []))
@@ -847,22 +880,24 @@ class ActionBookSkill:
                 if not name:
                     continue
                 # Use product names as pseudo-keywords
-                keywords.append(MeituanKeyword(
-                    keyword=name,
-                    search_volume=int(item.get("salesCount", item.get("orderCount", 0))),
-                    growth_rate=float(item.get("growthRate", 0)),
-                    conversion_rate=float(item.get("conversionRate", 0)),
-                    category=item.get("category", ""),
-                ))
+                keywords.append(
+                    MeituanKeyword(
+                        keyword=name,
+                        search_volume=int(item.get("salesCount", item.get("orderCount", 0))),
+                        growth_rate=float(item.get("growthRate", 0)),
+                        conversion_rate=float(item.get("conversionRate", 0)),
+                        category=item.get("category", ""),
+                    )
+                )
 
         return keywords[:limit]
 
     async def meituan_rankings(
         self,
         store_id: str,
-        category: Optional[str] = None,
+        category: str | None = None,
         limit: int = 20,
-    ) -> List[MeituanProduct]:
+    ) -> list[MeituanProduct]:
         """获取美团商品排行榜。
 
         数据来源优先级：
@@ -877,6 +912,7 @@ class ActionBookSkill:
         if self._qnh_client:
             try:
                 from datetime import datetime, timedelta, timezone
+
                 cst = timezone(timedelta(hours=8))
                 today = datetime.now(cst).strftime("%Y-%m-%d")
 
@@ -886,14 +922,25 @@ class ActionBookSkill:
                 if items:
                     products = []
                     for item in items[:limit]:
-                        products.append(MeituanProduct(
-                            product_id=str(item.get("spuId", item.get("productId", item.get("id", "")))),
-                            name=item.get("name", item.get("productName", item.get("spuName", ""))),
-                            price=float(item.get("price", item.get("retailPrice", 0))),
-                            monthly_sales=int(item.get("salesCount", item.get("monthlySales", item.get("orderCount", 0)))),
-                            rating=float(item.get("rating", item.get("score", 0))),
-                            store_name=item.get("storeName", item.get("poiName", "")),
-                        ))
+                        products.append(
+                            MeituanProduct(
+                                product_id=str(
+                                    item.get("spuId", item.get("productId", item.get("id", "")))
+                                ),
+                                name=item.get(
+                                    "name", item.get("productName", item.get("spuName", ""))
+                                ),
+                                price=float(item.get("price", item.get("retailPrice", 0))),
+                                monthly_sales=int(
+                                    item.get(
+                                        "salesCount",
+                                        item.get("monthlySales", item.get("orderCount", 0)),
+                                    )
+                                ),
+                                rating=float(item.get("rating", item.get("score", 0))),
+                                store_name=item.get("storeName", item.get("poiName", "")),
+                            )
+                        )
                     if products:
                         logger.info(f"Meituan rankings: got {len(products)} from QNH API")
                         return products
@@ -953,8 +1000,8 @@ class ActionBookSkill:
         store_id: str,
         radius_km: float = 3.0,
         keyword: str = "医疗器械",
-        location: Optional[tuple] = None,
-    ) -> List[CompetitorStore]:
+        location: tuple | None = None,
+    ) -> list[CompetitorStore]:
         """获取周边竞品店铺。
 
         数据来源优先级：
@@ -983,14 +1030,16 @@ class ActionBookSkill:
                     for row in rows:
                         ms = int(row["monthly_sales"] or 0)
                         threat = "high" if ms > 10000 else "medium" if ms > 5000 else "low"
-                        stores.append(CompetitorStore(
-                            store_id=str(row["store_id"]),
-                            name=row["name"] or "",
-                            distance_km=float(row["distance_km"] or 0),
-                            rating=float(row["rating"] or 0),
-                            monthly_sales=ms,
-                            threat_level=threat,
-                        ))
+                        stores.append(
+                            CompetitorStore(
+                                store_id=str(row["store_id"]),
+                                name=row["name"] or "",
+                                distance_km=float(row["distance_km"] or 0),
+                                rating=float(row["rating"] or 0),
+                                monthly_sales=ms,
+                                threat_level=threat,
+                            )
+                        )
                     logger.info(f"Competitor stores: got {len(stores)} from RPC DB")
                     return stores
             except Exception as e:
@@ -1000,7 +1049,10 @@ class ActionBookSkill:
         if await self._ensure_extension():
             try:
                 from src.skills.meituan_h5 import MeituanH5Scraper
-                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+
+                scraper = MeituanH5Scraper(
+                    cli=self._cli, default_location=location or (114.43, 30.51)
+                )
                 products = await scraper.search_products(keyword, location, limit=50)
                 if products:
                     # 聚合到店铺维度
@@ -1028,7 +1080,9 @@ class ActionBookSkill:
                             s.threat_level = "high"
                         elif s.monthly_sales < 100:
                             s.threat_level = "low"
-                    return [s for s in stores if s.distance_km <= radius_km or radius_km >= 3.0][:20]
+                    return [s for s in stores if s.distance_km <= radius_km or radius_km >= 3.0][
+                        :20
+                    ]
             except Exception as e:
                 logger.error(f"H5 competitor_stores failed: {e}")
                 await self._alert("meituan_h5", keyword, str(e))
@@ -1039,12 +1093,12 @@ class ActionBookSkill:
     async def competitor_products(
         self,
         store_id: str,
-        competitor_store_id: Optional[str] = None,
-        category: Optional[str] = None,
+        competitor_store_id: str | None = None,
+        category: str | None = None,
         keyword: str = "医疗器械",
-        location: Optional[tuple] = None,
+        location: tuple | None = None,
         limit: int = 20,
-    ) -> List[CompetitorProduct]:
+    ) -> list[CompetitorProduct]:
         """获取竞品商品列表。
 
         数据来源优先级：
@@ -1089,7 +1143,10 @@ class ActionBookSkill:
         if await self._ensure_extension():
             try:
                 from src.skills.meituan_h5 import MeituanH5Scraper
-                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+
+                scraper = MeituanH5Scraper(
+                    cli=self._cli, default_location=location or (114.43, 30.51)
+                )
 
                 if competitor_store_id:
                     products = await scraper.get_store_products(competitor_store_id, location)
@@ -1109,8 +1166,8 @@ class ActionBookSkill:
     async def meituan_hot_keywords(
         self,
         category: str = "",
-        location: Optional[tuple] = None,
-    ) -> List[str]:
+        location: tuple | None = None,
+    ) -> list[str]:
         """获取美团 H5 热搜词。
 
         通过 H5 搜索页提取热搜词/联想词，失败时返回预设列表。
@@ -1119,7 +1176,10 @@ class ActionBookSkill:
         if await self._ensure_extension():
             try:
                 from src.skills.meituan_h5 import MeituanH5Scraper
-                scraper = MeituanH5Scraper(cli=self._cli, default_location=location or (114.43, 30.51))
+
+                scraper = MeituanH5Scraper(
+                    cli=self._cli, default_location=location or (114.43, 30.51)
+                )
                 keywords = await scraper.search_hot_keywords(category)
                 if keywords:
                     return keywords
@@ -1132,9 +1192,9 @@ class ActionBookSkill:
 
     async def meituan_search_keywords(
         self,
-        category: Optional[str] = None,
+        category: str | None = None,
         limit: int = 20,
-    ) -> List[MeituanKeyword]:
+    ) -> list[MeituanKeyword]:
         """获取美团搜索关键词热度数据。
 
         数据来源：competitor_keywords 表（RPC 设备采集）。
@@ -1182,7 +1242,7 @@ class ActionBookSkill:
         keyword: str,
         sort_by: str = "sales",
         limit: int = 10,
-    ) -> List[AlibabaProduct]:
+    ) -> list[AlibabaProduct]:
         """搜索1688商品。通过 ActionBook 采集，失败时重试+告警。"""
         self._check_rate("alibaba_search")
 
@@ -1192,19 +1252,23 @@ class ActionBookSkill:
         last_err = None
         for attempt in range(1, 4):
             try:
-                raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0, domain="alibaba")
+                raw_items = await self._scrape_with_actionbook(
+                    url, js, wait_seconds=4.0, domain="alibaba"
+                )
                 if raw_items:
                     products = []
                     for i, item in enumerate(raw_items):
-                        products.append(AlibabaProduct(
-                            product_id=f"AL{i+1:03d}",
-                            title=item.get("title", ""),
-                            price=item.get("price", 0.0),
-                            min_order_qty=item.get("moq", 1),
-                            sales_count=item.get("sales", 0),
-                            supplier_name=item.get("supplier", ""),
-                            url=item.get("url", ""),
-                        ))
+                        products.append(
+                            AlibabaProduct(
+                                product_id=f"AL{i + 1:03d}",
+                                title=item.get("title", ""),
+                                price=item.get("price", 0.0),
+                                min_order_qty=item.get("moq", 1),
+                                sales_count=item.get("sales", 0),
+                                supplier_name=item.get("supplier", ""),
+                                url=item.get("url", ""),
+                            )
+                        )
                     logger.info(f"1688 search '{keyword}': got {len(products)} results")
                     return products
                 last_err = "empty results"
@@ -1213,7 +1277,9 @@ class ActionBookSkill:
 
             if attempt < 3:
                 wait = 1.0 * (2 ** (attempt - 1))
-                logger.warning(f"1688 search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                logger.warning(
+                    f"1688 search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s"
+                )
                 await asyncio.sleep(wait)
 
         logger.error(f"1688 search '{keyword}' failed after 3 attempts: {last_err}")
@@ -1247,7 +1313,9 @@ class ActionBookSkill:
 
             if attempt < 3:
                 wait = 1.0 * (2 ** (attempt - 1))
-                logger.warning(f"1688 detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                logger.warning(
+                    f"1688 detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s"
+                )
                 await asyncio.sleep(wait)
 
         error_msg = f"1688 detail failed after 3 attempts for {url}: {last_err}"
@@ -1270,7 +1338,7 @@ class ActionBookSkill:
         keyword: str,
         sort_by: str = "sales",
         limit: int = 10,
-    ) -> List[PddProduct]:
+    ) -> list[PddProduct]:
         """搜索拼多多商品。采集失败时重试+告警。"""
         self._check_rate("pdd_search")
 
@@ -1280,18 +1348,22 @@ class ActionBookSkill:
         last_err = None
         for attempt in range(1, 4):
             try:
-                raw_items = await self._scrape_with_actionbook(url, js, wait_seconds=4.0, domain="pdd")
+                raw_items = await self._scrape_with_actionbook(
+                    url, js, wait_seconds=4.0, domain="pdd"
+                )
                 if raw_items:
                     products = []
                     for i, item in enumerate(raw_items):
-                        products.append(PddProduct(
-                            product_id=f"PDD{i+1:03d}",
-                            title=item.get("title", ""),
-                            price=item.get("price", 0.0),
-                            sales_count=item.get("sales", 0),
-                            shop_name=item.get("shop", ""),
-                            url=item.get("url", ""),
-                        ))
+                        products.append(
+                            PddProduct(
+                                product_id=f"PDD{i + 1:03d}",
+                                title=item.get("title", ""),
+                                price=item.get("price", 0.0),
+                                sales_count=item.get("sales", 0),
+                                shop_name=item.get("shop", ""),
+                                url=item.get("url", ""),
+                            )
+                        )
                     logger.info(f"PDD search '{keyword}': got {len(products)} results")
                     return products
                 last_err = "empty results"
@@ -1300,7 +1372,9 @@ class ActionBookSkill:
 
             if attempt < 3:
                 wait = 1.0 * (2 ** (attempt - 1))
-                logger.warning(f"PDD search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                logger.warning(
+                    f"PDD search '{keyword}' attempt {attempt}/3 failed: {last_err}, retrying in {wait}s"
+                )
                 await asyncio.sleep(wait)
 
         logger.error(f"PDD search '{keyword}' failed after 3 attempts: {last_err}")
@@ -1335,7 +1409,9 @@ class ActionBookSkill:
 
             if attempt < 3:
                 wait = 1.0 * (2 ** (attempt - 1))
-                logger.warning(f"PDD detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s")
+                logger.warning(
+                    f"PDD detail attempt {attempt}/3 failed: {last_err}, retrying in {wait}s"
+                )
                 await asyncio.sleep(wait)
 
         error_msg = f"PDD detail failed after 3 attempts for {url}: {last_err}"
@@ -1347,8 +1423,7 @@ class ActionBookSkill:
         """获取拼多多店铺信息。TODO: 实现店铺页面解析。"""
         self._check_rate("pdd_shop")
         raise NotImplementedError(
-            f"pdd_shop not yet implemented for shop_id={shop_id}. "
-            "需要实现店铺页面解析。"
+            f"pdd_shop not yet implemented for shop_id={shop_id}. 需要实现店铺页面解析。"
         )
 
     async def cleanup(self):

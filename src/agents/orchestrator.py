@@ -6,7 +6,7 @@ Orchestrator - 总调度 Agent
 from __future__ import annotations
 
 import logging
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from .alert.graph import compile_alert_graph
@@ -18,7 +18,7 @@ from .selection.graph import compile_selection_graph
 logger = logging.getLogger(__name__)
 
 
-class TaskType(str, Enum):
+class TaskType(StrEnum):
     SELECTION = "selection"
     CUSTOMER_SERVICE = "customer_service"
     ALERT = "alert"

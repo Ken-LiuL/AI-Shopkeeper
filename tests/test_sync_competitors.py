@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 from dataclasses import dataclass
+from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from src.sync.base import SyncMode
 from src.sync.competitors import (
-    CompetitorSyncer,
     COMPETITOR_KEYWORDS,
     DEFAULT_LOCATION,
+    CompetitorSyncer,
 )
-from src.sync.base import SyncMode
-
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 @dataclass
 class FakeProduct:
@@ -34,11 +35,12 @@ def db_pool():
 
 @pytest.fixture
 def syncer(db_pool):
-    with patch.object(CompetitorSyncer.__bases__[0], '__init__', lambda self, *a, **kw: None):
+    with patch.object(CompetitorSyncer.__bases__[0], "__init__", lambda self, *a, **kw: None):
         return CompetitorSyncer(db_pool=db_pool)
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
+
 
 class TestCompetitorSyncerInit:
     def test_default_keywords(self, syncer):
@@ -46,7 +48,7 @@ class TestCompetitorSyncerInit:
         assert len(syncer._keywords) == 15
 
     def test_custom_keywords(self, db_pool):
-        with patch.object(CompetitorSyncer.__bases__[0], '__init__', lambda self, *a, **kw: None):
+        with patch.object(CompetitorSyncer.__bases__[0], "__init__", lambda self, *a, **kw: None):
             s = CompetitorSyncer(db_pool=db_pool, keywords=["test"])
         assert s._keywords == ["test"]
 
@@ -159,6 +161,6 @@ class TestSaveProducts:
 
     @pytest.mark.asyncio
     async def test_save_no_pool(self):
-        with patch.object(CompetitorSyncer.__bases__[0], '__init__', lambda self, *a, **kw: None):
+        with patch.object(CompetitorSyncer.__bases__[0], "__init__", lambda self, *a, **kw: None):
             s = CompetitorSyncer(db_pool=None)
         await s._save_products([FakeProduct()], "test")  # should not raise

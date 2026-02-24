@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import operator
 from typing import Annotated, Any, TypedDict
 
 
@@ -45,7 +44,7 @@ class SelectionState(TypedDict, total=False):
 
     # Phase 3 原始搜索数据
     raw_alibaba_results: dict[str, str]  # keyword -> results json
-    raw_pdd_results: dict[str, str]      # keyword -> results json
+    raw_pdd_results: dict[str, str]  # keyword -> results json
 
     # Phase 4 最终推荐
     recommendations: dict[str, Any]

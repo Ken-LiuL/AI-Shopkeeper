@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any
 
 
 class RerankerSkill:
@@ -16,15 +16,16 @@ class RerankerSkill:
     def _load_model(self):
         if self._model is None:
             from sentence_transformers import CrossEncoder
+
             self._model = CrossEncoder(self._model_name, device=self._device)
 
     def rerank(
         self,
         query: str,
-        documents: List[Dict[str, Any]],
+        documents: list[dict[str, Any]],
         text_field: str = "description",
         top_k: int = 5,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """对候选文档按相关性重排序。
 
         Args:
@@ -41,5 +42,5 @@ class RerankerSkill:
         self._load_model()
         pairs = [[query, doc.get(text_field, "")] for doc in documents]
         scores = self._model.predict(pairs)  # type: ignore[union-attr]
-        ranked = sorted(zip(documents, scores), key=lambda x: -x[1])
+        ranked = sorted(zip(documents, scores, strict=False), key=lambda x: -x[1])
         return [item[0] for item in ranked[:top_k]]

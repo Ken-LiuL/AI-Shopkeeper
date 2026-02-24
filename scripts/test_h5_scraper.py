@@ -33,7 +33,7 @@ async def main():
 
     try:
         if args.hot:
-            print(f"\n🔥 采集热搜词...")
+            print("\n🔥 采集热搜词...")
             keywords = await scraper.search_hot_keywords(args.keyword)
             if keywords:
                 print(f"  找到 {len(keywords)} 个热搜词:")
@@ -47,7 +47,7 @@ async def main():
             products = await scraper.get_store_products(args.store)
             if products:
                 print(f"  找到 {len(products)} 个商品:")
-                for i, p in enumerate(products[:args.limit], 1):
+                for i, p in enumerate(products[: args.limit], 1):
                     print(f"  {i}. {p.name} | ¥{p.price} | 月销 {p.monthly_sales}")
             else:
                 print("  ⚠️ 未采集到商品")
@@ -58,8 +58,8 @@ async def main():
             if products:
                 print(f"  找到 {len(products)} 个结果:\n")
                 print(f"  {'#':>3}  {'商品名':<30} {'价格':>8} {'月销':>6} {'店铺':<20}")
-                print(f"  {'─'*3}  {'─'*30} {'─'*8} {'─'*6} {'─'*20}")
-                for i, p in enumerate(products[:args.limit], 1):
+                print(f"  {'─' * 3}  {'─' * 30} {'─' * 8} {'─' * 6} {'─' * 20}")
+                for i, p in enumerate(products[: args.limit], 1):
                     name = p.name[:28] + ".." if len(p.name) > 30 else p.name
                     store = p.store_name[:18] + ".." if len(p.store_name) > 20 else p.store_name
                     print(f"  {i:>3}  {name:<30} ¥{p.price:>6.1f} {p.monthly_sales:>6} {store:<20}")

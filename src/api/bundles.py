@@ -31,7 +31,8 @@ async def get_bundle(bundle_id: str) -> APIResponse[dict]:
 async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
     pool = pg.get_pool()
     row = await pool.fetchrow(
-        "UPDATE bundles SET status = 'active' WHERE bundle_id = $1 RETURNING *", bundle_id,
+        "UPDATE bundles SET status = 'active' WHERE bundle_id = $1 RETURNING *",
+        bundle_id,
     )
     if not row:
         raise NotFoundError("Bundle", bundle_id)
@@ -42,7 +43,8 @@ async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
 async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
     pool = pg.get_pool()
     row = await pool.fetchrow(
-        "UPDATE bundles SET status = 'inactive' WHERE bundle_id = $1 RETURNING *", bundle_id,
+        "UPDATE bundles SET status = 'inactive' WHERE bundle_id = $1 RETURNING *",
+        bundle_id,
     )
     if not row:
         raise NotFoundError("Bundle", bundle_id)
@@ -52,24 +54,30 @@ async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_bundles() -> APIResponse[list[dict]]:
     pool = pg.get_pool()
-    rows = await pool.fetch("SELECT * FROM bundles WHERE status != 'deleted' ORDER BY created_at DESC")
+    rows = await pool.fetch(
+        "SELECT * FROM bundles WHERE status != 'deleted' ORDER BY created_at DESC"
+    )
     return APIResponse(data=[dict(r) for r in rows])
 
 
-async def _run_bundle_generate(task_id: str, request: BundleGenerateRequest, orch: Orchestrator) -> None:
+async def _run_bundle_generate(
+    task_id: str, request: BundleGenerateRequest, orch: Orchestrator
+) -> None:
     try:
         kwargs = {k: v for k, v in request.model_dump().items() if v is not None}
         result = await orch.run_bundle(**kwargs)
         pool = pg.get_pool()
         await pool.execute(
             "UPDATE bundle_tasks SET status = 'completed', result = $1::jsonb, finished_at = NOW() WHERE task_id = $2",
-            json.dumps(result, default=str), task_id,
+            json.dumps(result, default=str),
+            task_id,
         )
     except Exception:
         logger.exception("Bundle generate %s failed", task_id)
         pool = pg.get_pool()
         await pool.execute(
-            "UPDATE bundle_tasks SET status = 'failed', finished_at = NOW() WHERE task_id = $1", task_id,
+            "UPDATE bundle_tasks SET status = 'failed', finished_at = NOW() WHERE task_id = $1",
+            task_id,
         )
 
 
@@ -96,7 +104,7 @@ async def update_bundle(bundle_id: str, body: BundleUpdateRequest) -> APIRespons
     if not updates:
         raise NotFoundError("Bundle", bundle_id)
 
-    set_clauses = [f"{k} = ${i+1}" for i, k in enumerate(updates)]
+    set_clauses = [f"{k} = ${i + 1}" for i, k in enumerate(updates)]
     params = list(updates.values()) + [bundle_id]
     row = await pool.fetchrow(
         f"UPDATE bundles SET {', '.join(set_clauses)} WHERE bundle_id = ${len(params)} RETURNING *",

@@ -1,8 +1,8 @@
 # AI店长 - 完整技术方案 V6.0
 ## 整合评估报告与技术提升的最终版本
 
-**版本**: V6.0 Final  
-**日期**: 2026-02-11  
+**版本**: V6.0 Final
+**日期**: 2026-02-11
 **状态**: 成品方案，可直接进入开发
 
 ---
@@ -310,41 +310,41 @@ OPTIONS {
 async def hybrid_search(query: str, limit: int = 10) -> List[Product]:
     # 1. 生成查询向量
     query_embedding = await get_embedding(query)
-    
+
     # 2. 向量检索
     vector_results = await neo4j.query("""
         CALL db.index.vector.queryNodes('product_description_embedding', $limit, $embedding)
         YIELD node, score
         RETURN node.product_id as id, node.name as name, score as vector_score
     """, embedding=query_embedding, limit=limit*2)
-    
+
     # 3. 关键词检索
     keywords = extract_keywords(query)  # 提取关键词
     keyword_results = await neo4j.query("""
         MATCH (p:Product)
         WHERE any(kw IN $keywords WHERE p.name CONTAINS kw OR p.description CONTAINS kw)
-        RETURN p.product_id as id, p.name as name, 
+        RETURN p.product_id as id, p.name as name,
                size([kw IN $keywords WHERE p.name CONTAINS kw]) as keyword_score
         ORDER BY keyword_score DESC
         LIMIT $limit
     """, keywords=keywords, limit=limit*2)
-    
+
     # 4. RRF融合排序
     final_results = rrf_merge(vector_results, keyword_results, k=60)
-    
+
     return final_results[:limit]
 
 
 def rrf_merge(list1: List, list2: List, k: int = 60) -> List:
     """Reciprocal Rank Fusion 融合两路检索结果"""
     scores = {}
-    
+
     for rank, item in enumerate(list1):
         scores[item['id']] = scores.get(item['id'], 0) + 1 / (k + rank + 1)
-    
+
     for rank, item in enumerate(list2):
         scores[item['id']] = scores.get(item['id'], 0) + 1 / (k + rank + 1)
-    
+
     # 按融合分数排序
     sorted_ids = sorted(scores.keys(), key=lambda x: -scores[x])
     return sorted_ids
@@ -432,13 +432,13 @@ async def rerank_results(query: str, candidates: List[Product], top_k: int = 5) 
     """
     # 构建query-document对
     pairs = [[query, f"{c.name} {c.description}"] for c in candidates]
-    
+
     # 计算相关性分数
     scores = reranker.predict(pairs)
-    
+
     # 按分数排序
     ranked = sorted(zip(candidates, scores), key=lambda x: -x[1])
-    
+
     return [item[0] for item in ranked[:top_k]]
 ```
 
@@ -475,7 +475,7 @@ import pandas as pd
 class SalesAnomalyDetector:
     def __init__(self):
         self.models = {}  # 每个商品一个模型
-    
+
     def train(self, product_id: str, historical_sales: pd.DataFrame):
         """
         训练时序预测模型
@@ -490,7 +490,7 @@ class SalesAnomalyDetector:
         )
         model.fit(historical_sales)
         self.models[product_id] = model
-    
+
     def detect(self, product_id: str, date: str, actual_sales: int) -> dict:
         """
         检测某天销量是否异常
@@ -498,15 +498,15 @@ class SalesAnomalyDetector:
         model = self.models.get(product_id)
         if not model:
             return {"is_anomaly": False, "reason": "模型未训练"}
-        
+
         # 预测
         future = pd.DataFrame({'ds': [date]})
         forecast = model.predict(future)
-        
+
         yhat = forecast['yhat'].iloc[0]
         yhat_lower = forecast['yhat_lower'].iloc[0]
         yhat_upper = forecast['yhat_upper'].iloc[0]
-        
+
         # 判断异常
         if actual_sales < yhat_lower:
             deviation = (yhat_lower - actual_sales) / yhat * 100
@@ -531,7 +531,7 @@ class SalesAnomalyDetector:
             }
         else:
             return {"is_anomaly": False}
-    
+
     def _get_chinese_holidays(self) -> pd.DataFrame:
         """中国节假日配置"""
         return pd.DataFrame({
@@ -802,7 +802,7 @@ conversion_factor = min(conversion_rate / 0.1, 1.0)
 1. 识别竞品有而我们没有的热销商品(月销>50)
 2. 识别多家竞品缺货的商品(缺货补位机会)
 3. 按优先级排序: high > medium > low
-4. high优先级条件: 
+4. high优先级条件:
    - 3家以上竞品在售 且 月销>100
    - 或 2家以上竞品缺货
 5. 缺货机会标记紧急程度
@@ -1353,11 +1353,11 @@ final_score = Σ(维度分 × 权重)
 
 1. 评分公式验证
    对TOP 5，验证: 总分 = 各维度分×权重之和
-   
+
 2. 数据一致性
    - 市场热度分是否与Market分析数据一致？
    - 供应链分是否与Supplier评估一致？
-   
+
 3. 风险遗漏检查
    - 是否有毛利率<25%的商品进入推荐？
    - 是否有高风险供应商的商品未标注风险？
@@ -1519,7 +1519,7 @@ reflection_notes字段填写: "已检查：评分公式正确/数据一致/风�
 async def generate_product_embedding(product: Product) -> List[float]:
     """生成商品描述的向量表示"""
     text = f"{product.name} {product.description} {product.category}"
-    
+
     # 使用Claude或专用embedding模型
     response = await embedding_model.embed(text)
     return response.embedding  # 1536维向量
@@ -1547,90 +1547,90 @@ class HybridSearchService:
         self.neo4j = neo4j_driver
         self.embedding_model = embedding_model
         self.reranker = reranker
-    
+
     async def search(self, query: str, entities: dict, limit: int = 5) -> List[dict]:
         """
         混合检索：向量 + 关键词 + RRF融合 + Rerank
         """
         # 1. 生成查询向量
         query_embedding = await self.embedding_model.embed(query)
-        
+
         # 2. 向量检索（召回30个）
         vector_results = await self._vector_search(query_embedding, limit=30)
-        
+
         # 3. 关键词检索（召回30个）
         keywords = self._extract_keywords(query, entities)
         keyword_results = await self._keyword_search(keywords, limit=30)
-        
+
         # 4. RRF融合
         merged = self._rrf_merge(vector_results, keyword_results)
-        
+
         # 5. Reranker精排
         top_candidates = merged[:20]  # 取前20进行精排
         reranked = await self._rerank(query, top_candidates)
-        
+
         # 6. GraphRAG获取完整子图
         final_results = await self._enrich_with_graph(reranked[:limit])
-        
+
         return final_results
-    
+
     async def _vector_search(self, embedding: List[float], limit: int) -> List[dict]:
         """向量检索"""
         query = """
         CALL db.index.vector.queryNodes('product_embedding_index', $limit, $embedding)
         YIELD node, score
-        RETURN node.product_id as id, node.name as name, 
+        RETURN node.product_id as id, node.name as name,
                node.description as description, score as vector_score
         """
         return await self.neo4j.query(query, embedding=embedding, limit=limit)
-    
+
     async def _keyword_search(self, keywords: List[str], limit: int) -> List[dict]:
         """关键词检索"""
         query = """
         MATCH (p:Product)
-        WHERE any(kw IN $keywords WHERE 
-            toLower(p.name) CONTAINS toLower(kw) OR 
+        WHERE any(kw IN $keywords WHERE
+            toLower(p.name) CONTAINS toLower(kw) OR
             toLower(p.description) CONTAINS toLower(kw))
-        WITH p, size([kw IN $keywords WHERE 
+        WITH p, size([kw IN $keywords WHERE
             toLower(p.name) CONTAINS toLower(kw)]) * 2 +
-            size([kw IN $keywords WHERE 
+            size([kw IN $keywords WHERE
             toLower(p.description) CONTAINS toLower(kw)]) as keyword_score
-        RETURN p.product_id as id, p.name as name, 
+        RETURN p.product_id as id, p.name as name,
                p.description as description, keyword_score
         ORDER BY keyword_score DESC
         LIMIT $limit
         """
         return await self.neo4j.query(query, keywords=keywords, limit=limit)
-    
+
     def _rrf_merge(self, list1: List[dict], list2: List[dict], k: int = 60) -> List[dict]:
         """RRF融合排序"""
         scores = {}
         items = {}
-        
+
         for rank, item in enumerate(list1):
             item_id = item['id']
             scores[item_id] = scores.get(item_id, 0) + 1 / (k + rank + 1)
             items[item_id] = item
-        
+
         for rank, item in enumerate(list2):
             item_id = item['id']
             scores[item_id] = scores.get(item_id, 0) + 1 / (k + rank + 1)
             items[item_id] = item
-        
+
         sorted_ids = sorted(scores.keys(), key=lambda x: -scores[x])
         return [items[id] for id in sorted_ids]
-    
+
     async def _rerank(self, query: str, candidates: List[dict]) -> List[dict]:
         """BGE Reranker精排"""
         if not candidates:
             return []
-        
+
         pairs = [[query, f"{c['name']} {c['description']}"] for c in candidates]
         scores = self.reranker.predict(pairs)
-        
+
         ranked = sorted(zip(candidates, scores), key=lambda x: -x[1])
         return [item[0] for item in ranked]
-    
+
     async def _enrich_with_graph(self, products: List[dict]) -> List[dict]:
         """GraphRAG：获取商品的完整关联子图"""
         enriched = []
@@ -1639,7 +1639,7 @@ class HybridSearchService:
             product['graph_context'] = graph_data
             enriched.append(product)
         return enriched
-    
+
     async def _get_product_subgraph(self, product_id: str) -> dict:
         """获取商品的关联子图"""
         query = """
@@ -1649,18 +1649,18 @@ class HybridSearchService:
         OPTIONAL MATCH (p)-[:USED_IN]->(scenario:Scenario)
         OPTIONAL MATCH (p)-[:OFTEN_BOUGHT_WITH]->(related:Product)
         OPTIONAL MATCH (p)<-[:ANSWERS]-(faq:FAQ)
-        
-        RETURN 
+
+        RETURN
             collect(DISTINCT pop.name) as suitable_for,
             collect(DISTINCT {name: contra.name, reason: contra.reason}) as contraindicated_for,
             collect(DISTINCT scenario.name) as scenarios,
             collect(DISTINCT {
-                id: related.product_id, 
-                name: related.name, 
+                id: related.product_id,
+                name: related.name,
                 price: related.price
             })[0..3] as related_products,
             collect(DISTINCT {
-                question: faq.question, 
+                question: faq.question,
                 answer: faq.answer
             })[0..3] as faqs
         """
@@ -1800,17 +1800,17 @@ faq_templates:
   greeting:
     - trigger: ["在吗", "你好", "hello", "hi"]
       reply: "亲，在的呢~请问有什么可以帮您？😊"
-  
+
   logistics:
     - trigger: ["多久能到", "什么时候到", "几点送到"]
       reply: "亲，下单后预计{delivery_time}送达哦~具体以骑手实际配送为准。您可以在订单详情查看实时进度~"
-    
+
     - trigger: ["发货了吗", "发了没"]
       reply: "亲，订单{order_status}。{status_detail}您可以在订单详情查看物流信息~"
-    
+
     - trigger: ["能送到吗", "配送范围"]
       reply: "亲，我们支持3公里内配送~您下单时如果地址显示可配送就没问题的~"
-  
+
   after_sales_notice:
     reply: "亲，售后问题这边帮您转接人工客服处理，请稍等~"
 ```
@@ -1871,15 +1871,15 @@ from datetime import datetime, timedelta
 
 class ProphetAnomalyDetector:
     """基于Prophet的销量异常检测"""
-    
+
     def __init__(self):
         self.models = {}  # product_id -> trained model
         self.min_training_days = 14  # 最少需要14天数据
-    
+
     def train_model(self, product_id: str, sales_history: pd.DataFrame):
         """
         训练时序预测模型
-        
+
         Args:
             product_id: 商品ID
             sales_history: DataFrame with columns ['ds', 'y']
@@ -1888,39 +1888,39 @@ class ProphetAnomalyDetector:
         """
         if len(sales_history) < self.min_training_days:
             return False
-        
+
         model = Prophet(
             # 季节性配置
             yearly_seasonality=False,  # 医疗器械不需要年度季节性
             weekly_seasonality=True,   # 周末可能有差异
             daily_seasonality=False,
-            
+
             # 节假日配置
             holidays=self._get_chinese_holidays(),
-            
+
             # 置信区间
             interval_width=0.95,
-            
+
             # 变化点检测
             changepoint_prior_scale=0.05,  # 默认0.05，越大越敏感
-            
+
             # 增长模型
             growth='linear'
         )
-        
+
         # 添加特殊事件回归器
         model.add_regressor('is_promotion')  # 促销日
         model.add_regressor('is_weather_event')  # 天气事件
-        
+
         model.fit(sales_history)
         self.models[product_id] = model
         return True
-    
-    def detect(self, product_id: str, date: str, actual_sales: int, 
+
+    def detect(self, product_id: str, date: str, actual_sales: int,
                is_promotion: bool = False, is_weather_event: bool = False) -> dict:
         """
         检测某天销量是否异常
-        
+
         Returns:
             {
                 'is_anomaly': bool,
@@ -1936,21 +1936,21 @@ class ProphetAnomalyDetector:
         model = self.models.get(product_id)
         if not model:
             return {'is_anomaly': False, 'reason': 'model_not_trained'}
-        
+
         # 构建预测输入
         future = pd.DataFrame({
             'ds': [pd.to_datetime(date)],
             'is_promotion': [1 if is_promotion else 0],
             'is_weather_event': [1 if is_weather_event else 0]
         })
-        
+
         # 预测
         forecast = model.predict(future)
-        
+
         yhat = forecast['yhat'].iloc[0]
         yhat_lower = forecast['yhat_lower'].iloc[0]
         yhat_upper = forecast['yhat_upper'].iloc[0]
-        
+
         # 异常判断
         result = {
             'expected': round(yhat, 1),
@@ -1958,7 +1958,7 @@ class ProphetAnomalyDetector:
             'lower_bound': round(yhat_lower, 1),
             'upper_bound': round(yhat_upper, 1)
         }
-        
+
         if actual_sales < yhat_lower:
             # 销量异常下降
             deviation = (yhat - actual_sales) / max(yhat, 1) * 100
@@ -1979,9 +1979,9 @@ class ProphetAnomalyDetector:
             })
         else:
             result['is_anomaly'] = False
-        
+
         return result
-    
+
     def _get_drop_severity(self, deviation_percent: float, actual: int) -> str:
         """判断下降严重程度"""
         if actual == 0:
@@ -1991,7 +1991,7 @@ class ProphetAnomalyDetector:
         if deviation_percent > 40:
             return 'warning'
         return 'info'
-    
+
     def _get_chinese_holidays(self) -> pd.DataFrame:
         """中国节假日配置"""
         # 2026年节假日
@@ -2084,7 +2084,7 @@ class ProphetAnomalyDetector:
 
 ```yaml
 anomaly_detection_rules:
-  
+
   # ========== 销量异常（Prophet时序预测） ==========
   sales_prophet:
     enabled: true
@@ -2098,7 +2098,7 @@ anomaly_detection_rules:
         warning: "deviation > 40%"
       spike:
         info: "any spike"  # 上涨通常是好事
-  
+
   # ========== 连续下降（规则检测） ==========
   consecutive_drop:
     enabled: true
@@ -2107,7 +2107,7 @@ anomaly_detection_rules:
       days: 3
       threshold_percent: 50  # 连续3天低于均值50%
     severity: warning
-  
+
   # ========== 零销量（规则检测） ==========
   zero_sales:
     enabled: true
@@ -2119,7 +2119,7 @@ anomaly_detection_rules:
       3_days: warning
       5_days: critical
       7_days: critical  # 建议下架
-  
+
   # ========== 竞品价格（规则检测） ==========
   competitor_price:
     enabled: true
@@ -2131,7 +2131,7 @@ anomaly_detection_rules:
       single_competitor: warning
       multiple_competitors: critical
       drop_over_20_percent: critical
-  
+
   # ========== 价格竞争力（规则检测） ==========
   price_gap:
     enabled: true
@@ -2139,7 +2139,7 @@ anomaly_detection_rules:
     config:
       gap_threshold: 0.15  # 我们价格高于竞品均价15%
     severity: warning
-  
+
   # ========== 毛利异常（规则检测） ==========
   margin:
     enabled: true
@@ -2150,7 +2150,7 @@ anomaly_detection_rules:
     severity_mapping:
       below_20: warning
       below_10: critical
-  
+
   # ========== 库存异常（规则检测） ==========
   stockout:
     enabled: true
@@ -2163,7 +2163,7 @@ anomaly_detection_rules:
       urgent: critical   # <1天库存
       warning: warning   # <3天库存
       overstock: warning # >90天库存
-  
+
   # ========== 流量异常（规则检测） ==========
   exposure:
     enabled: true
@@ -2172,7 +2172,7 @@ anomaly_detection_rules:
       drop_threshold: 0.50
       consecutive_days: 2
     severity: warning
-  
+
   # ========== 转化异常（规则检测） ==========
   conversion:
     enabled: true
@@ -2180,7 +2180,7 @@ anomaly_detection_rules:
     config:
       drop_threshold: 0.50
     severity: warning
-  
+
   # ========== 竞品缺货机会（规则检测） ==========
   competitor_stockout:
     enabled: true
@@ -2190,7 +2190,7 @@ anomaly_detection_rules:
     severity_mapping:
       2_competitors: warning
       3_or_more: critical  # 紧急补货机会
-  
+
   # ========== 多因素叠加（聚合检测） ==========
   multi_factor:
     enabled: true
@@ -2422,7 +2422,7 @@ anomaly_detection_rules:
 1. 价格调整
    - 新价格 ≥ 成本 × 1.25（保证最低毛利25%）
    - 新价格 ≤ 竞品均价 × 1.05（保持竞争力）
-   
+
 2. 促销活动
    - 常规促销：8-9折，持续24-48小时
    - 清仓促销：5-7折，标注"清仓"
@@ -2514,7 +2514,7 @@ fp_growth_config:
               "items": {"type": "string"}
             },
             "consequent": {
-              "type": "array", 
+              "type": "array",
               "items": {"type": "string"}
             },
             "support": {"type": "number"},
@@ -2781,7 +2781,7 @@ title_cleaning:
     - "特价"
     - "促销"
     - "一件代发"
-  
+
   keep_elements:
     - brand      # 品牌
     - model      # 型号
@@ -2894,13 +2894,13 @@ title_cleaning:
 
 ```yaml
 compliance_rules:
-  
+
   # ========== 资质检查 ==========
   C1_medical_device_license:
     severity: fatal
     check: "医疗器械需要对应资质"
     action: block
-  
+
   # ========== 禁售词 ==========
   C2_prohibited_words:
     severity: fatal
@@ -2911,7 +2911,7 @@ compliance_rules:
       - "麻醉"
       - "毒品"
     action: block
-  
+
   # ========== 虚假宣传 ==========
   C3_false_claims:
     severity: error
@@ -2922,7 +2922,7 @@ compliance_rules:
       - "无副作用"
       - "包治"
     action: force_modify
-  
+
   # ========== 夸大宣传 ==========
   C4_exaggeration:
     severity: warning
@@ -2932,13 +2932,13 @@ compliance_rules:
       - "顶级"
       - "国际领先"
     action: suggest_modify
-  
+
   # ========== 价格异常 ==========
   C5_price_anomaly:
     severity: warning
     check: "价格偏离市场均价>50%"
     action: require_confirm
-  
+
   # ========== 图片检查 ==========
   C6_image_check:
     severity: info
@@ -3243,7 +3243,7 @@ RETURN p.name AS product_name,
        p.price AS price,
        collect(DISTINCT suitable.name) AS suitable_for,
        collect(DISTINCT {
-           population: contra.name, 
+           population: contra.name,
            reason: contra_rel.reason
        }) AS contraindicated_for,
        collect(DISTINCT scenario.name) AS scenarios,
@@ -3265,37 +3265,37 @@ RETURN p.name AS product_name,
 
 ```yaml
 redis_keys:
-  
+
   # 热搜词缓存（1小时TTL）
   market:hot_keywords:
     type: string (JSON)
     ttl: 3600
     content: "[{keyword, heat_score, trend}, ...]"
-  
+
   # 竞品数据缓存（30分钟TTL）
   competitor:{competitor_id}:products:
     type: string (JSON)
     ttl: 1800
     content: "[{product_name, price, is_stockout}, ...]"
-  
+
   # 商品信息缓存（5分钟TTL）
   product:{product_id}:
     type: hash
     ttl: 300
     fields: name, price, stock, description
-  
+
   # 图谱查询缓存（10分钟TTL）
   graph:product:{product_id}:context:
     type: string (JSON)
     ttl: 600
     content: "{suitable_for, contraindicated_for, related_products, ...}"
-  
+
   # 客服会话缓存（30分钟TTL）
   session:{session_id}:
     type: hash
     ttl: 1800
     fields: user_id, conversation_history, last_intent, mentioned_products
-  
+
   # Prophet预测缓存（1小时TTL）
   prophet:{product_id}:forecast:
     type: string (JSON)
@@ -3367,16 +3367,16 @@ redis_keys:
 ```python
 class ActionBookSkill:
     """ActionBook RPA采集技能"""
-    
+
     async def meituan_keywords(
-        self, 
-        store_id: str, 
+        self,
+        store_id: str,
         category: str = None,
         limit: int = 50
     ) -> List[dict]:
         """获取美团热搜词"""
         pass
-    
+
     async def competitor_stores(
         self,
         store_id: str,
@@ -3384,7 +3384,7 @@ class ActionBookSkill:
     ) -> List[dict]:
         """获取周边竞品店铺"""
         pass
-    
+
     async def alibaba_search(
         self,
         keyword: str,
@@ -3393,7 +3393,7 @@ class ActionBookSkill:
     ) -> List[dict]:
         """搜索1688商品"""
         pass
-    
+
     async def pdd_search(
         self,
         keyword: str,
@@ -3402,7 +3402,7 @@ class ActionBookSkill:
     ) -> List[dict]:
         """搜索拼多多商品"""
         pass
-    
+
     async def pdd_detail(
         self,
         url: str
@@ -3452,7 +3452,7 @@ class ActionBookSkill:
 ```python
 class Neo4jSkill:
     """Neo4j图谱+向量检索技能"""
-    
+
     async def vector_search(
         self,
         query_embedding: List[float],
@@ -3463,15 +3463,15 @@ class Neo4jSkill:
         query = """
         CALL db.index.vector.queryNodes($index_name, $limit, $embedding)
         YIELD node, score
-        RETURN node.product_id as id, node.name as name, 
+        RETURN node.product_id as id, node.name as name,
                node.description as description, score
         """
-        return await self.execute(query, 
-            index_name=index_name, 
-            embedding=query_embedding, 
+        return await self.execute(query,
+            index_name=index_name,
+            embedding=query_embedding,
             limit=limit
         )
-    
+
     async def hybrid_search(
         self,
         query: str,
@@ -3482,15 +3482,15 @@ class Neo4jSkill:
         """混合检索：向量+关键词+RRF融合"""
         # 1. 向量检索
         vector_results = await self.vector_search(query_embedding, limit=30)
-        
+
         # 2. 关键词检索
         keyword_results = await self.keyword_search(keywords, limit=30)
-        
+
         # 3. RRF融合
         merged = self._rrf_merge(vector_results, keyword_results)
-        
+
         return merged[:limit]
-    
+
     async def get_product_graph(
         self,
         product_id: str
@@ -3503,7 +3503,7 @@ class Neo4jSkill:
         OPTIONAL MATCH (p)-[:USED_IN]->(scenario:Scenario)
         OPTIONAL MATCH (p)-[bought:OFTEN_BOUGHT_WITH]->(related:Product)
         OPTIONAL MATCH (faq:FAQ)-[:ANSWERS]->(p)
-        
+
         RETURN p AS product,
                collect(DISTINCT suitable.name) AS suitable_for,
                collect(DISTINCT {name: contra.name, reason: contra_rel.reason}) AS contraindicated_for,
@@ -3521,16 +3521,16 @@ class Neo4jSkill:
 ```python
 class EmbeddingSkill:
     """文本向量化技能"""
-    
+
     def __init__(self, model_name: str = 'BAAI/bge-large-zh-v1.5'):
         from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer(model_name)
-    
+
     def embed(self, text: str) -> List[float]:
         """单条文本向量化"""
         embedding = self.model.encode(text, normalize_embeddings=True)
         return embedding.tolist()
-    
+
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
         """批量文本向量化"""
         embeddings = self.model.encode(texts, normalize_embeddings=True)
@@ -3544,14 +3544,14 @@ class EmbeddingSkill:
 ```python
 class RerankerSkill:
     """BGE Reranker精排技能"""
-    
+
     def __init__(self, model_name: str = 'BAAI/bge-reranker-v2-m3'):
         from sentence_transformers import CrossEncoder
         self.model = CrossEncoder(model_name)
-    
+
     def rerank(
-        self, 
-        query: str, 
+        self,
+        query: str,
         documents: List[dict],
         text_field: str = 'description',
         top_k: int = 5
@@ -3559,7 +3559,7 @@ class RerankerSkill:
         """对候选文档重排序"""
         pairs = [[query, doc.get(text_field, '')] for doc in documents]
         scores = self.model.predict(pairs)
-        
+
         ranked = sorted(zip(documents, scores), key=lambda x: -x[1])
         return [item[0] for item in ranked[:top_k]]
 ```
@@ -3571,7 +3571,7 @@ class RerankerSkill:
 ```python
 class ProphetSkill:
     """Prophet时序预测技能"""
-    
+
     async def train_model(
         self,
         product_id: str,
@@ -3585,12 +3585,12 @@ class ProphetSkill:
             interval_width=0.95
         )
         model.fit(sales_data)
-        
+
         # 序列化保存
         await self._save_model(product_id, model)
-        
+
         return {"status": "trained", "samples": len(sales_data)}
-    
+
     async def detect_anomaly(
         self,
         product_id: str,
@@ -3601,13 +3601,13 @@ class ProphetSkill:
         model = await self._load_model(product_id)
         if not model:
             return {"is_anomaly": False, "reason": "no_model"}
-        
+
         forecast = model.predict(pd.DataFrame({'ds': [date]}))
-        
+
         yhat = forecast['yhat'].iloc[0]
         lower = forecast['yhat_lower'].iloc[0]
         upper = forecast['yhat_upper'].iloc[0]
-        
+
         if actual_sales < lower:
             return {
                 "is_anomaly": True,
@@ -3624,7 +3624,7 @@ class ProphetSkill:
                 "actual": actual_sales,
                 "bounds": [lower, upper]
             }
-        
+
         return {"is_anomaly": False}
 ```
 
@@ -3635,7 +3635,7 @@ class ProphetSkill:
 ```python
 class NotifierSkill:
     """企业微信通知技能"""
-    
+
     async def send_alert(
         self,
         severity: str,
@@ -3647,7 +3647,7 @@ class NotifierSkill:
     ):
         """发送预警通知"""
         emoji = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}
-        
+
         message = f"""
 {emoji.get(severity, '')} 【{severity.upper()}预警】{title}
 
@@ -3658,9 +3658,9 @@ class NotifierSkill:
 
 ⏰ 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
         """
-        
+
         await self._send_wechat_work(message)
-    
+
     async def send_daily_report(
         self,
         date: str,
@@ -3688,7 +3688,7 @@ selection_scoring:
     profit_margin: 0.20    # 利润空间
     category_synergy: 0.10 # 品类协同
     seasonal_fit: 0.05     # 季节契合
-  
+
   # 权重可调范围
   weight_ranges:
     market_heat: [0.15, 0.35]
@@ -3697,7 +3697,7 @@ selection_scoring:
     profit_margin: [0.15, 0.30]
     category_synergy: [0.05, 0.20]
     seasonal_fit: [0.00, 0.15]
-  
+
   # 推荐阈值
   thresholds:
     strong_recommend: 80   # ≥80 强烈推荐
@@ -3709,10 +3709,10 @@ heat_score:
   # 搜索量归一化阈值
   volume_thresholds: [1000, 5000, 10000, 50000]
   volume_scores: [0.2, 0.4, 0.6, 0.8, 1.0]
-  
+
   # 增长率上限
   growth_cap: 0.5
-  
+
   # 转化率基准
   conversion_baseline: 0.1
 
@@ -3736,7 +3736,7 @@ margin:
   good_threshold: 0.40
   fair_threshold: 0.30
   minimum_threshold: 0.25  # 低于此值不推荐
-  
+
   # 成本倍率
   cost_multiplier: 2.5
 ```
@@ -3751,15 +3751,15 @@ margin:
 prophet:
   # 置信区间
   interval_width: 0.95
-  
+
   # 最小训练样本
   min_training_days: 14
-  
+
   # 季节性配置
   yearly_seasonality: false
   weekly_seasonality: true
   daily_seasonality: false
-  
+
   # 变化点灵敏度
   changepoint_prior_scale: 0.05
 
@@ -3817,11 +3817,11 @@ conversion_drop:
 intent:
   # 模型选择
   model: claude-haiku  # 意图识别用Haiku降本
-  
+
   # 置信度阈值
   high_confidence: 0.9
   low_confidence: 0.7
-  
+
   # 转人工触发词
   human_handoff_keywords:
     - 投诉
@@ -3839,21 +3839,21 @@ retrieval:
   # Hybrid Search配置
   vector_weight: 0.6
   keyword_weight: 0.4
-  
+
   # 召回数量
   initial_recall: 50
   after_rerank: 5
-  
+
   # RRF参数
   rrf_k: 60
 
 reply:
   # 回复长度限制
   max_length: 150
-  
+
   # 追销配置
   max_upsell_products: 2
-  
+
   # 模型选择
   model: claude-sonnet-4-20250514
 ```
@@ -3870,7 +3870,7 @@ llm:
     simple: claude-haiku           # 简单任务
     default: claude-sonnet-4-20250514   # 常规任务
     complex: claude-opus-4-20250514      # 复杂决策
-  
+
   temperature: 0  # 确定性输出
   max_tokens: 4096
   max_retries: 3
@@ -3974,7 +3974,7 @@ services:
 langfuse:
   enabled: true
   trace_sample_rate: 1.0  # 100%追踪
-  
+
   # 追踪维度
   trace_metadata:
     - agent_name
@@ -3991,19 +3991,19 @@ prometheus:
     - name: agent_execution_duration_seconds
       type: histogram
       labels: [agent, sub_agent, status]
-    
+
     - name: llm_tokens_total
       type: counter
       labels: [model, agent]
-    
+
     - name: llm_cost_usd_total
       type: counter
       labels: [model]
-    
+
     - name: alerts_triggered_total
       type: counter
       labels: [type, severity]
-    
+
     - name: customer_service_messages_total
       type: counter
       labels: [intent, handled_by]
@@ -4015,12 +4015,12 @@ alerting:
       condition: api_latency_p99 > 5s for 5m
       severity: warning
       notify: wechat_work
-    
+
     - name: LLM成本异常
       condition: daily_llm_cost > $50
       severity: warning
       notify: wechat_work
-    
+
     - name: 选品任务失败
       condition: selection_run_failed
       severity: critical
@@ -4147,20 +4147,20 @@ def calculate_selection_outcome(product_id: str, days: int = 30) -> float:
     purchased = get_purchase_status(product_id)
     if not purchased:
         return 0.0
-    
+
     # 销量表现 (vs 预期)
     actual_sales = get_sales(product_id, days)
     expected_sales = get_expected_sales(product_id)
     sales_ratio = min(actual_sales / max(expected_sales, 1), 2.0) / 2.0  # 0-1
-    
+
     # 毛利表现
     margin = get_margin(product_id)
     margin_score = min(margin / 0.5, 1.0)  # 50%毛利得1分
-    
+
     # 是否滞销
     is_slow = is_slow_moving(product_id)
     slow_penalty = 0.5 if is_slow else 1.0
-    
+
     # 综合得分
     outcome = (sales_ratio * 0.4 + margin_score * 0.4 + 0.2) * slow_penalty
     return outcome
@@ -4181,28 +4181,28 @@ from sklearn.model_selection import train_test_split
 
 class SelectionRanker:
     """选品排序模型 - 自动学习权重"""
-    
+
     def __init__(self):
         self.model = None
         self.feature_names = [
             'market_heat',
-            'competition_gap', 
+            'competition_gap',
             'supply_chain',
             'profit_margin',
             'category_synergy',
             'seasonal_fit'
         ]
-    
+
     def prepare_training_data(self, days: int = 60) -> tuple:
         """
         准备训练数据
         """
         # 获取历史推荐记录
         recommendations = get_historical_recommendations(days)
-        
+
         X = []  # 特征
         y = []  # 效果得分
-        
+
         for rec in recommendations:
             features = [
                 rec['market_heat_score'],
@@ -4213,57 +4213,57 @@ class SelectionRanker:
                 rec['seasonal_fit_score']
             ]
             outcome = calculate_selection_outcome(rec['product_id'])
-            
+
             X.append(features)
             y.append(outcome)
-        
+
         return np.array(X), np.array(y)
-    
+
     def train(self):
         """训练模型"""
         X, y = self.prepare_training_data()
-        
+
         if len(X) < 100:
             print("样本不足100条，暂不训练")
             return False
-        
+
         X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2)
-        
+
         self.model = xgb.XGBRegressor(
             n_estimators=100,
             max_depth=4,
             learning_rate=0.1,
             objective='reg:squarederror'
         )
-        
+
         self.model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
             early_stopping_rounds=10,
             verbose=False
         )
-        
+
         # 输出学到的特征重要性（即权重）
         importances = self.model.feature_importances_
         learned_weights = dict(zip(self.feature_names, importances))
-        
+
         print("学到的权重:", learned_weights)
         return learned_weights
-    
+
     def predict(self, features: dict) -> float:
         """预测选品得分"""
         if self.model is None:
             # 模型未训练，使用默认权重
             return self._default_score(features)
-        
+
         X = [[features[name] for name in self.feature_names]]
         return self.model.predict(X)[0]
-    
+
     def get_learned_weights(self) -> dict:
         """获取学到的权重（归一化）"""
         if self.model is None:
             return None
-        
+
         importances = self.model.feature_importances_
         total = sum(importances)
         normalized = {name: imp/total for name, imp in zip(self.feature_names, importances)}
@@ -4276,20 +4276,20 @@ class SelectionRanker:
 # 每周日凌晨执行
 async def weekly_model_update():
     ranker = SelectionRanker()
-    
+
     # 训练模型
     learned_weights = ranker.train()
-    
+
     if learned_weights:
         # 保存学到的权重
         await save_learned_weights(learned_weights)
-        
+
         # 与当前权重对比
         current_weights = await get_current_weights()
-        
+
         # 生成调整建议
         suggestions = generate_weight_suggestions(current_weights, learned_weights)
-        
+
         # 通知运营审核
         await notify_weight_update(suggestions)
 ```
@@ -4308,7 +4308,7 @@ from bayes_opt import BayesianOptimization
 
 class WeightOptimizer:
     """贝叶斯优化自动调参"""
-    
+
     def __init__(self):
         # 权重搜索范围
         self.pbounds = {
@@ -4319,7 +4319,7 @@ class WeightOptimizer:
             'category_synergy': (0.05, 0.20),
             'seasonal_fit': (0.00, 0.15)
         }
-    
+
     def objective(self, **weights) -> float:
         """
         目标函数：评估一组权重的效果
@@ -4328,10 +4328,10 @@ class WeightOptimizer:
         # 归一化权重
         total = sum(weights.values())
         normalized = {k: v/total for k, v in weights.items()}
-        
+
         # 用这组权重重新计算历史推荐的得分
         historical_recs = get_historical_recommendations(days=30)
-        
+
         total_outcome = 0
         for rec in historical_recs:
             # 用新权重计算得分
@@ -4339,15 +4339,15 @@ class WeightOptimizer:
                 normalized[dim] * rec[f'{dim}_score']
                 for dim in weights.keys()
             )
-            
+
             # 获取实际效果
             actual_outcome = calculate_selection_outcome(rec['product_id'])
-            
+
             # 计算相关性（得分高的是否效果好）
             total_outcome += new_score * actual_outcome
-        
+
         return total_outcome / len(historical_recs)
-    
+
     def optimize(self, n_iter: int = 50) -> dict:
         """运行优化"""
         optimizer = BayesianOptimization(
@@ -4355,19 +4355,19 @@ class WeightOptimizer:
             pbounds=self.pbounds,
             random_state=42
         )
-        
+
         optimizer.maximize(
             init_points=10,
             n_iter=n_iter
         )
-        
+
         # 获取最优权重
         best_weights = optimizer.max['params']
-        
+
         # 归一化
         total = sum(best_weights.values())
         normalized = {k: round(v/total, 2) for k, v in best_weights.items()}
-        
+
         return normalized
 ```
 
@@ -4383,7 +4383,7 @@ class WeightOptimizer:
 ```python
 class OnlineWeightLearner:
     """在线学习权重调整"""
-    
+
     def __init__(self, learning_rate: float = 0.01):
         self.lr = learning_rate
         self.weights = {
@@ -4402,11 +4402,11 @@ class OnlineWeightLearner:
             'category_synergy': (0.05, 0.20),
             'seasonal_fit': (0.00, 0.15)
         }
-    
+
     def update(self, features: dict, outcome: float, predicted: float):
         """
         根据反馈更新权重
-        
+
         Args:
             features: 各维度得分 {'market_heat': 85, ...}
             outcome: 实际效果 (0-1)
@@ -4414,22 +4414,22 @@ class OnlineWeightLearner:
         """
         # 计算误差
         error = outcome - (predicted / 100)
-        
+
         # 梯度更新
         for dim, score in features.items():
             gradient = error * (score / 100)
             new_weight = self.weights[dim] + self.lr * gradient
-            
+
             # 限制在范围内
             min_w, max_w = self.bounds[dim]
             new_weight = max(min_w, min(max_w, new_weight))
-            
+
             self.weights[dim] = new_weight
-        
+
         # 归一化
         total = sum(self.weights.values())
         self.weights = {k: v/total for k, v in self.weights.items()}
-        
+
         return self.weights
 ```
 
@@ -4446,15 +4446,15 @@ async def calibrate_volume_thresholds():
     """
     # 获取过去30天热搜词数据
     keywords = await get_meituan_keywords(days=30)
-    
+
     volumes = [k['search_volume'] for k in keywords]
-    
+
     # 计算分位数
     p25 = np.percentile(volumes, 25)
     p50 = np.percentile(volumes, 50)
     p75 = np.percentile(volumes, 75)
     p90 = np.percentile(volumes, 90)
-    
+
     # 更新阈值
     new_thresholds = [
         int(p25),   # 低热度
@@ -4462,7 +4462,7 @@ async def calibrate_volume_thresholds():
         int(p75),   # 高热度
         int(p90)    # 爆款
     ]
-    
+
     return new_thresholds
 ```
 
@@ -4475,14 +4475,14 @@ async def calibrate_anomaly_thresholds():
     """
     # 获取过去30天的预警记录
     alerts = await get_alerts(days=30)
-    
+
     # 计算误报率
     false_positives = len([a for a in alerts if a['status'] == 'ignored'])
     total = len(alerts)
     fp_rate = false_positives / max(total, 1)
-    
+
     current_threshold = await get_config('sales_zscore_drop')
-    
+
     if fp_rate > 0.3:
         # 误报太多，放宽阈值
         new_threshold = current_threshold - 0.2  # 如 -2.5 → -2.7
@@ -4493,7 +4493,7 @@ async def calibrate_anomaly_thresholds():
         print(f"误报率{fp_rate:.1%}较低，收紧阈值: {current_threshold} → {new_threshold}")
     else:
         new_threshold = current_threshold
-    
+
     return new_threshold
 ```
 
@@ -4546,7 +4546,7 @@ async def calibrate_anomaly_thresholds():
 
 ```yaml
 scheduled_learning_tasks:
-  
+
   # 每日：阈值校准
   daily_calibration:
     cron: "0 4 * * *"
@@ -4554,7 +4554,7 @@ scheduled_learning_tasks:
       - calibrate_volume_thresholds
       - calibrate_anomaly_thresholds
     auto_apply: true  # 自动生效
-  
+
   # 每周：权重学习
   weekly_weight_learning:
     cron: "0 3 * * 0"
@@ -4563,7 +4563,7 @@ scheduled_learning_tasks:
       - run_bayesian_optimization
     auto_apply: false  # 需人工审核
     notify: true
-  
+
   # 每月：全量回测
   monthly_backtest:
     cron: "0 2 1 * *"
@@ -4580,11 +4580,11 @@ scheduled_learning_tasks:
 ```python
 class ParameterVersionManager:
     """参数版本管理"""
-    
+
     async def create_version(self, params: dict, source: str) -> str:
         """创建新版本"""
         version_id = f"v_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         await db.insert('parameter_versions', {
             'version_id': version_id,
             'params': params,
@@ -4593,29 +4593,29 @@ class ParameterVersionManager:
             'created_at': datetime.now(),
             'metrics': None  # 上线后填充效果指标
         })
-        
+
         return version_id
-    
+
     async def approve_and_activate(self, version_id: str):
         """审核通过并激活"""
         # 归档当前版本
         current = await self.get_active_version()
         if current:
-            await db.update('parameter_versions', 
-                {'version_id': current['version_id']}, 
+            await db.update('parameter_versions',
+                {'version_id': current['version_id']},
                 {'status': 'archived'}
             )
-        
+
         # 激活新版本
         await db.update('parameter_versions',
             {'version_id': version_id},
             {'status': 'active', 'activated_at': datetime.now()}
         )
-        
+
         # 更新配置
         new_params = await self.get_version(version_id)
         await update_runtime_config(new_params['params'])
-    
+
     async def rollback(self, to_version_id: str):
         """回滚到指定版本"""
         await self.approve_and_activate(to_version_id)
@@ -4632,30 +4632,30 @@ class ParameterVersionManager:
 
 learning:
   enabled: true
-  
+
   # 权重学习
   weight_learning:
     method: xgboost  # xgboost / bayesian / online
     min_samples: 100
     retrain_frequency: weekly
     auto_apply: false  # 需人工审核
-  
+
   # 阈值校准
   threshold_calibration:
     enabled: true
     frequency: daily
     auto_apply: true
-    
+
     targets:
       - volume_thresholds
       - anomaly_zscore
       - margin_thresholds
-  
+
   # 效果追踪
   outcome_tracking:
     enabled: true
     evaluation_days: 30  # 采购后30天评估效果
-    
+
     metrics:
       - adoption_rate    # 推荐采纳率
       - sales_vs_expected  # 销量达成率
@@ -4703,7 +4703,7 @@ learning:
     "recommendation_id": "R001",
     "product_keyword": "电子血压计",
     "timestamp": "2026-03-01",
-    
+
     # 特征（即评分维度的原始分数）
     "features": {
         "market_heat_score": 75,
@@ -4713,10 +4713,10 @@ learning:
         "category_synergy_score": 50,
         "seasonal_fit_score": 40
     },
-    
+
     # 当时的加权总分
     "predicted_score": 68.5,
-    
+
     # 实际效果（标签）
     "outcome": {
         "was_purchased": true,           # 是否采购
@@ -4725,7 +4725,7 @@ learning:
         "actual_margin": 0.42,           # 实际毛利
         "days_to_first_sale": 2          # 首单天数
     },
-    
+
     # 综合效果评分（0-1）
     "outcome_score": 0.85
 }
@@ -4740,13 +4740,13 @@ def calculate_outcome_score(outcome: dict) -> float:
     """
     if not outcome['was_purchased']:
         return 0.0
-    
+
     score = 0.0
-    
+
     # 销量达成（40%权重）
     sales_ratio = outcome['actual_monthly_sales'] / max(outcome['expected_sales'], 1)
     score += min(sales_ratio, 1.5) / 1.5 * 0.4
-    
+
     # 毛利达成（30%权重）
     if outcome['actual_margin'] >= 0.40:
         score += 0.3
@@ -4754,16 +4754,16 @@ def calculate_outcome_score(outcome: dict) -> float:
         score += 0.2
     elif outcome['actual_margin'] >= 0.25:
         score += 0.1
-    
+
     # 动销速度（20%权重）
     if outcome['days_to_first_sale'] <= 3:
         score += 0.2
     elif outcome['days_to_first_sale'] <= 7:
         score += 0.1
-    
+
     # 采购转化（10%权重）
     score += 0.1  # 已采购
-    
+
     return score
 ```
 
@@ -4777,7 +4777,7 @@ class WeightLearner:
     """
     自动学习评分权重
     """
-    
+
     def __init__(self):
         self.model = xgb.XGBRanker(
             objective='rank:pairwise',
@@ -4787,45 +4787,45 @@ class WeightLearner:
         )
         self.feature_names = [
             'market_heat_score',
-            'competition_gap_score', 
+            'competition_gap_score',
             'supply_chain_score',
             'profit_margin_score',
             'category_synergy_score',
             'seasonal_fit_score'
         ]
-    
+
     def prepare_data(self, recommendations: List[dict]):
         """准备训练数据"""
         X = []
         y = []
-        
+
         for rec in recommendations:
             features = [rec['features'][f] for f in self.feature_names]
             X.append(features)
             y.append(rec['outcome_score'])
-        
+
         return np.array(X), np.array(y)
-    
+
     def train(self, recommendations: List[dict]):
         """训练模型"""
         X, y = self.prepare_data(recommendations)
-        
+
         # 按时间分组（同一天的推荐作为一组）
         groups = self._get_groups(recommendations)
-        
+
         self.model.fit(X, y, group=groups)
-        
+
         # 提取学到的权重（特征重要性）
         importance = self.model.feature_importances_
         learned_weights = importance / importance.sum()
-        
+
         return dict(zip(self.feature_names, learned_weights))
-    
+
     def get_learned_weights(self) -> dict:
         """获取学习到的权重"""
         importance = self.model.feature_importances_
         normalized = importance / importance.sum()
-        
+
         return {
             'market_heat': round(normalized[0], 2),
             'competition_gap': round(normalized[1], 2),
@@ -4845,27 +4845,27 @@ async def weekly_weight_optimization():
     """
     # 1. 获取最近30天的选品效果数据
     recommendations = await db.get_recommendations_with_outcomes(days=30)
-    
+
     if len(recommendations) < 100:
         logger.info("数据不足，跳过本次优化")
         return
-    
+
     # 2. 训练模型
     learner = WeightLearner()
     learned_weights = learner.train(recommendations)
-    
+
     # 3. 验证权重合理性（业务约束）
     if not validate_weights(learned_weights):
         logger.warning("学习到的权重不符合业务约束，使用默认值")
         return
-    
+
     # 4. A/B测试：50%流量使用新权重
     await config.set_ab_test_weights(
         control=current_weights,
         treatment=learned_weights,
         traffic_split=0.5
     )
-    
+
     # 5. 一周后评估效果
     # 如果treatment组效果更好，全量切换
 
@@ -4874,15 +4874,15 @@ def validate_weights(weights: dict) -> bool:
     # 利润权重不能太低
     if weights['profit_margin'] < 0.15:
         return False
-    
+
     # 供应链权重不能太低
     if weights['supply_chain'] < 0.10:
         return False
-    
+
     # 单一维度不能过高
     if max(weights.values()) > 0.40:
         return False
-    
+
     return True
 ```
 
@@ -4901,7 +4901,7 @@ class AdaptiveThresholds:
     """
     自适应阈值管理
     """
-    
+
     async def update_volume_thresholds(self):
         """
         根据实际搜索量分布更新阈值
@@ -4909,31 +4909,31 @@ class AdaptiveThresholds:
         # 获取近30天的热搜词数据
         keywords = await actionbook.get_historical_keywords(days=30)
         volumes = [k['search_volume'] for k in keywords]
-        
+
         # 计算分位数
         p20 = np.percentile(volumes, 20)
         p40 = np.percentile(volumes, 40)
         p60 = np.percentile(volumes, 60)
         p80 = np.percentile(volumes, 80)
-        
+
         new_thresholds = [
             int(p20),   # 低热度
             int(p40),   # 中低热度
             int(p60),   # 中等热度
             int(p80)    # 高热度
         ]
-        
+
         # 平滑更新（避免剧烈变化）
         current = config.get('volume_thresholds')
         smoothed = [
-            int(0.7 * c + 0.3 * n) 
+            int(0.7 * c + 0.3 * n)
             for c, n in zip(current, new_thresholds)
         ]
-        
+
         await config.set('volume_thresholds', smoothed)
-        
+
         return smoothed
-    
+
     async def update_margin_thresholds(self):
         """
         根据实际毛利分布更新阈值
@@ -4941,12 +4941,12 @@ class AdaptiveThresholds:
         # 获取在售商品的毛利率
         products = await db.get_active_products_with_margin()
         margins = [p['gross_margin'] for p in products]
-        
+
         # 计算分位数
         excellent = np.percentile(margins, 80)  # Top 20%
         good = np.percentile(margins, 60)       # Top 40%
         fair = np.percentile(margins, 40)       # Top 60%
-        
+
         # 业务底线约束
         new_thresholds = {
             'excellent': max(excellent, 0.40),  # 不低于40%
@@ -4954,7 +4954,7 @@ class AdaptiveThresholds:
             'fair': max(fair, 0.25),            # 不低于25%
             'minimum': 0.20                      # 硬底线不变
         }
-        
+
         await config.set('margin_thresholds', new_thresholds)
 ```
 
@@ -4967,16 +4967,16 @@ async def update_anomaly_thresholds():
     """
     # 获取近60天的预警记录
     alerts = await db.get_alerts(days=60)
-    
+
     # 统计误报率
     false_positive_rate = len([a for a in alerts if a['was_false_positive']]) / len(alerts)
-    
+
     # 统计漏报（通过人工标记）
     missed_alerts = await db.get_missed_anomalies(days=60)
     false_negative_rate = len(missed_alerts) / (len(alerts) + len(missed_alerts))
-    
+
     current_zscore = config.get('sales_zscore_drop')
-    
+
     # 调整策略
     if false_positive_rate > 0.30:
         # 误报太多，放宽阈值
@@ -4986,10 +4986,10 @@ async def update_anomaly_thresholds():
         new_zscore = current_zscore + 0.2  # 从-2.5调到-2.3
     else:
         new_zscore = current_zscore
-    
+
     # 限制范围
     new_zscore = max(-3.5, min(-1.5, new_zscore))
-    
+
     await config.set('sales_zscore_drop', new_zscore)
 ```
 
@@ -5006,7 +5006,7 @@ class ParameterOptimizer:
     """
     贝叶斯优化参数
     """
-    
+
     def __init__(self):
         self.optimizer = BayesianOptimization(
             f=self.objective_function,
@@ -5020,7 +5020,7 @@ class ParameterOptimizer:
             },
             random_state=42
         )
-    
+
     def objective_function(self, **params) -> float:
         """
         目标函数：使用参数运行选品，评估效果
@@ -5040,30 +5040,30 @@ class ParameterOptimizer:
                 0.10
             ])
         }
-        
+
         # 使用历史数据回测
         score = self.backtest(weights, params)
-        
+
         return score
-    
+
     def backtest(self, weights: dict, params: dict) -> float:
         """
         历史数据回测，返回效果评分
         """
         # 获取历史推荐和实际效果
         historical = db.get_historical_recommendations(days=60)
-        
+
         total_score = 0
         for rec in historical:
             # 用新权重重新计算得分
             new_score = self.calculate_score(rec['features'], weights)
-            
+
             # 看新得分的排序是否和实际效果一致
             correlation = self.rank_correlation(new_score, rec['outcome_score'])
             total_score += correlation
-        
+
         return total_score / len(historical)
-    
+
     def optimize(self, n_iter: int = 50):
         """运行优化"""
         self.optimizer.maximize(n_iter=n_iter)
@@ -5118,26 +5118,26 @@ class ParameterOptimizer:
 
 ```yaml
 parameter_learning:
-  
+
   # 权重学习（每周一凌晨）
   weight_learning:
     schedule: "0 3 * * 1"
     min_samples: 100
     method: "xgboost_ltr"
     auto_apply: false  # 需要A/B测试验证
-  
+
   # 阈值自适应（每天凌晨）
   threshold_adaptation:
     schedule: "0 4 * * *"
     smoothing_factor: 0.3
     auto_apply: true
-  
+
   # 异常检测阈值（每周）
   anomaly_threshold:
     schedule: "0 5 * * 1"
     target_fpr: 0.20  # 目标误报率20%
     auto_apply: true
-  
+
   # 贝叶斯全局优化（每月）
   bayesian_optimization:
     schedule: "0 2 1 * *"

@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DailyReport:
     """日报数据模型"""
+
     date: str
     # 销售指标
     revenue: float = 0
@@ -67,10 +68,18 @@ class DailyReportService:
         report.order_count = today_stats["orders"]
         report.avg_order_value = round(report.revenue / max(report.order_count, 1), 2)
 
-        report.revenue_vs_yesterday = self._pct_change(today_stats["revenue"], yesterday_stats["revenue"])
-        report.revenue_vs_last_week = self._pct_change(today_stats["revenue"], last_week_stats["revenue"])
-        report.order_vs_yesterday = self._pct_change(today_stats["orders"], yesterday_stats["orders"])
-        report.order_vs_last_week = self._pct_change(today_stats["orders"], last_week_stats["orders"])
+        report.revenue_vs_yesterday = self._pct_change(
+            today_stats["revenue"], yesterday_stats["revenue"]
+        )
+        report.revenue_vs_last_week = self._pct_change(
+            today_stats["revenue"], last_week_stats["revenue"]
+        )
+        report.order_vs_yesterday = self._pct_change(
+            today_stats["orders"], yesterday_stats["orders"]
+        )
+        report.order_vs_last_week = self._pct_change(
+            today_stats["orders"], last_week_stats["orders"]
+        )
 
         # ── Top 3 热销 + Top 3 滞销 ──
         top_rows = await pool.fetch(
@@ -103,19 +112,20 @@ class DailyReportService:
         report.slow_products = [dict(r) for r in slow_rows]
 
         # ── 客服统计 ──
-        cs_row = await pool.fetchrow(
-            "SELECT * FROM cs_analytics WHERE date = $1", report_date
-        )
+        cs_row = await pool.fetchrow("SELECT * FROM cs_analytics WHERE date = $1", report_date)
         if cs_row:
             report.cs_total = cs_row["total_inquiries"]
             report.cs_ai_ratio = round(cs_row["ai_handled"] / max(cs_row["total_inquiries"], 1), 2)
             report.cs_human_transfer = cs_row["human_transfer"]
         else:
             # Fallback: count from sessions
-            cs_count = await pool.fetchval(
-                "SELECT COUNT(*)::int FROM cs_sessions WHERE created_at::date = $1",
-                report_date,
-            ) or 0
+            cs_count = (
+                await pool.fetchval(
+                    "SELECT COUNT(*)::int FROM cs_sessions WHERE created_at::date = $1",
+                    report_date,
+                )
+                or 0
+            )
             report.cs_total = cs_count
 
         # ── 预警摘要 ──
@@ -181,13 +191,19 @@ class DailyReportService:
             lines.append("")
             lines.append("🐌 滞销 Top 3:")
             for i, p in enumerate(report.slow_products, 1):
-                lines.append(f"  {i}. {p['name']}  库存{p.get('stock', 0)}  7日仅售{p.get('daily_sales', 0)}")
+                lines.append(
+                    f"  {i}. {p['name']}  库存{p.get('stock', 0)}  7日仅售{p.get('daily_sales', 0)}"
+                )
 
         lines.append("")
-        lines.append(f"💬 客服: 咨询{report.cs_total}次  AI处理{report.cs_ai_ratio:.0%}  转人工{report.cs_human_transfer}")
+        lines.append(
+            f"💬 客服: 咨询{report.cs_total}次  AI处理{report.cs_ai_ratio:.0%}  转人工{report.cs_human_transfer}"
+        )
 
         if report.alerts_triggered:
-            lines.append(f"🔔 预警: 触发{report.alerts_triggered}  待处理{report.alerts_pending}  已解决{report.alerts_resolved}")
+            lines.append(
+                f"🔔 预警: 触发{report.alerts_triggered}  待处理{report.alerts_pending}  已解决{report.alerts_resolved}"
+            )
 
         if report.todo_items:
             lines.append("")

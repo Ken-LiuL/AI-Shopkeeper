@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import time
-from http.cookiejar import MozillaCookieJar
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +21,12 @@ class CookieManager:
     - 支持从浏览器导入 Cookie
     """
 
-    def __init__(self, storage_dir: Optional[str] = None):
+    def __init__(self, storage_dir: str | None = None):
         self._storage_dir = Path(storage_dir or "data/cookies")
         self._storage_dir.mkdir(parents=True, exist_ok=True)
-        self._cookies: Dict[str, Dict[str, CookieEntry]] = {}  # domain -> {name: entry}
+        self._cookies: dict[str, dict[str, CookieEntry]] = {}  # domain -> {name: entry}
 
-    def get_cookies(self, domain: str, account: str = "default") -> Dict[str, str]:
+    def get_cookies(self, domain: str, account: str = "default") -> dict[str, str]:
         """获取指定域名的 Cookie。
 
         Args:
@@ -54,7 +53,7 @@ class CookieManager:
     def set_cookies(
         self,
         domain: str,
-        cookies: Dict[str, str],
+        cookies: dict[str, str],
         account: str = "default",
         ttl: int = 86400,
     ) -> None:
@@ -86,7 +85,7 @@ class CookieManager:
 
     def import_browser_cookies(
         self,
-        cookies: List[Dict[str, Any]],
+        cookies: list[dict[str, Any]],
         account: str = "default",
     ) -> int:
         """从浏览器导出的 Cookie 列表导入。
@@ -99,7 +98,6 @@ class CookieManager:
             导入数量
         """
         count = 0
-        by_domain: Dict[str, Dict[str, str]] = {}
 
         for c in cookies:
             domain = c.get("domain", "").lstrip(".")
@@ -126,7 +124,9 @@ class CookieManager:
             count += 1
 
         # 持久化
-        for key in set(f"{c.get('domain', '').lstrip('.')}:{account}" for c in cookies if c.get("domain")):
+        for key in set(
+            f"{c.get('domain', '').lstrip('.')}:{account}" for c in cookies if c.get("domain")
+        ):
             self._save_to_disk(key)
 
         logger.info(f"Imported {count} cookies")
@@ -159,7 +159,7 @@ class CookieManager:
         expired = sum(1 for e in entries.values() if e.expires < now)
         return expired > len(entries) * 0.5
 
-    def clear(self, domain: Optional[str] = None, account: str = "default") -> None:
+    def clear(self, domain: str | None = None, account: str = "default") -> None:
         """清除 Cookie。"""
         if domain:
             key = f"{domain}:{account}"
@@ -175,14 +175,10 @@ class CookieManager:
         cookies = self.get_cookies(domain, account)
         return "; ".join(f"{k}={v}" for k, v in cookies.items())
 
-    def _get_valid_cookies(self, key: str) -> Dict[str, str]:
+    def _get_valid_cookies(self, key: str) -> dict[str, str]:
         now = time.time()
         entries = self._cookies.get(key, {})
-        return {
-            name: entry.value
-            for name, entry in entries.items()
-            if entry.expires > now
-        }
+        return {name: entry.value for name, entry in entries.items() if entry.expires > now}
 
     def _disk_path(self, key: str) -> Path:
         safe_name = key.replace(":", "_").replace("/", "_")
@@ -197,7 +193,7 @@ class CookieManager:
         except Exception as e:
             logger.warning(f"Failed to save cookies to disk: {e}")
 
-    def _load_from_disk(self, key: str) -> Optional[Dict[str, "CookieEntry"]]:
+    def _load_from_disk(self, key: str) -> dict[str, CookieEntry] | None:
         path = self._disk_path(key)
         if not path.exists():
             return None
@@ -236,7 +232,7 @@ class CookieEntry:
         self.secure = secure
         self.http_only = http_only
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
             "value": self.value,
@@ -249,7 +245,7 @@ class CookieEntry:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CookieEntry":
+    def from_dict(cls, data: dict[str, Any]) -> CookieEntry:
         return cls(
             name=data["name"],
             value=data["value"],

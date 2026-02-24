@@ -6,8 +6,8 @@ import asyncio
 import json
 import logging
 import random
+from collections.abc import Callable
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from src.anti_detect.behavior import generate_slider_path
 
@@ -109,9 +109,7 @@ _JS_GET_SLIDER_INFO = """(() => {
 })()"""
 
 
-def _generate_slider_drag_js(
-    start_x: float, start_y: float, distance: float
-) -> str:
+def _generate_slider_drag_js(start_x: float, start_y: float, distance: float) -> str:
     """生成模拟滑块拖动的 JS 代码（含贝塞尔曲线轨迹）。"""
     path = generate_slider_path(start_x, distance, steps=30)
 
@@ -165,12 +163,12 @@ class CaptchaHandler:
     def __init__(
         self,
         max_retries: int = 3,
-        on_manual_needed: Optional[Callable] = None,
+        on_manual_needed: Callable | None = None,
     ):
         self.max_retries = max_retries
         self.on_manual_needed = on_manual_needed  # 回调：需要人工介入时通知
 
-    async def detect(self, browser_eval: Callable) -> Optional[CaptchaType]:
+    async def detect(self, browser_eval: Callable) -> CaptchaType | None:
         """检测页面是否出现验证码。
 
         Args:
@@ -217,7 +215,7 @@ class CaptchaHandler:
         handler = handlers.get(captcha_type, self._handle_unknown)
         return await handler(browser_eval)
 
-    async def detect_and_handle(self, browser_eval: Callable) -> Optional[CaptchaResult]:
+    async def detect_and_handle(self, browser_eval: Callable) -> CaptchaResult | None:
         """检测并自动处理验证码。无验证码返回 None。"""
         captcha_type = await self.detect(browser_eval)
         if not captcha_type:
@@ -254,7 +252,7 @@ class CaptchaHandler:
             start_y = slider["y"] + slider["h"] / 2
 
             js = _generate_slider_drag_js(start_x, start_y, distance)
-            result = await browser_eval(js)
+            await browser_eval(js)
 
             # 等待验证结果
             await asyncio.sleep(1.5)

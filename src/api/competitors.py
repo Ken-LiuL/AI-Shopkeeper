@@ -6,7 +6,6 @@ from fastapi import APIRouter, Query
 
 from src.db import postgres as pg
 
-from .errors import NotFoundError
 from .schemas import APIResponse, PaginatedResponse
 
 router = APIRouter(prefix="/api/competitors", tags=["competitors"])
@@ -22,9 +21,12 @@ async def list_stores(
     offset = (page - 1) * page_size
     rows = await pool.fetch(
         "SELECT * FROM competitor_stores ORDER BY updated_at DESC LIMIT $1 OFFSET $2",
-        page_size, offset,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/stores/{store_id}/products", response_model=PaginatedResponse[dict])
@@ -35,14 +37,19 @@ async def store_products(
 ) -> PaginatedResponse[dict]:
     pool = pg.get_pool()
     total = await pool.fetchval(
-        "SELECT COUNT(*) FROM competitor_products WHERE store_id = $1", store_id,
+        "SELECT COUNT(*) FROM competitor_products WHERE store_id = $1",
+        store_id,
     )
     offset = (page - 1) * page_size
     rows = await pool.fetch(
         "SELECT * FROM competitor_products WHERE store_id = $1 ORDER BY updated_at DESC LIMIT $2 OFFSET $3",
-        store_id, page_size, offset,
+        store_id,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/products", response_model=PaginatedResponse[dict])
@@ -68,10 +75,14 @@ async def search_competitor_products(
     total = await pool.fetchval(f"SELECT COUNT(*) FROM competitor_products{where}", *params)
     offset = (page - 1) * page_size
     rows = await pool.fetch(
-        f"SELECT * FROM competitor_products{where} ORDER BY updated_at DESC LIMIT ${idx} OFFSET ${idx+1}",
-        *params, page_size, offset,
+        f"SELECT * FROM competitor_products{where} ORDER BY updated_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        *params,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/keywords", response_model=APIResponse[list[dict]])

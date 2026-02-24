@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from .base import BaseSyncer, SyncMode, SyncResult, CST
+from .base import CST, BaseSyncer, SyncMode, SyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -36,9 +36,7 @@ class OrderSyncer(BaseSyncer):
         end = datetime.now(CST)
         return await self._sync_date_range(since, end, SyncMode.INCREMENTAL)
 
-    async def _sync_date_range(
-        self, start: datetime, end: datetime, mode: SyncMode
-    ) -> SyncResult:
+    async def _sync_date_range(self, start: datetime, end: datetime, mode: SyncMode) -> SyncResult:
         total = 0
         page = 1
         page_size = 50
@@ -70,13 +68,18 @@ class OrderSyncer(BaseSyncer):
                 page += 1
 
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=True, records_synced=total,
+                syncer_name=self.name,
+                mode=mode,
+                success=True,
+                records_synced=total,
             )
         except Exception as e:
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=False, records_synced=total, error=str(e),
+                syncer_name=self.name,
+                mode=mode,
+                success=False,
+                records_synced=total,
+                error=str(e),
             )
 
     async def _upsert_orders(self, items: list[dict[str, Any]]) -> None:
@@ -91,10 +94,14 @@ class OrderSyncer(BaseSyncer):
             # Detect channel from platform field
             channel = _detect_channel(item)
 
-            items_json = json.dumps(
-                item.get("orderItems", item.get("items", [])),
-                ensure_ascii=False,
-            ) if item.get("orderItems") or item.get("items") else None
+            items_json = (
+                json.dumps(
+                    item.get("orderItems", item.get("items", [])),
+                    ensure_ascii=False,
+                )
+                if item.get("orderItems") or item.get("items")
+                else None
+            )
 
             await self.pool.execute(
                 """
@@ -120,17 +127,40 @@ class OrderSyncer(BaseSyncer):
                 _parse_time(item.get("orderTime", item.get("createTime"))),
                 item.get("deliveryFee", item.get("shippingFee")),
                 item.get("packagingFee", item.get("boxFee")),
-                item.get("phonesuffix", item.get("customerPhone", ""))[-4:] if item.get("phonesuffix") or item.get("customerPhone") else None,
+                item.get("phonesuffix", item.get("customerPhone", ""))[-4:]
+                if item.get("phonesuffix") or item.get("customerPhone")
+                else None,
                 items_json,
                 json.dumps(
-                    {k: v for k, v in item.items()
-                     if k not in {"orderId", "id", "storeName", "poiName",
-                                  "totalAmount", "orderAmount", "paidAmount",
-                                  "actualAmount", "status", "orderStatus",
-                                  "orderTime", "createTime", "deliveryFee",
-                                  "shippingFee", "packagingFee", "boxFee",
-                                  "phonePrefix", "customerPhone", "orderItems", "items"}},
-                    ensure_ascii=False, default=str,
+                    {
+                        k: v
+                        for k, v in item.items()
+                        if k
+                        not in {
+                            "orderId",
+                            "id",
+                            "storeName",
+                            "poiName",
+                            "totalAmount",
+                            "orderAmount",
+                            "paidAmount",
+                            "actualAmount",
+                            "status",
+                            "orderStatus",
+                            "orderTime",
+                            "createTime",
+                            "deliveryFee",
+                            "shippingFee",
+                            "packagingFee",
+                            "boxFee",
+                            "phonePrefix",
+                            "customerPhone",
+                            "orderItems",
+                            "items",
+                        }
+                    },
+                    ensure_ascii=False,
+                    default=str,
                 ),
             )
 
@@ -151,7 +181,7 @@ def _parse_time(val: Any) -> Any:
         return None
     if isinstance(val, datetime):
         return val
-    if isinstance(val, (int, float)):
+    if isinstance(val, int | float):
         # Epoch millis
         if val > 1e12:
             val = val / 1000

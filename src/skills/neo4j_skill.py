@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import asyncio
+from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class VectorSearchResult(BaseModel):
     id: str
@@ -15,28 +16,32 @@ class VectorSearchResult(BaseModel):
     description: str = ""
     score: float
 
+
 class KeywordSearchResult(BaseModel):
     id: str
     name: str
     description: str = ""
     score: float
 
+
 class ProductGraph(BaseModel):
     product_id: str
     name: str
     description: str = ""
     price: float = 0.0
-    suitable_for: List[str] = Field(default_factory=list)
-    contraindicated_for: List[Dict[str, str]] = Field(default_factory=list)
-    scenarios: List[str] = Field(default_factory=list)
-    related_products: List[Dict[str, Any]] = Field(default_factory=list)
-    faqs: List[Dict[str, str]] = Field(default_factory=list)
+    suitable_for: list[str] = Field(default_factory=list)
+    contraindicated_for: list[dict[str, str]] = Field(default_factory=list)
+    scenarios: list[str] = Field(default_factory=list)
+    related_products: list[dict[str, Any]] = Field(default_factory=list)
+    faqs: list[dict[str, str]] = Field(default_factory=list)
+
 
 class RelatedProduct(BaseModel):
     product_id: str
     name: str
     price: float = 0.0
     relation: str = ""
+
 
 class Population(BaseModel):
     name: str
@@ -55,14 +60,14 @@ class Neo4jSkill:
 
     # ── helpers ───────────────────────────────────────────────────────────
 
-    async def _execute(self, query: str, **params: Any) -> List[Dict[str, Any]]:
+    async def _execute(self, query: str, **params: Any) -> list[dict[str, Any]]:
         if self._driver is None:
             return []
         async with self._driver.session() as session:
             result = await session.run(query, params)
             return [record.data() async for record in result]
 
-    async def _execute_single(self, query: str, **params: Any) -> Optional[Dict[str, Any]]:
+    async def _execute_single(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = await self._execute(query, **params)
         return rows[0] if rows else None
 
@@ -70,10 +75,10 @@ class Neo4jSkill:
 
     async def vector_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         index_name: str = "product_embedding_index",
         limit: int = 10,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """向量语义检索。"""
         query = """
         CALL db.index.vector.queryNodes($index_name, $limit, $embedding)
@@ -81,16 +86,18 @@ class Neo4jSkill:
         RETURN node.product_id AS id, node.name AS name,
                node.description AS description, score
         """
-        rows = await self._execute(query, index_name=index_name, embedding=query_embedding, limit=limit)
+        rows = await self._execute(
+            query, index_name=index_name, embedding=query_embedding, limit=limit
+        )
         return [VectorSearchResult(**r) for r in rows]
 
     # ── 关键词检索 ───────────────────────────────────────────────────────
 
     async def keyword_search(
         self,
-        keywords: List[str],
+        keywords: list[str],
         limit: int = 10,
-    ) -> List[KeywordSearchResult]:
+    ) -> list[KeywordSearchResult]:
         """关键词全文检索。"""
         keyword_pattern = "|".join(keywords)
         query = """
@@ -107,13 +114,13 @@ class Neo4jSkill:
 
     @staticmethod
     def _rrf_merge(
-        vector_results: List[VectorSearchResult],
-        keyword_results: List[KeywordSearchResult],
+        vector_results: list[VectorSearchResult],
+        keyword_results: list[KeywordSearchResult],
         k: int = 60,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """Reciprocal Rank Fusion 合并两路检索结果。"""
-        scores: Dict[str, float] = {}
-        items: Dict[str, VectorSearchResult] = {}
+        scores: dict[str, float] = {}
+        items: dict[str, VectorSearchResult] = {}
 
         for rank, item in enumerate(vector_results, start=1):
             scores[item.id] = scores.get(item.id, 0) + 1.0 / (k + rank)
@@ -123,8 +130,10 @@ class Neo4jSkill:
             scores[item.id] = scores.get(item.id, 0) + 1.0 / (k + rank)
             if item.id not in items:
                 items[item.id] = VectorSearchResult(
-                    id=item.id, name=item.name,
-                    description=item.description, score=item.score,
+                    id=item.id,
+                    name=item.name,
+                    description=item.description,
+                    score=item.score,
                 )
 
         sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
@@ -137,10 +146,10 @@ class Neo4jSkill:
     async def hybrid_search(
         self,
         query: str,
-        query_embedding: List[float],
-        keywords: List[str],
+        query_embedding: list[float],
+        keywords: list[str],
         limit: int = 10,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """混合检索：向量 + 关键词 + RRF 融合。"""
         vector_results, keyword_results = await asyncio.gather(
             self.vector_search(query_embedding, limit=30),
@@ -151,7 +160,7 @@ class Neo4jSkill:
 
     # ── GraphRAG ─────────────────────────────────────────────────────────
 
-    async def get_product_graph(self, product_id: str) -> Optional[ProductGraph]:
+    async def get_product_graph(self, product_id: str) -> ProductGraph | None:
         """GraphRAG：获取商品完整关联子图。"""
         query = """
         MATCH (p:Product {product_id: $product_id})
@@ -176,7 +185,7 @@ class Neo4jSkill:
             return None
         return ProductGraph(**row)
 
-    async def get_suitable_population(self, product_id: str) -> List[Population]:
+    async def get_suitable_population(self, product_id: str) -> list[Population]:
         """获取商品适用人群。"""
         query = """
         MATCH (p:Product {product_id: $product_id})-[:SUITABLE_FOR]->(pop:Population)
@@ -185,7 +194,7 @@ class Neo4jSkill:
         rows = await self._execute(query, product_id=product_id)
         return [Population(**r) for r in rows]
 
-    async def get_related_products(self, product_id: str, limit: int = 5) -> List[RelatedProduct]:
+    async def get_related_products(self, product_id: str, limit: int = 5) -> list[RelatedProduct]:
         """获取关联商品。"""
         query = """
         MATCH (p:Product {product_id: $product_id})-[r]->(related:Product)
@@ -204,11 +213,17 @@ class Neo4jSkill:
         name: str,
         description: str = "",
         price: float = 0.0,
-        embedding: Optional[List[float]] = None,
+        embedding: list[float] | None = None,
         **extra: Any,
     ) -> bool:
         """添加商品节点。"""
-        props = {"product_id": product_id, "name": name, "description": description, "price": price, **extra}
+        props = {
+            "product_id": product_id,
+            "name": name,
+            "description": description,
+            "price": price,
+            **extra,
+        }
         if embedding is not None:
             props["embedding"] = embedding
         query = """
@@ -224,7 +239,7 @@ class Neo4jSkill:
         from_id: str,
         to_id: str,
         relation_type: str,
-        properties: Optional[Dict[str, Any]] = None,
+        properties: dict[str, Any] | None = None,
     ) -> bool:
         """添加两个节点间的关系。"""
         props = properties or {}
@@ -241,7 +256,7 @@ class Neo4jSkill:
     async def update_embedding(
         self,
         product_id: str,
-        embedding: List[float],
+        embedding: list[float],
     ) -> bool:
         """更新商品向量。"""
         query = """
@@ -253,5 +268,4 @@ class Neo4jSkill:
         return len(rows) > 0
 
 
-# need asyncio for gather in hybrid_search
-import asyncio
+# asyncio imported at top for gather in hybrid_search

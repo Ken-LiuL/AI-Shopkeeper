@@ -109,5 +109,6 @@ async def get_recommendations() -> APIResponse[list[dict]]:
     if not row or not row["result"]:
         return APIResponse(data=[])
     import json
+
     result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
     return APIResponse(data=result.get("recommendations", []))

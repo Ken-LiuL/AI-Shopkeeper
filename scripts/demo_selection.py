@@ -5,7 +5,6 @@ Selection Agent Demo
 
 import asyncio
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ sys.path.insert(0, str(project_root))
 
 # Load .env
 from dotenv import load_dotenv
+
 load_dotenv(project_root / ".env")
 
 
@@ -26,6 +26,7 @@ async def main():
     # 1. 初始化 Skills
     print("\n📦 [1/6] 初始化 Skills (mock 模式)...")
     from src.skills.factory import create_skills
+
     skills = create_skills(mode="mock")
 
     # 2. 采集 mock 数据（模拟 ActionBook 调用）
@@ -59,17 +60,39 @@ async def main():
         # 原始数据注入
         "raw_keywords_data": json.dumps([kw.model_dump() for kw in keywords], ensure_ascii=False),
         "raw_products_data": json.dumps([p.model_dump() for p in rankings], ensure_ascii=False),
-        "raw_competitor_stores": json.dumps([c.model_dump() for c in competitors], ensure_ascii=False),
-        "raw_competitor_products": json.dumps([p.model_dump() for p in competitor_products], ensure_ascii=False),
+        "raw_competitor_stores": json.dumps(
+            [c.model_dump() for c in competitors], ensure_ascii=False
+        ),
+        "raw_competitor_products": json.dumps(
+            [p.model_dump() for p in competitor_products], ensure_ascii=False
+        ),
         "raw_stockouts": "暂无缺货数据",
-        "raw_our_products": json.dumps([
-            {"product_id": "P001", "name": "鱼跃电子血压计YE680A", "price": 199, "stock": 15, "monthly_sales": 45},
-            {"product_id": "P002", "name": "欧姆龙体温计MC-246", "price": 39.9, "stock": 50, "monthly_sales": 120},
-        ], ensure_ascii=False),
-        "raw_sales_data": json.dumps([
-            {"product_id": "P001", "daily_avg": 1.5, "trend": "stable"},
-            {"product_id": "P002", "daily_avg": 4.0, "trend": "rising"},
-        ], ensure_ascii=False),
+        "raw_our_products": json.dumps(
+            [
+                {
+                    "product_id": "P001",
+                    "name": "鱼跃电子血压计YE680A",
+                    "price": 199,
+                    "stock": 15,
+                    "monthly_sales": 45,
+                },
+                {
+                    "product_id": "P002",
+                    "name": "欧姆龙体温计MC-246",
+                    "price": 39.9,
+                    "stock": 50,
+                    "monthly_sales": 120,
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        "raw_sales_data": json.dumps(
+            [
+                {"product_id": "P001", "daily_avg": 1.5, "trend": "stable"},
+                {"product_id": "P002", "daily_avg": 4.0, "trend": "rising"},
+            ],
+            ensure_ascii=False,
+        ),
         "raw_upcoming_events": "元宵节(3天后), 春季过敏季(已开始)",
         "raw_weather_forecast": "未来7天: 降温8°C，多云转小雨",
         "raw_trending_events": "流感季高峰期",
@@ -80,6 +103,7 @@ async def main():
     # 4. 编译并运行 Graph
     print("\n🔧 [3/6] 编译 Selection Graph...")
     from src.agents.selection.graph import compile_selection_graph
+
     graph = compile_selection_graph()
 
     print("🚀 [4/6] 运行选品流程 (调用 Claude API)...\n")
@@ -98,7 +122,9 @@ async def main():
     kws = market.get("keywords", [])
     print(f"   热搜词: {len(kws)} 个")
     for k in kws[:3]:
-        print(f"     {k.get('keyword', '?')} — 热度:{k.get('heat_score', 0)} 趋势:{k.get('trend', '?')}")
+        print(
+            f"     {k.get('keyword', '?')} — 热度:{k.get('heat_score', 0)} 趋势:{k.get('trend', '?')}"
+        )
 
     # Competitor Analysis
     comp = result.get("competitor_analysis", {})
@@ -126,7 +152,9 @@ async def main():
     opps = gap.get("opportunities", [])
     print(f"   机会总数: {gap.get('gap_summary', {}).get('total_opportunities', 0)}")
     for o in opps[:5]:
-        print(f"     #{o.get('rank', '?')} {o.get('keyword', '?')} — 优先级:{o.get('priority', '?')} 热度:{o.get('market_heat_score', 0)}")
+        print(
+            f"     #{o.get('rank', '?')} {o.get('keyword', '?')} — 优先级:{o.get('priority', '?')} 热度:{o.get('market_heat_score', 0)}"
+        )
 
     # Supplier
     supps = result.get("supplier_evaluations", [])
@@ -143,14 +171,24 @@ async def main():
     recs = result.get("recommendations", {})
     rec_list = recs.get("recommendations", [])
     scoring = recs.get("scoring_summary", {})
-    print(f"\n评估总数: {scoring.get('total_evaluated', 0)} | 推荐数: {scoring.get('recommended_count', 0)} | 最高分: {scoring.get('top_score', 0)}")
+    print(
+        f"\n评估总数: {scoring.get('total_evaluated', 0)} | 推荐数: {scoring.get('recommended_count', 0)} | 最高分: {scoring.get('top_score', 0)}"
+    )
 
     for r in rec_list[:5]:
-        print(f"\n  #{r.get('rank', '?')} 【{r.get('keyword', '?')}】 总分: {r.get('final_score', 0)}")
+        print(
+            f"\n  #{r.get('rank', '?')} 【{r.get('keyword', '?')}】 总分: {r.get('final_score', 0)}"
+        )
         bd = r.get("score_breakdown", {})
-        print(f"     市场热度:{bd.get('market_heat', 0):.0f} | 竞争空位:{bd.get('competition_gap', 0):.0f} | 供应链:{bd.get('supply_chain', 0):.0f} | 利润:{bd.get('profit_margin', 0):.0f} | 协同:{bd.get('category_synergy', 0):.0f} | 季节:{bd.get('seasonal_fit', 0):.0f}")
+        print(
+            f"     市场热度:{bd.get('market_heat', 0):.0f} | 竞争空位:{bd.get('competition_gap', 0):.0f} | 供应链:{bd.get('supply_chain', 0):.0f} | 利润:{bd.get('profit_margin', 0):.0f} | 协同:{bd.get('category_synergy', 0):.0f} | 季节:{bd.get('seasonal_fit', 0):.0f}"
+        )
         print(f"     理由: {r.get('recommendation_reason', 'N/A')[:80]}")
-        print(f"     渠道: {r.get('purchase_channel', 'N/A')} | 建议价: ¥{r.get('suggested_price', 0)} | 毛利: {r.get('expected_margin', 0):.0%}" if r.get('expected_margin') else "")
+        print(
+            f"     渠道: {r.get('purchase_channel', 'N/A')} | 建议价: ¥{r.get('suggested_price', 0)} | 毛利: {r.get('expected_margin', 0):.0%}"
+            if r.get("expected_margin")
+            else ""
+        )
 
     reflection = recs.get("reflection_notes", "")
     if reflection:

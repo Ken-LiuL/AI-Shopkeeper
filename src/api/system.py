@@ -30,7 +30,8 @@ async def update_config(body: dict) -> APIResponse[dict]:
             """INSERT INTO system_config (key, value, updated_at)
                VALUES ($1, $2, NOW())
                ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()""",
-            key, str(value),
+            key,
+            str(value),
         )
     return APIResponse(data=body, message="Config updated")
 
@@ -40,15 +41,18 @@ async def list_tasks() -> APIResponse[list[dict]]:
     """List scheduled tasks and their status."""
     try:
         from src.scheduler import get_scheduler
+
         scheduler = get_scheduler()
         jobs = []
         for job in scheduler.get_jobs():
-            jobs.append({
-                "task_name": job.name,
-                "job_id": job.id,
-                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
-                "trigger": str(job.trigger),
-            })
+            jobs.append(
+                {
+                    "task_name": job.name,
+                    "job_id": job.id,
+                    "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                    "trigger": str(job.trigger),
+                }
+            )
         return APIResponse(data=jobs)
     except Exception:
         return APIResponse(data=[], message="Scheduler not available")
@@ -69,6 +73,7 @@ async def trigger_task(task_name: str) -> APIResponse[dict]:
 
     try:
         from src.scheduler import get_scheduler
+
         scheduler = get_scheduler()
         scheduler.add_job(
             task_map[task_name],

@@ -3,28 +3,29 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.alerts import router as alerts_router
+from src.api.analytics import router as analytics_router
 from src.api.bundles import router as bundles_router
+from src.api.competitors import router as competitors_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
-from src.api.listing import router as listing_router
-from src.api.products import router as products_router
 from src.api.knowledge import router as knowledge_router
+from src.api.listing import router as listing_router
 from src.api.metrics_api import router as metrics_router
-from src.api.selection import router as selection_router
-from src.api.analytics import router as analytics_router
-from src.api.competitors import router as competitors_router
-from src.api.pricing import router as pricing_router
-from src.api.replenishment import router as replenishment_router
 from src.api.orders import router as orders_router
+from src.api.pricing import router as pricing_router
+from src.api.products import router as products_router
+from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
+from src.api.selection import router as selection_router
 from src.api.sync import router as sync_router
 from src.api.system import router as system_router
 from src.config import get_settings
@@ -48,6 +49,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
 
     import os
+
     # Determine vector store backend
     vector_store_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
 
@@ -74,9 +76,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # Init scheduler (if not in test mode)
     import os
+
     if os.environ.get("TESTING") != "1":
         try:
             from src.scheduler import init_scheduler, start_scheduler
+
             init_scheduler()
             _init_sync_scheduler()
             start_scheduler()
@@ -87,10 +91,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # Check if DB is empty → trigger full sync in background
         try:
             import asyncio as _asyncio
+
             pool = pg_db.get_pool()
-            count = await pool.fetchval(
-                "SELECT COUNT(*) FROM qnh_products"
-            )
+            count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
             if count == 0:
                 logger.info("Empty database detected, launching full sync in background…")
                 _asyncio.create_task(_initial_full_sync(pool))
@@ -101,23 +104,27 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # Init and register skills for customer service agent
     try:
+        from src.agents.customer_service.skills_registry import register_skills
         from src.skills.embedding import EmbeddingSkill
         from src.skills.reranker import RerankerSkill
-        from src.agents.customer_service.skills_registry import register_skills
 
         embedding_skill = EmbeddingSkill()
         reranker_skill = RerankerSkill()
 
         if vector_store_backend == "neo4j":
             from src.skills.neo4j_skill import Neo4jSkill
+
             vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
             logger.info("Using Neo4j as vector store backend")
         else:
             from src.skills.pgvector_skill import PgVectorSkill
+
             vector_skill = PgVectorSkill(pool=pg_db.get_pool())
             logger.info("Using PostgreSQL pgvector as vector store backend")
 
-        register_skills(vector_store=vector_skill, embedding=embedding_skill, reranker=reranker_skill)
+        register_skills(
+            vector_store=vector_skill, embedding=embedding_skill, reranker=reranker_skill
+        )
         logger.info("Customer service skills registered ✓")
     except Exception:
         logger.warning("Failed to register customer service skills", exc_info=True)
@@ -128,14 +135,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # ── Shutdown ─────────────────────────────────────────────
     logger.info("Shutting down …")
-    
+
     # Shutdown scheduler
     try:
         from src.scheduler import shutdown_scheduler
+
         shutdown_scheduler()
     except Exception:
         pass
-    
+
     await redis_db.close_redis()
     if vector_store_backend == "neo4j":
         await neo4j_db.close_driver()
@@ -173,9 +181,7 @@ async def _run_migrations(pool: Any) -> None:
         try:
             async with pool.acquire() as conn:
                 await conn.execute(sql)
-                await conn.execute(
-                    "INSERT INTO _migrations (filename) VALUES ($1)", fname
-                )
+                await conn.execute("INSERT INTO _migrations (filename) VALUES ($1)", fname)
             logger.info("Migration applied: %s ✓", fname)
         except Exception as e:
             logger.error("Migration %s failed: %s", fname, e)
@@ -187,9 +193,14 @@ async def _initial_full_sync(pool: Any) -> None:
     """Run full sync for all syncers on first deployment, then build vector index."""
     try:
         from src.sync import (
-            QNHClient, QNHAuth,
-            ProductSyncer, OrderSyncer, InventorySyncer,
-            ReviewSyncer, TrafficSyncer, MetricsSyncer,
+            InventorySyncer,
+            MetricsSyncer,
+            OrderSyncer,
+            ProductSyncer,
+            QNHAuth,
+            QNHClient,
+            ReviewSyncer,
+            TrafficSyncer,
         )
 
         auth = QNHAuth()
@@ -227,9 +238,7 @@ async def _build_vector_index(pool: Any) -> None:
         embedding_skill = EmbeddingSkill()
 
         # Read all products from qnh_products
-        rows = await pool.fetch(
-            "SELECT spu_id, name, category, brand, spec FROM qnh_products"
-        )
+        rows = await pool.fetch("SELECT spu_id, name, category, brand, spec FROM qnh_products")
         if not rows:
             logger.info("No products to embed")
             return
@@ -240,23 +249,28 @@ async def _build_vector_index(pool: Any) -> None:
         batch_rows = []
 
         for row in rows:
-            text = " ".join(filter(None, [
-                row["name"] or "",
-                row.get("category") or "",
-                row.get("brand") or "",
-                row.get("spec") or "",
-            ]))
+            text = " ".join(
+                filter(
+                    None,
+                    [
+                        row["name"] or "",
+                        row.get("category") or "",
+                        row.get("brand") or "",
+                        row.get("spec") or "",
+                    ],
+                )
+            )
             batch_texts.append(text)
             batch_rows.append(row)
 
         # Embed in batches
-        BATCH_SIZE = 32
-        for i in range(0, len(batch_texts), BATCH_SIZE):
-            chunk_texts = batch_texts[i:i + BATCH_SIZE]
-            chunk_rows = batch_rows[i:i + BATCH_SIZE]
-            embeddings = embedding_skill.embed_batch(chunk_texts, batch_size=BATCH_SIZE)
+        batch_size = 32
+        for i in range(0, len(batch_texts), batch_size):
+            chunk_texts = batch_texts[i : i + batch_size]
+            chunk_rows = batch_rows[i : i + batch_size]
+            embeddings = embedding_skill.embed_batch(chunk_texts, batch_size=batch_size)
 
-            for row, emb in zip(chunk_rows, embeddings):
+            for row, emb in zip(chunk_rows, embeddings, strict=False):
                 emb_str = "[" + ",".join(str(x) for x in emb) + "]"
                 await pool.execute(
                     """
@@ -270,15 +284,25 @@ async def _build_vector_index(pool: Any) -> None:
                     """,
                     row["spu_id"],
                     row["name"] or "",
-                    " ".join(filter(None, [
-                        row.get("category") or "",
-                        row.get("brand") or "",
-                        row.get("spec") or "",
-                    ])),
+                    " ".join(
+                        filter(
+                            None,
+                            [
+                                row.get("category") or "",
+                                row.get("brand") or "",
+                                row.get("spec") or "",
+                            ],
+                        )
+                    ),
                     emb_str,
                 )
 
-            logger.info("Embedded products %d–%d / %d", i + 1, min(i + BATCH_SIZE, len(batch_texts)), len(batch_texts))
+            logger.info(
+                "Embedded products %d–%d / %d",
+                i + 1,
+                min(i + batch_size, len(batch_texts)),
+                len(batch_texts),
+            )
 
         logger.info("Vector index built for %d products ✓", len(rows))
 
@@ -289,53 +313,68 @@ async def _build_vector_index(pool: Any) -> None:
 def _init_sync_scheduler() -> None:
     """Add QNH data sync jobs to the APScheduler."""
     from apscheduler.triggers.cron import CronTrigger
+
     from src.scheduler import get_scheduler
 
     scheduler = get_scheduler()
 
     # Products + Inventory: every 30 min
     scheduler.add_job(
-        _run_incremental_sync, args=["products"],
+        _run_incremental_sync,
+        args=["products"],
         trigger=CronTrigger.from_crontab("*/30 * * * *"),
-        id="sync_products", replace_existing=True,
+        id="sync_products",
+        replace_existing=True,
     )
     scheduler.add_job(
-        _run_incremental_sync, args=["inventory"],
+        _run_incremental_sync,
+        args=["inventory"],
         trigger=CronTrigger.from_crontab("*/30 * * * *"),
-        id="sync_inventory", replace_existing=True,
+        id="sync_inventory",
+        replace_existing=True,
     )
 
     # Orders: every 15 min
     scheduler.add_job(
-        _run_incremental_sync, args=["orders"],
+        _run_incremental_sync,
+        args=["orders"],
         trigger=CronTrigger.from_crontab("*/15 * * * *"),
-        id="sync_orders", replace_existing=True,
+        id="sync_orders",
+        replace_existing=True,
     )
 
     # Reviews: every 1 hour
     scheduler.add_job(
-        _run_incremental_sync, args=["reviews"],
+        _run_incremental_sync,
+        args=["reviews"],
         trigger=CronTrigger.from_crontab("0 * * * *"),
-        id="sync_reviews", replace_existing=True,
+        id="sync_reviews",
+        replace_existing=True,
     )
 
     # Traffic + Metrics: every 1 hour
     scheduler.add_job(
-        _run_incremental_sync, args=["traffic"],
+        _run_incremental_sync,
+        args=["traffic"],
         trigger=CronTrigger.from_crontab("5 * * * *"),
-        id="sync_traffic", replace_existing=True,
+        id="sync_traffic",
+        replace_existing=True,
     )
     scheduler.add_job(
-        _run_incremental_sync, args=["metrics"],
+        _run_incremental_sync,
+        args=["metrics"],
         trigger=CronTrigger.from_crontab("10 * * * *"),
-        id="sync_metrics", replace_existing=True,
+        id="sync_metrics",
+        replace_existing=True,
     )
 
     # Competitors: daily at 10:00
     scheduler.add_job(
-        _run_incremental_sync, args=["competitors"],
+        _run_incremental_sync,
+        args=["competitors"],
         trigger=CronTrigger.from_crontab("0 10 * * *"),
-        id="sync_competitors", replace_existing=True,
+        id="sync_competitors",
+        replace_existing=True,
     )
 
     logger.info("QNH sync scheduler jobs registered ✓")
@@ -344,13 +383,18 @@ def _init_sync_scheduler() -> None:
 async def _run_incremental_sync(syncer_name: str) -> None:
     """Run a single syncer's smart sync (incremental or full based on state)."""
     try:
+        from src.db import postgres as pg
         from src.sync import (
-            QNHClient, QNHAuth,
-            ProductSyncer, OrderSyncer, InventorySyncer,
-            ReviewSyncer, TrafficSyncer, MetricsSyncer,
+            InventorySyncer,
+            MetricsSyncer,
+            OrderSyncer,
+            ProductSyncer,
+            QNHAuth,
+            QNHClient,
+            ReviewSyncer,
+            TrafficSyncer,
         )
         from src.sync.competitors import CompetitorSyncer
-        from src.db import postgres as pg
 
         pool = pg.get_pool()
         auth = QNHAuth()
@@ -416,6 +460,7 @@ async def readiness_check() -> dict[str, str | bool]:
 
     # Neo4j (only check if using neo4j backend)
     import os as _os
+
     if _os.environ.get("VECTOR_STORE", "postgres").lower() == "neo4j":
         try:
             await neo4j_db.query("RETURN 1 AS n")

@@ -9,7 +9,7 @@ import os
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 
@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 # ── Cookie Management ────────────────────────────────────────────────────────
+
 
 def get_chrome_cookies_db_path(profile: str = "Default") -> Path:
     """Get the Chrome cookies database path for the current platform."""
@@ -34,7 +35,7 @@ def get_chrome_cookies_db_path(profile: str = "Default") -> Path:
 def read_chrome_cookies(
     domain: str,
     profile: str = "Default",
-    db_path: Optional[Path] = None,
+    db_path: Path | None = None,
 ) -> dict[str, str]:
     """Read cookies for a domain from Chrome's cookie database.
 
@@ -58,7 +59,7 @@ def read_chrome_cookies(
             "SELECT name, value, encrypted_value FROM cookies WHERE host_key LIKE ?",
             (f"%{domain}%",),
         )
-        for name, value, encrypted_value in cursor.fetchall():
+        for name, value, _encrypted_value in cursor.fetchall():
             # On macOS, value is empty and encrypted_value has the real data
             # For now, only use plaintext values (works on Linux or older Chrome)
             if value:
@@ -90,9 +91,7 @@ def load_cookies_from_file(path: str | Path) -> dict[str, str]:
         # Array of {name, value} objects (browser export format)
         if isinstance(data, list):
             return {
-                item["name"]: item["value"]
-                for item in data
-                if "name" in item and "value" in item
+                item["name"]: item["value"] for item in data if "name" in item and "value" in item
             }
     except (json.JSONDecodeError, KeyError):
         pass
@@ -120,6 +119,7 @@ def save_cookies_to_file(cookies: dict[str, str], path: str | Path) -> None:
 
 # ── HTTP Request Helpers ─────────────────────────────────────────────────────
 
+
 class RateLimitedSession:
     """aiohttp session wrapper with retry and rate limiting.
 
@@ -137,7 +137,7 @@ class RateLimitedSession:
         max_retries: int = 3,
         base_delay: float = 1.0,
         timeout: int = 30,
-        headers: Optional[dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
     ):
         self.min_interval = min_interval
         self.max_retries = max_retries
@@ -146,10 +146,10 @@ class RateLimitedSession:
         self.default_headers = headers or {}
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._last_request: float = 0
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         self._request_count = 0
 
-    async def __aenter__(self) -> "RateLimitedSession":
+    async def __aenter__(self) -> RateLimitedSession:
         self._session = aiohttp.ClientSession(
             headers=self.default_headers,
             timeout=aiohttp.ClientTimeout(total=self.timeout),
@@ -186,7 +186,7 @@ class RateLimitedSession:
         """Execute request with rate limiting and retry."""
         assert self._session is not None, "Session not initialized. Use 'async with'."
 
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
         for attempt in range(1, self.max_retries + 1):
             async with self._semaphore:
                 await self._wait_rate_limit()
@@ -201,7 +201,7 @@ class RateLimitedSession:
                     last_exc = aiohttp.ClientResponseError(
                         resp.request_info, resp.history, status=resp.status
                     )
-                except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                except (TimeoutError, aiohttp.ClientError) as e:
                     last_exc = e
 
             if attempt < self.max_retries:

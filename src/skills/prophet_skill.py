@@ -3,16 +3,15 @@
 from __future__ import annotations
 
 import io
-import json
 import pickle
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import pandas as pd
 from pydantic import BaseModel, Field
 
-
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class TrainResult(BaseModel):
     status: str = "trained"
@@ -20,33 +19,77 @@ class TrainResult(BaseModel):
     samples: int
     trained_at: datetime = Field(default_factory=datetime.now)
 
+
 class AnomalyResult(BaseModel):
     is_anomaly: bool
-    type: Optional[str] = None  # drop/spike
-    expected: Optional[float] = None
-    actual: Optional[int] = None
-    bounds: Optional[List[float]] = None
-    deviation_pct: Optional[float] = None
-    severity: Optional[str] = None  # critical/warning/info
+    type: str | None = None  # drop/spike
+    expected: float | None = None
+    actual: int | None = None
+    bounds: list[float] | None = None
+    deviation_pct: float | None = None
+    severity: str | None = None  # critical/warning/info
     reason: str = ""
 
 
 # ── Chinese holidays ─────────────────────────────────────────────────────────
 
+
 def _get_chinese_holidays() -> pd.DataFrame:
     """中国主要节假日（Prophet holidays 格式）。"""
     holidays = []
     for year in range(2023, 2028):
-        holidays.extend([
-            {"holiday": "spring_festival", "ds": f"{year}-01-22", "lower_window": -1, "upper_window": 6},
-            {"holiday": "qingming", "ds": f"{year}-04-05", "lower_window": 0, "upper_window": 2},
-            {"holiday": "labor_day", "ds": f"{year}-05-01", "lower_window": 0, "upper_window": 4},
-            {"holiday": "dragon_boat", "ds": f"{year}-06-22", "lower_window": 0, "upper_window": 2},
-            {"holiday": "mid_autumn", "ds": f"{year}-09-17", "lower_window": 0, "upper_window": 2},
-            {"holiday": "national_day", "ds": f"{year}-10-01", "lower_window": 0, "upper_window": 6},
-            {"holiday": "double_eleven", "ds": f"{year}-11-11", "lower_window": -3, "upper_window": 0},
-            {"holiday": "double_twelve", "ds": f"{year}-12-12", "lower_window": -1, "upper_window": 0},
-        ])
+        holidays.extend(
+            [
+                {
+                    "holiday": "spring_festival",
+                    "ds": f"{year}-01-22",
+                    "lower_window": -1,
+                    "upper_window": 6,
+                },
+                {
+                    "holiday": "qingming",
+                    "ds": f"{year}-04-05",
+                    "lower_window": 0,
+                    "upper_window": 2,
+                },
+                {
+                    "holiday": "labor_day",
+                    "ds": f"{year}-05-01",
+                    "lower_window": 0,
+                    "upper_window": 4,
+                },
+                {
+                    "holiday": "dragon_boat",
+                    "ds": f"{year}-06-22",
+                    "lower_window": 0,
+                    "upper_window": 2,
+                },
+                {
+                    "holiday": "mid_autumn",
+                    "ds": f"{year}-09-17",
+                    "lower_window": 0,
+                    "upper_window": 2,
+                },
+                {
+                    "holiday": "national_day",
+                    "ds": f"{year}-10-01",
+                    "lower_window": 0,
+                    "upper_window": 6,
+                },
+                {
+                    "holiday": "double_eleven",
+                    "ds": f"{year}-11-11",
+                    "lower_window": -3,
+                    "upper_window": 0,
+                },
+                {
+                    "holiday": "double_twelve",
+                    "ds": f"{year}-12-12",
+                    "lower_window": -1,
+                    "upper_window": 0,
+                },
+            ]
+        )
     return pd.DataFrame(holidays)
 
 
@@ -135,8 +178,10 @@ class ProphetSkill:
         if actual_sales < lower:
             severity = "critical" if deviation_pct >= _CRITICAL_DEVIATION else "warning"
             return AnomalyResult(
-                is_anomaly=True, type="drop",
-                expected=round(yhat, 1), actual=actual_sales,
+                is_anomaly=True,
+                type="drop",
+                expected=round(yhat, 1),
+                actual=actual_sales,
                 bounds=[round(lower, 1), round(upper, 1)],
                 deviation_pct=round(deviation_pct, 3),
                 severity=severity,
@@ -144,8 +189,10 @@ class ProphetSkill:
         elif actual_sales > upper:
             severity = "critical" if deviation_pct >= _CRITICAL_DEVIATION else "warning"
             return AnomalyResult(
-                is_anomaly=True, type="spike",
-                expected=round(yhat, 1), actual=actual_sales,
+                is_anomaly=True,
+                type="spike",
+                expected=round(yhat, 1),
+                actual=actual_sales,
                 bounds=[round(lower, 1), round(upper, 1)],
                 deviation_pct=round(deviation_pct, 3),
                 severity=severity,
@@ -170,7 +217,8 @@ class ProphetSkill:
                 ON CONFLICT (product_id)
                 DO UPDATE SET model_data = $2, trained_at = NOW()
                 """,
-                product_id, model_bytes,
+                product_id,
+                model_bytes,
             )
 
     async def _load_model(self, product_id: str) -> Any:

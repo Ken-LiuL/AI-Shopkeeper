@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter
 
 from src.db import postgres as pg
@@ -14,9 +16,16 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
-    today_orders = await pool.fetchval("SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE") or 0
-    pending_alerts = await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
+    total_products = (
+        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+    )
+    today_orders = (
+        await pool.fetchval("SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE")
+        or 0
+    )
+    pending_alerts = (
+        await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
+    )
     # Count running tasks across tables that may or may not exist yet
     pending_tasks = 0
     for q in [
@@ -24,10 +33,8 @@ async def overview() -> APIResponse[DashboardOverview]:
         "SELECT COUNT(*) FROM bundle_tasks WHERE status = 'running'",
         "SELECT COUNT(*) FROM listings WHERE status = 'processing'",
     ]:
-        try:
+        with contextlib.suppress(Exception):
             pending_tasks += await pool.fetchval(q) or 0
-        except Exception:
-            pass
     return APIResponse(
         data=DashboardOverview(
             total_products=total_products,
@@ -47,7 +54,12 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
            WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
            GROUP BY sale_date ORDER BY sale_date"""
     )
-    return APIResponse(data=[SalesTrendPoint(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"]) for r in rows])
+    return APIResponse(
+        data=[
+            SalesTrendPoint(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"])
+            for r in rows
+        ]
+    )
 
 
 @router.get("/top-products", response_model=APIResponse[list[TopProduct]])
@@ -61,5 +73,13 @@ async def top_products() -> APIResponse[list[TopProduct]]:
            ORDER BY total_sales DESC LIMIT 10"""
     )
     return APIResponse(
-        data=[TopProduct(product_id=r["product_id"], name=r["name"], total_sales=r["total_sales"], revenue=r["revenue"]) for r in rows]
+        data=[
+            TopProduct(
+                product_id=r["product_id"],
+                name=r["name"],
+                total_sales=r["total_sales"],
+                revenue=r["revenue"],
+            )
+            for r in rows
+        ]
     )

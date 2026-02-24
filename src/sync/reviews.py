@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from .base import BaseSyncer, SyncMode, SyncResult, CST
+from .base import CST, BaseSyncer, SyncMode, SyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,7 @@ class ReviewSyncer(BaseSyncer):
         end = datetime.now(CST)
         return await self._sync_range(since, end, SyncMode.INCREMENTAL)
 
-    async def _sync_range(
-        self, start: datetime, end: datetime, mode: SyncMode
-    ) -> SyncResult:
+    async def _sync_range(self, start: datetime, end: datetime, mode: SyncMode) -> SyncResult:
         total = 0
         page = 1
 
@@ -66,13 +64,18 @@ class ReviewSyncer(BaseSyncer):
                 page += 1
 
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=True, records_synced=total,
+                syncer_name=self.name,
+                mode=mode,
+                success=True,
+                records_synced=total,
             )
         except Exception as e:
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=False, records_synced=total, error=str(e),
+                syncer_name=self.name,
+                mode=mode,
+                success=False,
+                records_synced=total,
+                error=str(e),
             )
 
     async def _upsert_reviews(self, items: list[dict[str, Any]]) -> None:
@@ -85,7 +88,7 @@ class ReviewSyncer(BaseSyncer):
                 continue
 
             review_time = item.get("reviewTime", item.get("createTime"))
-            if isinstance(review_time, (int, float)):
+            if isinstance(review_time, int | float):
                 review_time = datetime.fromtimestamp(
                     review_time / 1000 if review_time > 1e12 else review_time,
                     tz=CST,

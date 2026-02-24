@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from decimal import Decimal
-
-import pytest
-
 from src.api.schemas import APIResponse
 
-
 # ── Sync API Schema Tests ────────────────────────────────────────────────────
+
 
 class TestSyncStatusResponse:
     def test_api_response_with_sync_data(self):
@@ -34,6 +30,7 @@ class TestSyncStatusResponse:
 
 # ── Knowledge API Tests (via neo4j_skill models) ─────────────────────────────
 
+
 class TestKnowledgeSearchModels:
     def test_faq_result_shape(self):
         result = {"question": "如何使用?", "answer": "按开关", "category": "FAQ", "source": "faq"}
@@ -41,7 +38,12 @@ class TestKnowledgeSearchModels:
         assert "answer" in result
 
     def test_product_result_shape(self):
-        result = {"name": "血压计", "description": "电子血压计", "category": "医疗器械", "source": "product"}
+        result = {
+            "name": "血压计",
+            "description": "电子血压计",
+            "category": "医疗器械",
+            "source": "product",
+        }
         assert result["source"] == "product"
 
     def test_empty_results(self):
@@ -51,6 +53,7 @@ class TestKnowledgeSearchModels:
 
 
 # ── Metrics API Schema Tests ─────────────────────────────────────────────────
+
 
 class TestMetricsResponse:
     def test_metrics_data_shape(self):
@@ -70,8 +73,20 @@ class TestMetricsResponse:
 
     def test_metrics_with_model_breakdown(self):
         by_model = [
-            {"model": "claude-3-opus", "input_tokens": 5000, "output_tokens": 2000, "cost_usd": 1.0, "requests": 20},
-            {"model": "claude-3-sonnet", "input_tokens": 5000, "output_tokens": 3000, "cost_usd": 0.5, "requests": 22},
+            {
+                "model": "claude-3-opus",
+                "input_tokens": 5000,
+                "output_tokens": 2000,
+                "cost_usd": 1.0,
+                "requests": 20,
+            },
+            {
+                "model": "claude-3-sonnet",
+                "input_tokens": 5000,
+                "output_tokens": 3000,
+                "cost_usd": 0.5,
+                "requests": 22,
+            },
         ]
         r = APIResponse(data={"by_model": by_model})
         assert len(r.data["by_model"]) == 2
@@ -98,6 +113,7 @@ class TestMetricsResponse:
 
 
 # ── API Response Generic Tests ───────────────────────────────────────────────
+
 
 class TestAPIResponseGeneric:
     def test_success_with_none(self):

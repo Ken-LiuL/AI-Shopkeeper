@@ -21,6 +21,7 @@ async def init_pool() -> asyncpg.Pool:
         return _pool
 
     import os
+
     dsn = os.environ.get("DATABASE_URL")
     if not dsn:
         cfg = get_settings().system.database["postgres"]
@@ -33,6 +34,7 @@ async def init_pool() -> asyncpg.Pool:
     ssl_param = None
     if dsn and ".render.com" in dsn:
         import ssl as _ssl
+
         ssl_ctx = _ssl.create_default_context()
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = _ssl.CERT_NONE
@@ -44,7 +46,11 @@ async def init_pool() -> asyncpg.Pool:
         timeout=10,
         **({"ssl": ssl_param} if ssl_param else {}),
     )
-    logger.info("PostgreSQL pool initialised (min=%s, max=%s)", cfg.get("min_connections", 5), cfg.get("max_connections", 20))
+    logger.info(
+        "PostgreSQL pool initialised (min=%s, max=%s)",
+        cfg.get("min_connections", 5),
+        cfg.get("max_connections", 20),
+    )
     return _pool
 
 

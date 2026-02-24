@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from src.agents.selection.graph import build_selection_graph, compile_selection_graph
 from src.agents.selection.state import SelectionState
 
@@ -16,7 +14,7 @@ class TestBuildSelectionGraph:
     def test_returns_state_graph(self):
         """Build returns a StateGraph instance."""
         from langgraph.graph import StateGraph
-        
+
         graph = build_selection_graph()
         assert isinstance(graph, StateGraph)
 
@@ -31,7 +29,7 @@ class TestBuildSelectionGraph:
         """Graph has all required nodes."""
         graph = build_selection_graph()
         node_names = list(graph.nodes.keys())
-        
+
         expected_nodes = [
             "fetch_data",
             "market_analysis",
@@ -42,7 +40,7 @@ class TestBuildSelectionGraph:
             "supplier_evaluation",
             "scorer",
         ]
-        
+
         for node in expected_nodes:
             assert node in node_names, f"Missing node: {node}"
 
@@ -61,21 +59,25 @@ class TestCompileSelectionGraph:
         """Compiled graph can be invoked with mocked nodes."""
         # This is a smoke test that the graph structure is correct
         compiled = compile_selection_graph()
-        
+
         # Mock all the LLM calls
         mock_result = {"analysis_summary": "test", "keywords": [], "products": []}
-        
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=mock_result):
-            with patch("src.agents.selection.nodes.call_tool_with_reflection", new_callable=AsyncMock, return_value={
-                "scoring_summary": {}, "recommendations": [], "reflection_notes": ""
-            }):
+
+        with patch(
+            "src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=mock_result
+        ):
+            with patch(
+                "src.agents.selection.nodes.call_tool_with_reflection",
+                new_callable=AsyncMock,
+                return_value={"scoring_summary": {}, "recommendations": [], "reflection_notes": ""},
+            ):
                 state = SelectionState(
                     store_id="test",
                     categories=["医疗器械"],
                 )
                 # This should not raise
                 result = await compiled.ainvoke(state)
-        
+
         # Should have all expected keys after full run
         assert "current_date" in result
         assert "current_season" in result

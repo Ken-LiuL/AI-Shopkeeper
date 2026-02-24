@@ -5,10 +5,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from src.agents.customer_service.skills_registry import (
-    register_skills,
-    get_neo4j,
     get_embedding,
+    get_neo4j,
     get_reranker,
+    register_skills,
 )
 
 
@@ -16,6 +16,7 @@ class TestSkillsRegistry:
     def setup_method(self):
         """Reset global state before each test."""
         import src.agents.customer_service.skills_registry as mod
+
         mod._neo4j_skill = None
         mod._embedding_skill = None
         mod._reranker_skill = None

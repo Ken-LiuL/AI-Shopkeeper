@@ -65,9 +65,12 @@ async def list_refunds(
     rows = await pool.fetch(
         """SELECT * FROM orders WHERE status IN ('refunded', 'refund_pending')
            ORDER BY order_time DESC LIMIT $1 OFFSET $2""",
-        page_size, offset,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/{order_id}", response_model=APIResponse[dict])
@@ -78,7 +81,8 @@ async def get_order(order_id: str) -> APIResponse[dict]:
         raise NotFoundError("Order", order_id)
     data = dict(row)
     items = await pool.fetch(
-        "SELECT * FROM order_items WHERE order_id = $1", order_id,
+        "SELECT * FROM order_items WHERE order_id = $1",
+        order_id,
     )
     data["items"] = [dict(i) for i in items]
     return APIResponse(data=data)
@@ -113,7 +117,11 @@ async def list_orders(
     total = await pool.fetchval(f"SELECT COUNT(*) FROM orders{where}", *params)
     offset = (page - 1) * page_size
     rows = await pool.fetch(
-        f"SELECT * FROM orders{where} ORDER BY order_time DESC LIMIT ${idx} OFFSET ${idx+1}",
-        *params, page_size, offset,
+        f"SELECT * FROM orders{where} ORDER BY order_time DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        *params,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )

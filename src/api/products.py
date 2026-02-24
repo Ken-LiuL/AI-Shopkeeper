@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Query
 
 from src.db import postgres as pg
@@ -47,10 +49,12 @@ async def list_products(
     offset = (page - 1) * page_size
     params_page = params + [page_size, offset]
     rows = await pool.fetch(
-        f"SELECT * FROM products{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx+1}",
+        f"SELECT * FROM products{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
         *params_page,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/{product_id}", response_model=APIResponse[dict])
@@ -69,8 +73,16 @@ async def create_product(body: ProductCreateRequest) -> APIResponse[dict]:
     row = await pool.fetchrow(
         """INSERT INTO products (product_id, name, barcode, category, brand, description, cost_price, retail_price, stock, status, created_at, updated_at)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) RETURNING *""",
-        product_id, body.name, body.barcode, body.category, body.brand,
-        body.description, body.cost_price, body.retail_price, body.stock, body.status,
+        product_id,
+        body.name,
+        body.barcode,
+        body.category,
+        body.brand,
+        body.description,
+        body.cost_price,
+        body.retail_price,
+        body.stock,
+        body.status,
     )
     return APIResponse(data=dict(row))
 
@@ -130,8 +142,16 @@ async def import_products(body: list[ProductCreateRequest]) -> APIResponse[dict]
                 """INSERT INTO products (product_id, name, barcode, category, brand, description,
                    cost_price, retail_price, stock, status, created_at, updated_at)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW())""",
-                pid, item.name, item.barcode, item.category, item.brand,
-                item.description, item.cost_price, item.retail_price, item.stock, item.status,
+                pid,
+                item.name,
+                item.barcode,
+                item.category,
+                item.brand,
+                item.description,
+                item.cost_price,
+                item.retail_price,
+                item.stock,
+                item.status,
             )
             created += 1
         except Exception as e:
@@ -142,14 +162,18 @@ async def import_products(body: list[ProductCreateRequest]) -> APIResponse[dict]
 @router.get("/export")
 async def export_products(
     status: str | None = Query(None),
-) -> "StreamingResponse":
+) -> Any:
     """Export products as CSV."""
-    import csv, io
+    import csv
+    import io
+
     from fastapi.responses import StreamingResponse
 
     pool = pg.get_pool()
     if status:
-        rows = await pool.fetch("SELECT * FROM products WHERE status = $1 ORDER BY created_at DESC", status)
+        rows = await pool.fetch(
+            "SELECT * FROM products WHERE status = $1 ORDER BY created_at DESC", status
+        )
     else:
         rows = await pool.fetch("SELECT * FROM products ORDER BY created_at DESC")
 
@@ -160,8 +184,11 @@ async def export_products(
         for r in rows:
             writer.writerow({k: str(v) for k, v in dict(r).items()})
     buf.seek(0)
-    return StreamingResponse(buf, media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=products.csv"})
+    return StreamingResponse(
+        buf,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=products.csv"},
+    )
 
 
 @router.get("/categories", response_model=APIResponse[list[dict]])
@@ -178,14 +205,17 @@ async def list_categories() -> APIResponse[list[dict]]:
 @router.get("/{product_id}/competitors", response_model=APIResponse[list[dict]])
 async def product_competitors(product_id: str) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
-    product = await pool.fetchrow("SELECT name, category FROM products WHERE product_id = $1", product_id)
+    product = await pool.fetchrow(
+        "SELECT name, category FROM products WHERE product_id = $1", product_id
+    )
     if not product:
         raise NotFoundError("Product", product_id)
     rows = await pool.fetch(
         """SELECT * FROM competitor_products
            WHERE category = $1 AND name ILIKE '%' || $2 || '%'
            ORDER BY price LIMIT 20""",
-        product["category"], product["name"],
+        product["category"],
+        product["name"],
     )
     return APIResponse(data=[dict(r) for r in rows])
 
@@ -223,14 +253,19 @@ async def low_stock(
 ) -> PaginatedResponse[dict]:
     pool = pg.get_pool()
     total = await pool.fetchval(
-        "SELECT COUNT(*) FROM products WHERE stock <= $1 AND status = 'active'", threshold,
+        "SELECT COUNT(*) FROM products WHERE stock <= $1 AND status = 'active'",
+        threshold,
     )
     offset = (page - 1) * page_size
     rows = await pool.fetch(
         "SELECT * FROM products WHERE stock <= $1 AND status = 'active' ORDER BY stock ASC LIMIT $2 OFFSET $3",
-        threshold, page_size, offset,
+        threshold,
+        page_size,
+        offset,
     )
-    return PaginatedResponse(data=[dict(r) for r in rows], total=total, page=page, page_size=page_size)
+    return PaginatedResponse(
+        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+    )
 
 
 @router.get("/{product_id}/sales", response_model=APIResponse[list[SalesRecord]])
@@ -241,4 +276,9 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
            WHERE product_id = $1 ORDER BY sale_date DESC LIMIT 90""",
         product_id,
     )
-    return APIResponse(data=[SalesRecord(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"]) for r in rows])
+    return APIResponse(
+        data=[
+            SalesRecord(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"])
+            for r in rows
+        ]
+    )

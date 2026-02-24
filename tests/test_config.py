@@ -7,10 +7,10 @@ from unittest.mock import patch
 
 import pytest
 
-from src.config import _load_yaml, _resolve_env_vars, Settings
-
+from src.config import Settings, _load_yaml, _resolve_env_vars
 
 # ── _resolve_env_vars ────────────────────────────────────────────────────────
+
 
 class TestResolveEnvVars:
     def test_simple_string(self):
@@ -52,6 +52,7 @@ class TestResolveEnvVars:
 
 # ── _load_yaml ───────────────────────────────────────────────────────────────
 
+
 class TestLoadYaml:
     def test_scoring_yaml_loads(self):
         data = _load_yaml("scoring.yaml")
@@ -91,6 +92,7 @@ class TestLoadYaml:
 
 
 # ── Settings ─────────────────────────────────────────────────────────────────
+
 
 class TestSettings:
     def test_settings_loads(self):

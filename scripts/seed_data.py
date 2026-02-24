@@ -14,9 +14,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import random
-import uuid
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 # ---------------------------------------------------------------------------
 # Product catalog: 30 medical device products
@@ -24,53 +23,389 @@ from decimal import Decimal, ROUND_HALF_UP
 
 PRODUCTS: list[dict] = [
     # 血压计 (5)
-    {"id": "BP001", "name": "欧姆龙 U726 上臂式电子血压计", "barcode": "4975479412769", "category": "血压计", "brand": "欧姆龙", "cost": 198, "retail": 329, "stock": 45, "monthly": 62},
-    {"id": "BP002", "name": "鱼跃 YE680A 臂式电子血压计", "barcode": "6926264400122", "category": "血压计", "brand": "鱼跃", "cost": 128, "retail": 219, "stock": 38, "monthly": 55},
-    {"id": "BP003", "name": "迈克大夫 BP A100 Plus 血压计", "barcode": "4719003390012", "category": "血压计", "brand": "迈克大夫", "cost": 168, "retail": 289, "stock": 22, "monthly": 30},
-    {"id": "BP004", "name": "欧姆龙 T30J 腕式电子血压计", "barcode": "4975479412806", "category": "血压计", "brand": "欧姆龙", "cost": 148, "retail": 259, "stock": 18, "monthly": 25},
-    {"id": "BP005", "name": "九安 KD-5008 电子血压计", "barcode": "6937492000078", "category": "血压计", "brand": "九安", "cost": 88, "retail": 159, "stock": 30, "monthly": 20},
+    {
+        "id": "BP001",
+        "name": "欧姆龙 U726 上臂式电子血压计",
+        "barcode": "4975479412769",
+        "category": "血压计",
+        "brand": "欧姆龙",
+        "cost": 198,
+        "retail": 329,
+        "stock": 45,
+        "monthly": 62,
+    },
+    {
+        "id": "BP002",
+        "name": "鱼跃 YE680A 臂式电子血压计",
+        "barcode": "6926264400122",
+        "category": "血压计",
+        "brand": "鱼跃",
+        "cost": 128,
+        "retail": 219,
+        "stock": 38,
+        "monthly": 55,
+    },
+    {
+        "id": "BP003",
+        "name": "迈克大夫 BP A100 Plus 血压计",
+        "barcode": "4719003390012",
+        "category": "血压计",
+        "brand": "迈克大夫",
+        "cost": 168,
+        "retail": 289,
+        "stock": 22,
+        "monthly": 30,
+    },
+    {
+        "id": "BP004",
+        "name": "欧姆龙 T30J 腕式电子血压计",
+        "barcode": "4975479412806",
+        "category": "血压计",
+        "brand": "欧姆龙",
+        "cost": 148,
+        "retail": 259,
+        "stock": 18,
+        "monthly": 25,
+    },
+    {
+        "id": "BP005",
+        "name": "九安 KD-5008 电子血压计",
+        "barcode": "6937492000078",
+        "category": "血压计",
+        "brand": "九安",
+        "cost": 88,
+        "retail": 159,
+        "stock": 30,
+        "monthly": 20,
+    },
     # 血糖仪 (4)
-    {"id": "BG001", "name": "三诺 安稳+ 血糖仪套装", "barcode": "6922067600019", "category": "血糖仪", "brand": "三诺", "cost": 58, "retail": 99, "stock": 60, "monthly": 48},
-    {"id": "BG002", "name": "鱼跃 580 血糖仪（含50条试纸）", "barcode": "6926264401580", "category": "血糖仪", "brand": "鱼跃", "cost": 68, "retail": 129, "stock": 40, "monthly": 35},
-    {"id": "BG003", "name": "罗氏 逸动II 血糖仪", "barcode": "7613326014021", "category": "血糖仪", "brand": "罗氏", "cost": 188, "retail": 368, "stock": 15, "monthly": 18},
-    {"id": "BG004", "name": "三诺 GA-3 血糖试纸50支", "barcode": "6922067600088", "category": "血糖耗材", "brand": "三诺", "cost": 35, "retail": 68, "stock": 120, "monthly": 95},
+    {
+        "id": "BG001",
+        "name": "三诺 安稳+ 血糖仪套装",
+        "barcode": "6922067600019",
+        "category": "血糖仪",
+        "brand": "三诺",
+        "cost": 58,
+        "retail": 99,
+        "stock": 60,
+        "monthly": 48,
+    },
+    {
+        "id": "BG002",
+        "name": "鱼跃 580 血糖仪（含50条试纸）",
+        "barcode": "6926264401580",
+        "category": "血糖仪",
+        "brand": "鱼跃",
+        "cost": 68,
+        "retail": 129,
+        "stock": 40,
+        "monthly": 35,
+    },
+    {
+        "id": "BG003",
+        "name": "罗氏 逸动II 血糖仪",
+        "barcode": "7613326014021",
+        "category": "血糖仪",
+        "brand": "罗氏",
+        "cost": 188,
+        "retail": 368,
+        "stock": 15,
+        "monthly": 18,
+    },
+    {
+        "id": "BG004",
+        "name": "三诺 GA-3 血糖试纸50支",
+        "barcode": "6922067600088",
+        "category": "血糖耗材",
+        "brand": "三诺",
+        "cost": 35,
+        "retail": 68,
+        "stock": 120,
+        "monthly": 95,
+    },
     # 体温计 (3)
-    {"id": "TH001", "name": "欧姆龙 MC-246 电子体温计", "barcode": "4975479414596", "category": "体温计", "brand": "欧姆龙", "cost": 22, "retail": 39, "stock": 80, "monthly": 70},
-    {"id": "TH002", "name": "鱼跃 YT-1 红外额温枪", "barcode": "6926264402011", "category": "体温计", "brand": "鱼跃", "cost": 68, "retail": 129, "stock": 35, "monthly": 28},
-    {"id": "TH003", "name": "博朗 IRT6520 耳温枪", "barcode": "5765400001208", "category": "体温计", "brand": "博朗", "cost": 188, "retail": 349, "stock": 12, "monthly": 10},
+    {
+        "id": "TH001",
+        "name": "欧姆龙 MC-246 电子体温计",
+        "barcode": "4975479414596",
+        "category": "体温计",
+        "brand": "欧姆龙",
+        "cost": 22,
+        "retail": 39,
+        "stock": 80,
+        "monthly": 70,
+    },
+    {
+        "id": "TH002",
+        "name": "鱼跃 YT-1 红外额温枪",
+        "barcode": "6926264402011",
+        "category": "体温计",
+        "brand": "鱼跃",
+        "cost": 68,
+        "retail": 129,
+        "stock": 35,
+        "monthly": 28,
+    },
+    {
+        "id": "TH003",
+        "name": "博朗 IRT6520 耳温枪",
+        "barcode": "5765400001208",
+        "category": "体温计",
+        "brand": "博朗",
+        "cost": 188,
+        "retail": 349,
+        "stock": 12,
+        "monthly": 10,
+    },
     # 口罩 (3)
-    {"id": "MK001", "name": "振德 N95 医用防护口罩 30只", "barcode": "6903883300188", "category": "口罩", "brand": "振德", "cost": 28, "retail": 49.9, "stock": 200, "monthly": 180},
-    {"id": "MK002", "name": "稳健 一次性医用外科口罩 50只", "barcode": "6926756800012", "category": "口罩", "brand": "稳健", "cost": 12, "retail": 24.9, "stock": 300, "monthly": 250},
-    {"id": "MK003", "name": "3M 9501V+ KN95 防护口罩 25只", "barcode": "7100172426001", "category": "口罩", "brand": "3M", "cost": 45, "retail": 79.9, "stock": 100, "monthly": 60},
+    {
+        "id": "MK001",
+        "name": "振德 N95 医用防护口罩 30只",
+        "barcode": "6903883300188",
+        "category": "口罩",
+        "brand": "振德",
+        "cost": 28,
+        "retail": 49.9,
+        "stock": 200,
+        "monthly": 180,
+    },
+    {
+        "id": "MK002",
+        "name": "稳健 一次性医用外科口罩 50只",
+        "barcode": "6926756800012",
+        "category": "口罩",
+        "brand": "稳健",
+        "cost": 12,
+        "retail": 24.9,
+        "stock": 300,
+        "monthly": 250,
+    },
+    {
+        "id": "MK003",
+        "name": "3M 9501V+ KN95 防护口罩 25只",
+        "barcode": "7100172426001",
+        "category": "口罩",
+        "brand": "3M",
+        "cost": 45,
+        "retail": 79.9,
+        "stock": 100,
+        "monthly": 60,
+    },
     # 创可贴/外伤护理 (3)
-    {"id": "FA001", "name": "云南白药 创可贴 100片", "barcode": "6902188001014", "category": "创可贴", "brand": "云南白药", "cost": 15, "retail": 29.9, "stock": 150, "monthly": 130},
-    {"id": "FA002", "name": "邦迪 防水弹性创可贴 30片", "barcode": "4891199078996", "category": "创可贴", "brand": "邦迪", "cost": 10, "retail": 19.9, "stock": 120, "monthly": 95},
-    {"id": "FA003", "name": "海氏海诺 碘伏棉棒 50支", "barcode": "6926456000123", "category": "消毒用品", "brand": "海氏海诺", "cost": 8, "retail": 16.9, "stock": 100, "monthly": 80},
+    {
+        "id": "FA001",
+        "name": "云南白药 创可贴 100片",
+        "barcode": "6902188001014",
+        "category": "创可贴",
+        "brand": "云南白药",
+        "cost": 15,
+        "retail": 29.9,
+        "stock": 150,
+        "monthly": 130,
+    },
+    {
+        "id": "FA002",
+        "name": "邦迪 防水弹性创可贴 30片",
+        "barcode": "4891199078996",
+        "category": "创可贴",
+        "brand": "邦迪",
+        "cost": 10,
+        "retail": 19.9,
+        "stock": 120,
+        "monthly": 95,
+    },
+    {
+        "id": "FA003",
+        "name": "海氏海诺 碘伏棉棒 50支",
+        "barcode": "6926456000123",
+        "category": "消毒用品",
+        "brand": "海氏海诺",
+        "cost": 8,
+        "retail": 16.9,
+        "stock": 100,
+        "monthly": 80,
+    },
     # 轮椅 (2)
-    {"id": "WC001", "name": "鱼跃 H062 铝合金折叠轮椅", "barcode": "6926264406201", "category": "轮椅", "brand": "鱼跃", "cost": 580, "retail": 999, "stock": 5, "monthly": 3},
-    {"id": "WC002", "name": "互邦 HBG25 轻便折叠轮椅", "barcode": "6937812000058", "category": "轮椅", "brand": "互邦", "cost": 450, "retail": 799, "stock": 4, "monthly": 2},
+    {
+        "id": "WC001",
+        "name": "鱼跃 H062 铝合金折叠轮椅",
+        "barcode": "6926264406201",
+        "category": "轮椅",
+        "brand": "鱼跃",
+        "cost": 580,
+        "retail": 999,
+        "stock": 5,
+        "monthly": 3,
+    },
+    {
+        "id": "WC002",
+        "name": "互邦 HBG25 轻便折叠轮椅",
+        "barcode": "6937812000058",
+        "category": "轮椅",
+        "brand": "互邦",
+        "cost": 450,
+        "retail": 799,
+        "stock": 4,
+        "monthly": 2,
+    },
     # 制氧机 (2)
-    {"id": "OX001", "name": "鱼跃 8F-5AW 5L制氧机", "barcode": "6926264408015", "category": "制氧机", "brand": "鱼跃", "cost": 1680, "retail": 2899, "stock": 3, "monthly": 2},
-    {"id": "OX002", "name": "欧姆龙 HAO-2210 3L制氧机", "barcode": "4975479422101", "category": "制氧机", "brand": "欧姆龙", "cost": 1280, "retail": 2199, "stock": 4, "monthly": 3},
+    {
+        "id": "OX001",
+        "name": "鱼跃 8F-5AW 5L制氧机",
+        "barcode": "6926264408015",
+        "category": "制氧机",
+        "brand": "鱼跃",
+        "cost": 1680,
+        "retail": 2899,
+        "stock": 3,
+        "monthly": 2,
+    },
+    {
+        "id": "OX002",
+        "name": "欧姆龙 HAO-2210 3L制氧机",
+        "barcode": "4975479422101",
+        "category": "制氧机",
+        "brand": "欧姆龙",
+        "cost": 1280,
+        "retail": 2199,
+        "stock": 4,
+        "monthly": 3,
+    },
     # 雾化器 (2)
-    {"id": "NB001", "name": "欧姆龙 NE-C28 压缩式雾化器", "barcode": "4975479416280", "category": "雾化器", "brand": "欧姆龙", "cost": 258, "retail": 459, "stock": 10, "monthly": 8},
-    {"id": "NB002", "name": "鱼跃 403AI 雾化器", "barcode": "6926264404031", "category": "雾化器", "brand": "鱼跃", "cost": 158, "retail": 289, "stock": 12, "monthly": 10},
+    {
+        "id": "NB001",
+        "name": "欧姆龙 NE-C28 压缩式雾化器",
+        "barcode": "4975479416280",
+        "category": "雾化器",
+        "brand": "欧姆龙",
+        "cost": 258,
+        "retail": 459,
+        "stock": 10,
+        "monthly": 8,
+    },
+    {
+        "id": "NB002",
+        "name": "鱼跃 403AI 雾化器",
+        "barcode": "6926264404031",
+        "category": "雾化器",
+        "brand": "鱼跃",
+        "cost": 158,
+        "retail": 289,
+        "stock": 12,
+        "monthly": 10,
+    },
     # 其他 (6)
-    {"id": "PO001", "name": "鱼跃 YX306 指夹式血氧仪", "barcode": "6926264403061", "category": "血氧仪", "brand": "鱼跃", "cost": 88, "retail": 159, "stock": 25, "monthly": 20},
-    {"id": "HT001", "name": "仙鹤 CQ-29 神灯理疗仪", "barcode": "6938726000291", "category": "理疗仪", "brand": "仙鹤", "cost": 128, "retail": 229, "stock": 8, "monthly": 5},
-    {"id": "GL001", "name": "英科 一次性乳胶手套 100只 M码", "barcode": "6973208000122", "category": "手套", "brand": "英科", "cost": 18, "retail": 35.9, "stock": 80, "monthly": 60},
-    {"id": "BN001", "name": "3M 弹性绷带 7.5cm×4.5m", "barcode": "7100150001011", "category": "绷带", "brand": "3M", "cost": 12, "retail": 24.9, "stock": 60, "monthly": 40},
-    {"id": "CT001", "name": "仲景 医用棉签 500支", "barcode": "6926000000501", "category": "棉签", "brand": "仲景", "cost": 5, "retail": 12.9, "stock": 200, "monthly": 150},
-    {"id": "AB001", "name": "利尔康 75%酒精消毒液 500ml", "barcode": "6933456000501", "category": "消毒用品", "brand": "利尔康", "cost": 8, "retail": 18.9, "stock": 100, "monthly": 85, "status": "inactive"},
+    {
+        "id": "PO001",
+        "name": "鱼跃 YX306 指夹式血氧仪",
+        "barcode": "6926264403061",
+        "category": "血氧仪",
+        "brand": "鱼跃",
+        "cost": 88,
+        "retail": 159,
+        "stock": 25,
+        "monthly": 20,
+    },
+    {
+        "id": "HT001",
+        "name": "仙鹤 CQ-29 神灯理疗仪",
+        "barcode": "6938726000291",
+        "category": "理疗仪",
+        "brand": "仙鹤",
+        "cost": 128,
+        "retail": 229,
+        "stock": 8,
+        "monthly": 5,
+    },
+    {
+        "id": "GL001",
+        "name": "英科 一次性乳胶手套 100只 M码",
+        "barcode": "6973208000122",
+        "category": "手套",
+        "brand": "英科",
+        "cost": 18,
+        "retail": 35.9,
+        "stock": 80,
+        "monthly": 60,
+    },
+    {
+        "id": "BN001",
+        "name": "3M 弹性绷带 7.5cm×4.5m",
+        "barcode": "7100150001011",
+        "category": "绷带",
+        "brand": "3M",
+        "cost": 12,
+        "retail": 24.9,
+        "stock": 60,
+        "monthly": 40,
+    },
+    {
+        "id": "CT001",
+        "name": "仲景 医用棉签 500支",
+        "barcode": "6926000000501",
+        "category": "棉签",
+        "brand": "仲景",
+        "cost": 5,
+        "retail": 12.9,
+        "stock": 200,
+        "monthly": 150,
+    },
+    {
+        "id": "AB001",
+        "name": "利尔康 75%酒精消毒液 500ml",
+        "barcode": "6933456000501",
+        "category": "消毒用品",
+        "brand": "利尔康",
+        "cost": 8,
+        "retail": 18.9,
+        "stock": 100,
+        "monthly": 85,
+        "status": "inactive",
+    },
 ]
 
 # 竞品店铺
 COMPETITOR_STORES = [
-    {"id": "COMP001", "name": "大参林药房（望京店）", "distance": 0.8, "rating": 4.7, "reviews": 2350, "threat": "high"},
-    {"id": "COMP002", "name": "海王星辰药房（朝阳路店）", "distance": 1.2, "rating": 4.5, "reviews": 1820, "threat": "high"},
-    {"id": "COMP003", "name": "益丰大药房（工体北路店）", "distance": 1.8, "rating": 4.6, "reviews": 1560, "threat": "medium"},
-    {"id": "COMP004", "name": "国大药房（安贞桥店）", "distance": 2.5, "rating": 4.3, "reviews": 980, "threat": "medium"},
-    {"id": "COMP005", "name": "叮当快药（CBD店）", "distance": 3.0, "rating": 4.8, "reviews": 3200, "threat": "low"},
+    {
+        "id": "COMP001",
+        "name": "大参林药房（望京店）",
+        "distance": 0.8,
+        "rating": 4.7,
+        "reviews": 2350,
+        "threat": "high",
+    },
+    {
+        "id": "COMP002",
+        "name": "海王星辰药房（朝阳路店）",
+        "distance": 1.2,
+        "rating": 4.5,
+        "reviews": 1820,
+        "threat": "high",
+    },
+    {
+        "id": "COMP003",
+        "name": "益丰大药房（工体北路店）",
+        "distance": 1.8,
+        "rating": 4.6,
+        "reviews": 1560,
+        "threat": "medium",
+    },
+    {
+        "id": "COMP004",
+        "name": "国大药房（安贞桥店）",
+        "distance": 2.5,
+        "rating": 4.3,
+        "reviews": 980,
+        "threat": "medium",
+    },
+    {
+        "id": "COMP005",
+        "name": "叮当快药（CBD店）",
+        "distance": 3.0,
+        "rating": 4.8,
+        "reviews": 3200,
+        "threat": "low",
+    },
 ]
 
 # 竞品商品模板（每个竞品会从中选取10-15个并加价格波动）
@@ -135,29 +470,56 @@ CONTRAINDICATED_FOR = {
 
 # USED_IN: product_id -> [scenario]
 USED_IN = {
-    "BP001": ["日常血压监测"], "BP002": ["日常血压监测"], "BP003": ["日常血压监测"],
-    "BP004": ["日常血压监测"], "BP005": ["日常血压监测"],
-    "BG001": ["血糖管理"], "BG002": ["血糖管理"], "BG003": ["血糖管理"], "BG004": ["血糖管理"],
-    "TH001": ["感冒护理", "婴儿护理"], "TH002": ["感冒护理", "婴儿护理"], "TH003": ["婴儿护理"],
-    "MK001": ["感冒护理"], "MK002": ["感冒护理"],
-    "FA001": ["外伤处理"], "FA002": ["外伤处理"], "FA003": ["外伤处理"],
-    "GL001": ["外伤处理"], "BN001": ["外伤处理"], "CT001": ["外伤处理"],
-    "WC001": ["居家康复"], "WC002": ["居家康复"],
-    "OX001": ["居家康复"], "OX002": ["居家康复"],
-    "NB001": ["感冒护理", "居家康复"], "NB002": ["感冒护理", "居家康复"],
+    "BP001": ["日常血压监测"],
+    "BP002": ["日常血压监测"],
+    "BP003": ["日常血压监测"],
+    "BP004": ["日常血压监测"],
+    "BP005": ["日常血压监测"],
+    "BG001": ["血糖管理"],
+    "BG002": ["血糖管理"],
+    "BG003": ["血糖管理"],
+    "BG004": ["血糖管理"],
+    "TH001": ["感冒护理", "婴儿护理"],
+    "TH002": ["感冒护理", "婴儿护理"],
+    "TH003": ["婴儿护理"],
+    "MK001": ["感冒护理"],
+    "MK002": ["感冒护理"],
+    "FA001": ["外伤处理"],
+    "FA002": ["外伤处理"],
+    "FA003": ["外伤处理"],
+    "GL001": ["外伤处理"],
+    "BN001": ["外伤处理"],
+    "CT001": ["外伤处理"],
+    "WC001": ["居家康复"],
+    "WC002": ["居家康复"],
+    "OX001": ["居家康复"],
+    "OX002": ["居家康复"],
+    "NB001": ["感冒护理", "居家康复"],
+    "NB002": ["感冒护理", "居家康复"],
     "HT001": ["居家康复"],
     "PO001": ["居家康复"],
 }
 
 # HELPS_WITH: product_id -> [symptom]
 HELPS_WITH = {
-    "BP001": ["高血压", "头晕"], "BP002": ["高血压", "头晕"], "BP003": ["高血压"],
-    "BG001": ["低血糖"], "BG002": ["低血糖"], "BG003": ["低血糖"],
-    "TH001": ["发烧"], "TH002": ["发烧"], "TH003": ["发烧"],
-    "MK001": ["咳嗽"], "MK002": ["咳嗽"],
-    "NB001": ["咳嗽"], "NB002": ["咳嗽"],
-    "FA001": ["外伤"], "FA002": ["外伤"], "FA003": ["外伤"],
-    "BN001": ["外伤"], "PO001": ["头晕"],
+    "BP001": ["高血压", "头晕"],
+    "BP002": ["高血压", "头晕"],
+    "BP003": ["高血压"],
+    "BG001": ["低血糖"],
+    "BG002": ["低血糖"],
+    "BG003": ["低血糖"],
+    "TH001": ["发烧"],
+    "TH002": ["发烧"],
+    "TH003": ["发烧"],
+    "MK001": ["咳嗽"],
+    "MK002": ["咳嗽"],
+    "NB001": ["咳嗽"],
+    "NB002": ["咳嗽"],
+    "FA001": ["外伤"],
+    "FA002": ["外伤"],
+    "FA003": ["外伤"],
+    "BN001": ["外伤"],
+    "PO001": ["头晕"],
 }
 
 # OFTEN_BOUGHT_WITH: (product_a, product_b, support, confidence, lift)
@@ -180,18 +542,78 @@ OFTEN_BOUGHT_WITH = [
 
 # FAQ 节点
 FAQS = [
-    {"id": "FAQ001", "q": "电子血压计和水银血压计哪个准？", "a": "电子血压计经过校准后与水银血压计一样准确。对家庭用户来说，电子血压计更方便、更安全（无汞），推荐选择臂式电子血压计。", "products": ["BP001", "BP002", "BP003"]},
-    {"id": "FAQ002", "q": "血糖仪试纸可以通用吗？", "a": "不可以。每个品牌的血糖仪都需要使用配套试纸，不同品牌试纸不能混用，否则会导致结果不准确。", "products": ["BG001", "BG002", "BG003", "BG004"]},
-    {"id": "FAQ003", "q": "N95口罩和医用外科口罩有什么区别？", "a": "N95口罩过滤效率≥95%，防护性更强，适合高风险环境；医用外科口罩过滤效率≥80%，适合日常防护，透气性更好。", "products": ["MK001", "MK002", "MK003"]},
-    {"id": "FAQ004", "q": "老人用哪种血压计好？", "a": "推荐老人使用臂式电子血压计（不推荐腕式），因为老年人血管弹性差，腕式测量偏差较大。选择大屏显示、一键操作的型号更好。", "products": ["BP001", "BP002", "BP003"]},
-    {"id": "FAQ005", "q": "制氧机几升的合适？", "a": "家庭保健用1-3L即可；慢阻肺等疾病患者建议5L以上。建议遵医嘱选购。", "products": ["OX001", "OX002"]},
-    {"id": "FAQ006", "q": "雾化器压缩式和网式哪种好？", "a": "压缩式雾化器雾化颗粒更均匀，药物利用率高，适合各年龄段；网式更便携安静但价格较高。家庭常备推荐压缩式。", "products": ["NB001", "NB002"]},
-    {"id": "FAQ007", "q": "血氧仪正常值是多少？", "a": "正常血氧饱和度为95%-100%。低于94%建议就医，低于90%需紧急处理。指甲油、冰冷的手指可能影响测量准确性。", "products": ["PO001"]},
-    {"id": "FAQ008", "q": "轮椅怎么选尺寸？", "a": "座宽=臀宽+2-3cm，座深=大腿长度-5cm。折叠轮椅便于出行，铝合金材质更轻便。建议到店试坐。", "products": ["WC001", "WC002"]},
-    {"id": "FAQ009", "q": "创可贴能用在伤口发炎的地方吗？", "a": "不建议。创可贴适用于小型、清洁的伤口。如果伤口已发炎、化脓、较深或面积较大，应先消毒后就医处理。", "products": ["FA001", "FA002"]},
-    {"id": "FAQ010", "q": "额温枪和耳温枪哪个准？", "a": "耳温枪测量鼓膜温度，更接近核心体温，准确性更高；额温枪受环境温度影响较大但使用更快捷。婴幼儿推荐耳温枪。", "products": ["TH002", "TH003"]},
-    {"id": "FAQ011", "q": "酒精和碘伏消毒有什么区别？", "a": "75%酒精适合皮肤和物体表面消毒，但有刺激性；碘伏刺激性小，适合伤口消毒。伤口建议用碘伏，物体表面用酒精。", "products": ["FA003", "AB001"]},
-    {"id": "FAQ012", "q": "血糖什么时候测最准？", "a": "空腹血糖：早上起床后未进食测量；餐后血糖：从吃第一口饭开始计时2小时后测量。建议固定时间测量以便对比。", "products": ["BG001", "BG002", "BG003"]},
+    {
+        "id": "FAQ001",
+        "q": "电子血压计和水银血压计哪个准？",
+        "a": "电子血压计经过校准后与水银血压计一样准确。对家庭用户来说，电子血压计更方便、更安全（无汞），推荐选择臂式电子血压计。",
+        "products": ["BP001", "BP002", "BP003"],
+    },
+    {
+        "id": "FAQ002",
+        "q": "血糖仪试纸可以通用吗？",
+        "a": "不可以。每个品牌的血糖仪都需要使用配套试纸，不同品牌试纸不能混用，否则会导致结果不准确。",
+        "products": ["BG001", "BG002", "BG003", "BG004"],
+    },
+    {
+        "id": "FAQ003",
+        "q": "N95口罩和医用外科口罩有什么区别？",
+        "a": "N95口罩过滤效率≥95%，防护性更强，适合高风险环境；医用外科口罩过滤效率≥80%，适合日常防护，透气性更好。",
+        "products": ["MK001", "MK002", "MK003"],
+    },
+    {
+        "id": "FAQ004",
+        "q": "老人用哪种血压计好？",
+        "a": "推荐老人使用臂式电子血压计（不推荐腕式），因为老年人血管弹性差，腕式测量偏差较大。选择大屏显示、一键操作的型号更好。",
+        "products": ["BP001", "BP002", "BP003"],
+    },
+    {
+        "id": "FAQ005",
+        "q": "制氧机几升的合适？",
+        "a": "家庭保健用1-3L即可；慢阻肺等疾病患者建议5L以上。建议遵医嘱选购。",
+        "products": ["OX001", "OX002"],
+    },
+    {
+        "id": "FAQ006",
+        "q": "雾化器压缩式和网式哪种好？",
+        "a": "压缩式雾化器雾化颗粒更均匀，药物利用率高，适合各年龄段；网式更便携安静但价格较高。家庭常备推荐压缩式。",
+        "products": ["NB001", "NB002"],
+    },
+    {
+        "id": "FAQ007",
+        "q": "血氧仪正常值是多少？",
+        "a": "正常血氧饱和度为95%-100%。低于94%建议就医，低于90%需紧急处理。指甲油、冰冷的手指可能影响测量准确性。",
+        "products": ["PO001"],
+    },
+    {
+        "id": "FAQ008",
+        "q": "轮椅怎么选尺寸？",
+        "a": "座宽=臀宽+2-3cm，座深=大腿长度-5cm。折叠轮椅便于出行，铝合金材质更轻便。建议到店试坐。",
+        "products": ["WC001", "WC002"],
+    },
+    {
+        "id": "FAQ009",
+        "q": "创可贴能用在伤口发炎的地方吗？",
+        "a": "不建议。创可贴适用于小型、清洁的伤口。如果伤口已发炎、化脓、较深或面积较大，应先消毒后就医处理。",
+        "products": ["FA001", "FA002"],
+    },
+    {
+        "id": "FAQ010",
+        "q": "额温枪和耳温枪哪个准？",
+        "a": "耳温枪测量鼓膜温度，更接近核心体温，准确性更高；额温枪受环境温度影响较大但使用更快捷。婴幼儿推荐耳温枪。",
+        "products": ["TH002", "TH003"],
+    },
+    {
+        "id": "FAQ011",
+        "q": "酒精和碘伏消毒有什么区别？",
+        "a": "75%酒精适合皮肤和物体表面消毒，但有刺激性；碘伏刺激性小，适合伤口消毒。伤口建议用碘伏，物体表面用酒精。",
+        "products": ["FA003", "AB001"],
+    },
+    {
+        "id": "FAQ012",
+        "q": "血糖什么时候测最准？",
+        "a": "空腹血糖：早上起床后未进食测量；餐后血糖：从吃第一口饭开始计时2小时后测量。建议固定时间测量以便对比。",
+        "products": ["BG001", "BG002", "BG003"],
+    },
 ]
 
 # ---------------------------------------------------------------------------
@@ -247,6 +669,7 @@ def _product_map() -> dict[str, dict]:
 # PostgreSQL seeding
 # ============================================================
 
+
 async def seed_postgres(pg_url: str) -> None:
     import asyncpg  # type: ignore[import-untyped]
 
@@ -256,7 +679,7 @@ async def seed_postgres(pg_url: str) -> None:
     try:
         pmap = _product_map()
         today = date.today()
-        tz = timezone.utc
+        tz = UTC
 
         # --- Products ---
         print("[PG] Inserting products …")
@@ -267,10 +690,17 @@ async def seed_postgres(pg_url: str) -> None:
                    cost_price, retail_price, stock, monthly_sales, status)
                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
                    ON CONFLICT (product_id) DO NOTHING""",
-                p["id"], p["name"], p["barcode"], p["category"], p["brand"],
-                f'{p["brand"]} {p["name"]}',
-                Decimal(str(p["cost"])), Decimal(str(p["retail"])),
-                p["stock"], p["monthly"], status,
+                p["id"],
+                p["name"],
+                p["barcode"],
+                p["category"],
+                p["brand"],
+                f"{p['brand']} {p['name']}",
+                Decimal(str(p["cost"])),
+                Decimal(str(p["retail"])),
+                p["stock"],
+                p["monthly"],
+                status,
             )
         print(f"[PG] {len(PRODUCTS)} products inserted.")
 
@@ -282,8 +712,12 @@ async def seed_postgres(pg_url: str) -> None:
                    rating, review_count, threat_level, last_crawl_at)
                    VALUES ($1,$2,'meituan',$3,$4,$5,$6,$7)
                    ON CONFLICT (competitor_id) DO NOTHING""",
-                cs["id"], cs["name"], Decimal(str(cs["distance"])),
-                Decimal(str(cs["rating"])), cs["reviews"], cs["threat"],
+                cs["id"],
+                cs["name"],
+                Decimal(str(cs["distance"])),
+                Decimal(str(cs["rating"])),
+                cs["reviews"],
+                cs["threat"],
                 datetime.now(tz),
             )
 
@@ -299,8 +733,11 @@ async def seed_postgres(pg_url: str) -> None:
                 await conn.execute(
                     """INSERT INTO competitor_products (competitor_id, product_name, barcode, price, monthly_sales, is_stockout)
                        VALUES ($1,$2,$3,$4,$5,$6)""",
-                    cs["id"], name, barcode,
-                    Decimal(str(round(price_var, 2))), monthly,
+                    cs["id"],
+                    name,
+                    barcode,
+                    Decimal(str(round(price_var, 2))),
+                    monthly,
                     random.random() < 0.05,
                 )
 
@@ -330,7 +767,10 @@ async def seed_postgres(pg_url: str) -> None:
                 total += price * qty
                 items.append((pid, qty, price))
 
-            status = random.choices(["completed", "completed", "completed", "cancelled", "refunded"], weights=[85, 5, 5, 3, 2])[0]
+            status = random.choices(
+                ["completed", "completed", "completed", "cancelled", "refunded"],
+                weights=[85, 5, 5, 3, 2],
+            )[0]
             addr_type = random.choice(["home", "office", "hospital", "nursing_home"])
             phone_suffix = f"{random.randint(0, 9999):04d}"
 
@@ -339,13 +779,21 @@ async def seed_postgres(pg_url: str) -> None:
                    status, order_time, delivery_address_type)
                    VALUES ($1,'meituan',$2,$3,$4,$5,$6)
                    ON CONFLICT (order_id) DO NOTHING""",
-                order_id, phone_suffix, total, status, order_time, addr_type,
+                order_id,
+                phone_suffix,
+                total,
+                status,
+                order_time,
+                addr_type,
             )
             for pid, qty, price in items:
                 await conn.execute(
                     """INSERT INTO order_items (order_id, product_id, quantity, unit_price)
                        VALUES ($1,$2,$3,$4)""",
-                    order_id, pid, qty, price,
+                    order_id,
+                    pid,
+                    qty,
+                    price,
                 )
 
         # --- Sales history (90 days × 30 products) ---
@@ -385,6 +833,7 @@ async def seed_postgres(pg_url: str) -> None:
 # Neo4j seeding
 # ============================================================
 
+
 def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
     from neo4j import GraphDatabase  # type: ignore[import-untyped]
 
@@ -418,8 +867,11 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                        p.description = $desc,
                        p.retail_price = $price,
                        p.embedding = null""",
-                pid=p["id"], name=p["name"], category=p["category"],
-                brand=p["brand"], desc=f'{p["brand"]} {p["name"]}',
+                pid=p["id"],
+                name=p["name"],
+                category=p["category"],
+                brand=p["brand"],
+                desc=f"{p['brand']} {p['name']}",
                 price=float(p["retail"]),
             )
 
@@ -431,7 +883,9 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                     """MATCH (p:Product {product_id: $pid}), (pop:Population {name: $pop})
                        MERGE (p)-[r:SUITABLE_FOR]->(pop)
                        SET r.confidence = $conf""",
-                    pid=pid, pop=pop_name, conf=conf,
+                    pid=pid,
+                    pop=pop_name,
+                    conf=conf,
                 )
 
         # --- CONTRAINDICATED_FOR ---
@@ -442,7 +896,9 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                     """MATCH (p:Product {product_id: $pid}), (pop:Population {name: $pop})
                        MERGE (p)-[r:CONTRAINDICATED_FOR]->(pop)
                        SET r.reason = $reason""",
-                    pid=pid, pop=pop_name, reason=reason,
+                    pid=pid,
+                    pop=pop_name,
+                    reason=reason,
                 )
 
         # --- USED_IN ---
@@ -452,7 +908,8 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                 session.run(
                     """MATCH (p:Product {product_id: $pid}), (s:Scenario {name: $sc})
                        MERGE (p)-[:USED_IN]->(s)""",
-                    pid=pid, sc=sc,
+                    pid=pid,
+                    sc=sc,
                 )
 
         # --- HELPS_WITH ---
@@ -462,7 +919,8 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                 session.run(
                     """MATCH (p:Product {product_id: $pid}), (s:Symptom {name: $sym})
                        MERGE (p)-[:HELPS_WITH]->(s)""",
-                    pid=pid, sym=sym,
+                    pid=pid,
+                    sym=sym,
                 )
 
         # --- OFTEN_BOUGHT_WITH ---
@@ -472,7 +930,11 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
                 """MATCH (a:Product {product_id: $pa}), (b:Product {product_id: $pb})
                    MERGE (a)-[r:OFTEN_BOUGHT_WITH]->(b)
                    SET r.support = $support, r.confidence = $confidence, r.lift = $lift""",
-                pa=pa, pb=pb, support=support, confidence=confidence, lift=lift,
+                pa=pa,
+                pb=pb,
+                support=support,
+                confidence=confidence,
+                lift=lift,
             )
 
         # --- FAQ nodes ---
@@ -481,13 +943,16 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
             session.run(
                 """MERGE (f:FAQ {faq_id: $fid})
                    SET f.question = $q, f.answer = $a, f.question_embedding = null""",
-                fid=faq["id"], q=faq["q"], a=faq["a"],
+                fid=faq["id"],
+                q=faq["q"],
+                a=faq["a"],
             )
             for pid in faq["products"]:
                 session.run(
                     """MATCH (f:FAQ {faq_id: $fid}), (p:Product {product_id: $pid})
                        MERGE (f)-[:ANSWERS]->(p)""",
-                    fid=faq["id"], pid=pid,
+                    fid=faq["id"],
+                    pid=pid,
                 )
 
     driver.close()
@@ -498,9 +963,12 @@ def seed_neo4j(neo4j_url: str, neo4j_user: str, neo4j_password: str) -> None:
 # Main
 # ============================================================
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AI店长 种子数据")
-    parser.add_argument("--postgres-url", default="postgresql://postgres:postgres@localhost:5432/ai_store")
+    parser.add_argument(
+        "--postgres-url", default="postgresql://postgres:postgres@localhost:5432/ai_store"
+    )
     parser.add_argument("--neo4j-url", default="bolt://localhost:7687")
     parser.add_argument("--neo4j-user", default="neo4j")
     parser.add_argument("--neo4j-password", default="neo4j")

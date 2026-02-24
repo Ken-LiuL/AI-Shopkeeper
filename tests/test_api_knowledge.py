@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import sys
 import types
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 # Ensure neo4j stub has needed attributes
 _neo4j_stub = sys.modules.get("neo4j") or types.ModuleType("neo4j")
@@ -52,7 +53,9 @@ class TestKnowledgeSearch:
 
     def test_faq_results(self, client):
         faq = [{"question": "血压计怎么用", "answer": "按开关", "category": "FAQ", "source": "faq"}]
-        with patch.object(knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[faq, [], []]):
+        with patch.object(
+            knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[faq, [], []]
+        ):
             resp = client.get("/api/knowledge/search?q=血压计")
         assert resp.status_code == 200
         data = resp.json()["data"]
@@ -60,15 +63,21 @@ class TestKnowledgeSearch:
         assert data[0]["source"] == "faq"
 
     def test_product_results(self, client):
-        products = [{"name": "鱼跃血压计", "description": "电子", "category": "医疗", "source": "product"}]
-        with patch.object(knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[[], products, []]):
+        products = [
+            {"name": "鱼跃血压计", "description": "电子", "category": "医疗", "source": "product"}
+        ]
+        with patch.object(
+            knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[[], products, []]
+        ):
             resp = client.get("/api/knowledge/search?q=鱼跃")
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 1
 
     def test_fallback_search(self, client):
         fallback = [{"labels": ["FAQ"], "props": {"q": "test"}, "source": "graph"}]
-        with patch.object(knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[[], [], fallback]):
+        with patch.object(
+            knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=[[], [], fallback]
+        ):
             resp = client.get("/api/knowledge/search?q=test")
         assert resp.status_code == 200
         assert len(resp.json()["data"]) == 1
@@ -78,7 +87,9 @@ class TestKnowledgeSearch:
         assert resp.status_code == 422
 
     def test_neo4j_exception_graceful(self, client):
-        with patch.object(knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=Exception("down")):
+        with patch.object(
+            knowledge_mod.neo4j_db, "query", new_callable=AsyncMock, side_effect=Exception("down")
+        ):
             resp = client.get("/api/knowledge/search?q=test")
         assert resp.status_code == 200
         assert resp.json()["data"] == []

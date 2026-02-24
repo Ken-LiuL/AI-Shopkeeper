@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -13,11 +13,11 @@ import redis.asyncio as aioredis
 logger = logging.getLogger(__name__)
 
 # Redis key prefixes
-_SESSION_META = "cs:session:meta:"     # hash: customer_id, created_at, updated_at
-_SESSION_MSGS = "cs:session:msgs:"     # list of JSON messages
-_SESSION_LOCK = "cs:session:lock:"     # distributed lock
-_SESSION_INDEX = "cs:sessions"         # sorted set: session_id scored by updated_at
-_CUSTOMER_INDEX = "cs:customer:"       # sorted set per customer_id
+_SESSION_META = "cs:session:meta:"  # hash: customer_id, created_at, updated_at
+_SESSION_MSGS = "cs:session:msgs:"  # list of JSON messages
+_SESSION_LOCK = "cs:session:lock:"  # distributed lock
+_SESSION_INDEX = "cs:sessions"  # sorted set: session_id scored by updated_at
+_CUSTOMER_INDEX = "cs:customer:"  # sorted set per customer_id
 
 SESSION_TTL = 86400  # 24 hours
 
@@ -35,7 +35,7 @@ class SessionManager:
     ) -> tuple[str, str]:
         """Create a new session. Returns (session_id, created_at)."""
         session_id = uuid.uuid4().hex
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         meta = {
             "customer_id": customer_id or "",
@@ -49,7 +49,7 @@ class SessionManager:
         await self._r.expire(meta_key, SESSION_TTL)
 
         # Index by time
-        ts = datetime.now(timezone.utc).timestamp()
+        ts = datetime.now(UTC).timestamp()
         await self._r.zadd(_SESSION_INDEX, {session_id: ts})
         if customer_id:
             await self._r.zadd(f"{_CUSTOMER_INDEX}{customer_id}", {session_id: ts})
@@ -69,7 +69,7 @@ class SessionManager:
         """Append a message (user or assistant) and refresh TTL."""
         msg_key = f"{_SESSION_MSGS}{session_id}"
         meta_key = f"{_SESSION_META}{session_id}"
-        now = datetime.now(timezone.utc).isoformat()
+        now = datetime.now(UTC).isoformat()
 
         entry = json.dumps({"role": role, "content": content, "timestamp": now}, ensure_ascii=False)
         await self._r.rpush(msg_key, entry)
@@ -81,7 +81,7 @@ class SessionManager:
         await self._r.expire(meta_key, SESSION_TTL)
 
         # Update index score
-        ts = datetime.now(timezone.utc).timestamp()
+        ts = datetime.now(UTC).timestamp()
         await self._r.zadd(_SESSION_INDEX, {session_id: ts})
 
     # ── Locking ───────────────────────────────────────────────
@@ -103,10 +103,7 @@ class SessionManager:
         self, customer_id: str | None = None, limit: int = 20
     ) -> list[dict[str, Any]]:
         """List recent sessions, optionally filtered by customer_id."""
-        if customer_id:
-            index_key = f"{_CUSTOMER_INDEX}{customer_id}"
-        else:
-            index_key = _SESSION_INDEX
+        index_key = f"{_CUSTOMER_INDEX}{customer_id}" if customer_id else _SESSION_INDEX
 
         # Most recent first
         session_ids = await self._r.zrevrange(index_key, 0, limit - 1)
@@ -122,14 +119,16 @@ class SessionManager:
                 last_msg = json.loads(last_raw)
                 last_message = last_msg.get("content", "")[:100]
 
-            results.append({
-                "session_id": sid,
-                "customer_id": meta.get("customer_id") or None,
-                "last_message": last_message,
-                "message_count": int(meta.get("message_count", 0)),
-                "created_at": meta.get("created_at", ""),
-                "updated_at": meta.get("updated_at", ""),
-            })
+            results.append(
+                {
+                    "session_id": sid,
+                    "customer_id": meta.get("customer_id") or None,
+                    "last_message": last_message,
+                    "message_count": int(meta.get("message_count", 0)),
+                    "created_at": meta.get("created_at", ""),
+                    "updated_at": meta.get("updated_at", ""),
+                }
+            )
         return results
 
     async def close_session(self, session_id: str) -> bool:

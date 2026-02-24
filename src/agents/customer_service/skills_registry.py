@@ -5,23 +5,23 @@ vector_store skill 可以是 Neo4jSkill 或 PgVectorSkill，接口兼容。
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from src.skills.embedding import EmbeddingSkill
     from src.skills.reranker import RerankerSkill
 
-_vector_store: Optional[Any] = None  # Neo4jSkill | PgVectorSkill
-_embedding_skill: Optional["EmbeddingSkill"] = None
-_reranker_skill: Optional["RerankerSkill"] = None
+_vector_store: Any | None = None  # Neo4jSkill | PgVectorSkill
+_embedding_skill: EmbeddingSkill | None = None
+_reranker_skill: RerankerSkill | None = None
 
 
 def register_skills(
-    neo4j: Optional[Any] = None,
-    embedding: Optional["EmbeddingSkill"] = None,
-    reranker: Optional["RerankerSkill"] = None,
+    neo4j: Any | None = None,
+    embedding: EmbeddingSkill | None = None,
+    reranker: RerankerSkill | None = None,
     *,
-    vector_store: Optional[Any] = None,
+    vector_store: Any | None = None,
 ) -> None:
     """注册 skill 实例（在 app lifespan startup 中调用）。
 
@@ -43,14 +43,14 @@ def register_skills(
         _reranker_skill = reranker
 
 
-def get_neo4j() -> Optional[Any]:
+def get_neo4j() -> Any | None:
     """返回向量检索后端（Neo4jSkill 或 PgVectorSkill，接口兼容）。"""
     return _vector_store
 
 
-def get_embedding() -> Optional["EmbeddingSkill"]:
+def get_embedding() -> EmbeddingSkill | None:
     return _embedding_skill
 
 
-def get_reranker() -> Optional["RerankerSkill"]:
+def get_reranker() -> RerankerSkill | None:
     return _reranker_skill

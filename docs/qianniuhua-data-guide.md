@@ -465,7 +465,7 @@ for (const frame of frames) {
     frameId: frame.frame.id,
     worldName: 'dataExtract'
   });
-  
+
   // 在iframe中执行JS
   const result = await send('Runtime.evaluate', {
     expression: '(function(){ /* extract data */ })()',

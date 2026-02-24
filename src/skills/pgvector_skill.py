@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from .neo4j_skill import (
     KeywordSearchResult,
@@ -32,14 +32,14 @@ class PgVectorSkill:
 
     # ── helpers ───────────────────────────────────────────────────────────
 
-    async def _fetch(self, query: str, *args: Any) -> List[Dict[str, Any]]:
+    async def _fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         if self._pool is None:
             return []
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
             return [dict(r) for r in rows]
 
-    async def _fetchrow(self, query: str, *args: Any) -> Optional[Dict[str, Any]]:
+    async def _fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
         if self._pool is None:
             return None
         async with self._pool.acquire() as conn:
@@ -50,10 +50,10 @@ class PgVectorSkill:
 
     async def vector_search(
         self,
-        query_embedding: List[float],
+        query_embedding: list[float],
         index_name: str = "product_embedding_index",
         limit: int = 10,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """向量语义检索（cosine similarity）。"""
         # pgvector uses <=> for cosine distance; score = 1 - distance
         embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
@@ -72,9 +72,9 @@ class PgVectorSkill:
 
     async def keyword_search(
         self,
-        keywords: List[str],
+        keywords: list[str],
         limit: int = 10,
-    ) -> List[KeywordSearchResult]:
+    ) -> list[KeywordSearchResult]:
         """关键词全文检索（tsvector）。"""
         if not keywords:
             return []
@@ -95,13 +95,13 @@ class PgVectorSkill:
 
     @staticmethod
     def _rrf_merge(
-        vector_results: List[VectorSearchResult],
-        keyword_results: List[KeywordSearchResult],
+        vector_results: list[VectorSearchResult],
+        keyword_results: list[KeywordSearchResult],
         k: int = 60,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """Reciprocal Rank Fusion 合并两路检索结果。"""
-        scores: Dict[str, float] = {}
-        items: Dict[str, VectorSearchResult] = {}
+        scores: dict[str, float] = {}
+        items: dict[str, VectorSearchResult] = {}
 
         for rank, item in enumerate(vector_results, start=1):
             scores[item.id] = scores.get(item.id, 0) + 1.0 / (k + rank)
@@ -111,8 +111,10 @@ class PgVectorSkill:
             scores[item.id] = scores.get(item.id, 0) + 1.0 / (k + rank)
             if item.id not in items:
                 items[item.id] = VectorSearchResult(
-                    id=item.id, name=item.name,
-                    description=item.description, score=item.score,
+                    id=item.id,
+                    name=item.name,
+                    description=item.description,
+                    score=item.score,
                 )
 
         sorted_ids = sorted(scores, key=lambda x: scores[x], reverse=True)
@@ -125,10 +127,10 @@ class PgVectorSkill:
     async def hybrid_search(
         self,
         query: str,
-        query_embedding: List[float],
-        keywords: List[str],
+        query_embedding: list[float],
+        keywords: list[str],
         limit: int = 10,
-    ) -> List[VectorSearchResult]:
+    ) -> list[VectorSearchResult]:
         """混合检索：向量 + 关键词 + RRF 融合。"""
         vector_results, keyword_results = await asyncio.gather(
             self.vector_search(query_embedding, limit=30),
@@ -139,7 +141,7 @@ class PgVectorSkill:
 
     # ── GraphRAG ─────────────────────────────────────────────────────────
 
-    async def get_product_graph(self, product_id: str) -> Optional[ProductGraph]:
+    async def get_product_graph(self, product_id: str) -> ProductGraph | None:
         """获取商品完整关联信息（从 PostgreSQL 关系表）。"""
         # Main product
         product = await self._fetchrow(
@@ -169,7 +171,9 @@ class PgVectorSkill:
                WHERE pp.product_id = $1 AND pp.relation = 'contraindicated'""",
             product_id,
         )
-        contraindicated_for = [{"name": r["name"], "reason": r.get("reason", "")} for r in contra_rows]
+        contraindicated_for = [
+            {"name": r["name"], "reason": r.get("reason", "")} for r in contra_rows
+        ]
 
         # Scenarios
         scenario_rows = await self._fetch(
@@ -214,7 +218,7 @@ class PgVectorSkill:
             faqs=faqs,
         )
 
-    async def get_suitable_population(self, product_id: str) -> List[Population]:
+    async def get_suitable_population(self, product_id: str) -> list[Population]:
         """获取商品适用人群。"""
         rows = await self._fetch(
             """SELECT pop.name, COALESCE(pop.description, '') AS description
@@ -225,7 +229,7 @@ class PgVectorSkill:
         )
         return [Population(**r) for r in rows]
 
-    async def get_related_products(self, product_id: str, limit: int = 5) -> List[RelatedProduct]:
+    async def get_related_products(self, product_id: str, limit: int = 5) -> list[RelatedProduct]:
         """获取关联商品。"""
         rows = await self._fetch(
             """SELECT p.product_id, p.name, COALESCE(p.price, 0) AS price,
@@ -234,7 +238,8 @@ class PgVectorSkill:
                JOIN kg_products p ON p.product_id = rp.related_product_id
                WHERE rp.product_id = $1
                LIMIT $2""",
-            product_id, limit,
+            product_id,
+            limit,
         )
         return [RelatedProduct(**r) for r in rows]
 
@@ -246,7 +251,7 @@ class PgVectorSkill:
         name: str,
         description: str = "",
         price: float = 0.0,
-        embedding: Optional[List[float]] = None,
+        embedding: list[float] | None = None,
         **extra: Any,
     ) -> bool:
         """添加/更新商品。"""
@@ -263,14 +268,18 @@ class PgVectorSkill:
                    SET name = EXCLUDED.name, description = EXCLUDED.description,
                        price = EXCLUDED.price,
                        embedding = COALESCE(EXCLUDED.embedding, kg_products.embedding)""",
-                product_id, name, description, price, embedding_str,
+                product_id,
+                name,
+                description,
+                price,
+                embedding_str,
             )
         return True
 
     async def update_embedding(
         self,
         product_id: str,
-        embedding: List[float],
+        embedding: list[float],
     ) -> bool:
         """更新商品向量。"""
         if self._pool is None:
@@ -279,6 +288,7 @@ class PgVectorSkill:
         async with self._pool.acquire() as conn:
             result = await conn.execute(
                 "UPDATE kg_products SET embedding = $1::vector WHERE product_id = $2",
-                embedding_str, product_id,
+                embedding_str,
+                product_id,
             )
         return "UPDATE 1" in result

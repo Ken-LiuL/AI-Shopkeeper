@@ -14,6 +14,7 @@ def calc() -> CalculatorSkill:
 
 # ── heat_score ───────────────────────────────────────────────────────────────
 
+
 class TestHeatScore:
     def test_low_volume(self, calc: CalculatorSkill):
         r = calc.heat_score("血压计", search_volume=500, growth_rate=0.0, conversion_rate=0.1)
@@ -43,36 +44,49 @@ class TestHeatScore:
         """Verify each volume bracket."""
         vols = [500, 2000, 8000, 30000, 60000]
         expected_norm = [0.2, 0.4, 0.6, 0.8, 1.0]
-        for vol, exp in zip(vols, expected_norm):
+        for vol, exp in zip(vols, expected_norm, strict=False):
             r = calc.heat_score("k", search_volume=vol, growth_rate=0.0, conversion_rate=0.1)
             assert r.heat_score == pytest.approx(exp * 100, abs=0.1)
 
 
 # ── alibaba_supplier_score ───────────────────────────────────────────────────
 
+
 class TestAlibabaSupplierScore:
     def test_perfect_supplier(self, calc: CalculatorSkill):
         r = calc.alibaba_supplier_score(
-            is_power_seller=True, years=6, shop_score=4.9,
-            trade_level="gold", return_rate=0.35,
-            product_match="exact", price_rank="lowest",
+            is_power_seller=True,
+            years=6,
+            shop_score=4.9,
+            trade_level="gold",
+            return_rate=0.35,
+            product_match="exact",
+            price_rank="lowest",
         )
         assert r.total_score == 100.0
         assert r.source == "alibaba"
 
     def test_weak_supplier(self, calc: CalculatorSkill):
         r = calc.alibaba_supplier_score(
-            is_power_seller=False, years=0, shop_score=4.0,
-            trade_level="", return_rate=0.05,
-            product_match="marginal", price_rank="average",
+            is_power_seller=False,
+            years=0,
+            shop_score=4.0,
+            trade_level="",
+            return_rate=0.05,
+            product_match="marginal",
+            price_rank="average",
         )
         assert r.total_score < 30
 
     def test_mid_range(self, calc: CalculatorSkill):
         r = calc.alibaba_supplier_score(
-            is_power_seller=False, years=3, shop_score=4.6,
-            trade_level="silver", return_rate=0.22,
-            product_match="similar", price_rank="second",
+            is_power_seller=False,
+            years=3,
+            shop_score=4.6,
+            trade_level="silver",
+            return_rate=0.22,
+            product_match="similar",
+            price_rank="second",
         )
         assert 45 < r.total_score < 75
         assert "years" in r.breakdown
@@ -80,28 +94,36 @@ class TestAlibabaSupplierScore:
 
 # ── pdd_product_score ────────────────────────────────────────────────────────
 
+
 class TestPddProductScore:
     def test_top_product(self, calc: CalculatorSkill):
         r = calc.pdd_product_score(
-            shop_score=4.9, sales_count=2000,
-            price_rank="lowest", review_count=800,
+            shop_score=4.9,
+            sales_count=2000,
+            price_rank="lowest",
+            review_count=800,
         )
         assert r.total_score == 100.0
         assert r.source == "pdd"
 
     def test_low_product(self, calc: CalculatorSkill):
         r = calc.pdd_product_score(
-            shop_score=4.0, sales_count=50,
-            price_rank="average", review_count=20,
+            shop_score=4.0,
+            sales_count=50,
+            price_rank="average",
+            review_count=20,
         )
         assert r.total_score < 50
 
     def test_breakdown_keys(self, calc: CalculatorSkill):
-        r = calc.pdd_product_score(shop_score=4.5, sales_count=500, price_rank="second", review_count=200)
+        r = calc.pdd_product_score(
+            shop_score=4.5, sales_count=500, price_rank="second", review_count=200
+        )
         assert set(r.breakdown.keys()) == {"shop_score", "sales", "price", "reviews"}
 
 
 # ── calculate_margin ─────────────────────────────────────────────────────────
+
 
 class TestMargin:
     def test_alibaba_basic(self, calc: CalculatorSkill):
@@ -130,39 +152,68 @@ class TestMargin:
 
 # ── comprehensive_score ──────────────────────────────────────────────────────
 
+
 class TestComprehensiveScore:
     def test_strong_recommend(self, calc: CalculatorSkill):
-        scores = {d: 90.0 for d in [
-            "market_heat", "competition_gap", "supply_chain",
-            "profit_margin", "category_synergy", "seasonal_fit",
-        ]}
+        scores = {
+            d: 90.0
+            for d in [
+                "market_heat",
+                "competition_gap",
+                "supply_chain",
+                "profit_margin",
+                "category_synergy",
+                "seasonal_fit",
+            ]
+        }
         r = calc.comprehensive_score("血压计", scores)
         assert r.final_score == 90.0
         assert r.recommendation == "strong_recommend"
 
     def test_not_recommend(self, calc: CalculatorSkill):
-        scores = {d: 30.0 for d in [
-            "market_heat", "competition_gap", "supply_chain",
-            "profit_margin", "category_synergy", "seasonal_fit",
-        ]}
+        scores = {
+            d: 30.0
+            for d in [
+                "market_heat",
+                "competition_gap",
+                "supply_chain",
+                "profit_margin",
+                "category_synergy",
+                "seasonal_fit",
+            ]
+        }
         r = calc.comprehensive_score("冷门品", scores)
         assert r.final_score == 30.0
         assert r.recommendation == "not_recommend"
 
     def test_recommend_threshold(self, calc: CalculatorSkill):
         # weights sum to 1.0, all scores = 75 → final = 75
-        scores = {d: 75.0 for d in [
-            "market_heat", "competition_gap", "supply_chain",
-            "profit_margin", "category_synergy", "seasonal_fit",
-        ]}
+        scores = {
+            d: 75.0
+            for d in [
+                "market_heat",
+                "competition_gap",
+                "supply_chain",
+                "profit_margin",
+                "category_synergy",
+                "seasonal_fit",
+            ]
+        }
         r = calc.comprehensive_score("中等品", scores)
         assert r.recommendation == "recommend"
 
     def test_optional_threshold(self, calc: CalculatorSkill):
-        scores = {d: 65.0 for d in [
-            "market_heat", "competition_gap", "supply_chain",
-            "profit_margin", "category_synergy", "seasonal_fit",
-        ]}
+        scores = {
+            d: 65.0
+            for d in [
+                "market_heat",
+                "competition_gap",
+                "supply_chain",
+                "profit_margin",
+                "category_synergy",
+                "seasonal_fit",
+            ]
+        }
         r = calc.comprehensive_score("可选品", scores)
         assert r.recommendation == "optional"
 
@@ -177,14 +228,21 @@ class TestComprehensiveScore:
         assert r.final_score == 80.0
 
     def test_breakdown_present(self, calc: CalculatorSkill):
-        scores = {"market_heat": 50.0, "competition_gap": 60.0, "supply_chain": 70.0,
-                  "profit_margin": 80.0, "category_synergy": 40.0, "seasonal_fit": 30.0}
+        scores = {
+            "market_heat": 50.0,
+            "competition_gap": 60.0,
+            "supply_chain": 70.0,
+            "profit_margin": 80.0,
+            "category_synergy": 40.0,
+            "seasonal_fit": 30.0,
+        }
         r = calc.comprehensive_score("测试", scores)
         assert len(r.breakdown) == 6
         assert r.final_score == pytest.approx(sum(r.breakdown.values()), abs=0.1)
 
 
 # ── RRF merge ────────────────────────────────────────────────────────────────
+
 
 class TestRRFMerge:
     def test_single_list(self):

@@ -1,7 +1,7 @@
 # Demo 测试结果
 
-**日期:** 2026-02-12 01:40 CST  
-**测试人:** QA Agent  
+**日期:** 2026-02-12 01:40 CST
+**测试人:** QA Agent
 **环境:** macOS arm64, Python 3.13, venv `.venv/`
 
 ## 环境搭建

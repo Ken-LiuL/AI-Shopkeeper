@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from src.learning.weight_learner import WeightLearner, RecommendationOutcome, WeightUpdate
-from src.learning.adaptive_thresholds import AdaptiveThresholds, ThresholdConfig
-from src.learning.version_manager import ParameterVersionManager, ParameterType, ParameterVersion
-
+from src.learning.adaptive_thresholds import AdaptiveThresholds
+from src.learning.version_manager import ParameterType, ParameterVersionManager
+from src.learning.weight_learner import RecommendationOutcome, WeightLearner, WeightUpdate
 
 # ── WeightLearner ────────────────────────────────────────────────────────────
+
 
 class TestWeightLearner:
     def test_default_weights(self):
@@ -28,10 +27,16 @@ class TestWeightLearner:
     @pytest.mark.asyncio
     async def test_learn_not_enough_samples(self):
         wl = WeightLearner(min_samples=20)
-        outcomes = [RecommendationOutcome(
-            keyword="test", predicted_score=90, actual_monthly_sales=5,
-            actual_margin=0.1, conversion_rate=0.02, days_since_listed=30,
-        )] * 5  # only 5 samples < 20
+        outcomes = [
+            RecommendationOutcome(
+                keyword="test",
+                predicted_score=90,
+                actual_monthly_sales=5,
+                actual_margin=0.1,
+                conversion_rate=0.02,
+                days_since_listed=30,
+            )
+        ] * 5  # only 5 samples < 20
         updates = await wl.learn_from_outcomes(outcomes)
         assert updates == []
 
@@ -39,10 +44,16 @@ class TestWeightLearner:
     async def test_learn_overestimation(self):
         """High predicted score + low actual performance → weight decrease."""
         wl = WeightLearner(min_samples=1, learning_rate=0.1)
-        outcomes = [RecommendationOutcome(
-            keyword="bad_product", predicted_score=90, actual_monthly_sales=2,
-            actual_margin=0.1, conversion_rate=0.02, days_since_listed=30,
-        )]
+        outcomes = [
+            RecommendationOutcome(
+                keyword="bad_product",
+                predicted_score=90,
+                actual_monthly_sales=2,
+                actual_margin=0.1,
+                conversion_rate=0.02,
+                days_since_listed=30,
+            )
+        ]
         updates = await wl.learn_from_outcomes(outcomes)
         # Should have some weight decreases
         assert len(updates) > 0
@@ -51,20 +62,32 @@ class TestWeightLearner:
     async def test_learn_underestimation(self):
         """Low predicted score + high actual performance → weight increase."""
         wl = WeightLearner(min_samples=1, learning_rate=0.1)
-        outcomes = [RecommendationOutcome(
-            keyword="surprise_hit", predicted_score=40, actual_monthly_sales=200,
-            actual_margin=0.5, conversion_rate=0.15, days_since_listed=30,
-        )]
+        outcomes = [
+            RecommendationOutcome(
+                keyword="surprise_hit",
+                predicted_score=40,
+                actual_monthly_sales=200,
+                actual_margin=0.5,
+                conversion_rate=0.15,
+                days_since_listed=30,
+            )
+        ]
         updates = await wl.learn_from_outcomes(outcomes)
         assert len(updates) > 0
 
     @pytest.mark.asyncio
     async def test_weights_normalized(self):
         wl = WeightLearner(min_samples=1, learning_rate=0.3)
-        outcomes = [RecommendationOutcome(
-            keyword="test", predicted_score=90, actual_monthly_sales=1,
-            actual_margin=0.05, conversion_rate=0.01, days_since_listed=30,
-        )]
+        outcomes = [
+            RecommendationOutcome(
+                keyword="test",
+                predicted_score=90,
+                actual_monthly_sales=1,
+                actual_margin=0.05,
+                conversion_rate=0.01,
+                days_since_listed=30,
+            )
+        ]
         await wl.learn_from_outcomes(outcomes)
         assert abs(sum(wl.weights.values()) - 1.0) < 0.01
 
@@ -76,12 +99,18 @@ class TestWeightLearner:
         cm.__aenter__ = AsyncMock(return_value=conn)
         cm.__aexit__ = AsyncMock(return_value=False)
         pool.acquire.return_value = cm
-        
+
         wl = WeightLearner(pool=pool, min_samples=1)
-        outcomes = [RecommendationOutcome(
-            keyword="test", predicted_score=90, actual_monthly_sales=1,
-            actual_margin=0.05, conversion_rate=0.01, days_since_listed=30,
-        )]
+        outcomes = [
+            RecommendationOutcome(
+                keyword="test",
+                predicted_score=90,
+                actual_monthly_sales=1,
+                actual_margin=0.05,
+                conversion_rate=0.01,
+                days_since_listed=30,
+            )
+        ]
         await wl.learn_from_outcomes(outcomes)
         conn.execute.assert_called()
 
@@ -99,8 +128,10 @@ class TestWeightLearner:
         cm.__aenter__ = AsyncMock(return_value=conn)
         cm.__aexit__ = AsyncMock(return_value=False)
         pool.acquire.return_value = cm
-        conn.fetchrow = AsyncMock(return_value={"weights": '{"market_heat": 0.5, "supply_chain": 0.5}'})
-        
+        conn.fetchrow = AsyncMock(
+            return_value={"weights": '{"market_heat": 0.5, "supply_chain": 0.5}'}
+        )
+
         wl = WeightLearner(pool=pool)
         result = await wl.load_weights()
         assert result["market_heat"] == 0.5
@@ -117,6 +148,7 @@ class TestWeightLearner:
 
 
 # ── AdaptiveThresholds ───────────────────────────────────────────────────────
+
 
 class TestAdaptiveThresholds:
     def test_get_threshold(self):
@@ -146,8 +178,10 @@ class TestAdaptiveThresholds:
         old_val = at.get_threshold("sales_drop_critical")
         result = await at.update_from_feedback(
             "sales_drop_critical",
-            false_positive_count=20, false_negative_count=0,
-            true_positive_count=5, true_negative_count=5,
+            false_positive_count=20,
+            false_negative_count=0,
+            true_positive_count=5,
+            true_negative_count=5,
         )
         if result:
             assert result.current_value > old_val  # threshold raised
@@ -158,8 +192,10 @@ class TestAdaptiveThresholds:
         old_val = at.get_threshold("sales_drop_critical")
         result = await at.update_from_feedback(
             "sales_drop_critical",
-            false_positive_count=0, false_negative_count=15,
-            true_positive_count=5, true_negative_count=10,
+            false_positive_count=0,
+            false_negative_count=15,
+            true_positive_count=5,
+            true_negative_count=10,
         )
         if result:
             assert result.current_value < old_val  # threshold lowered
@@ -169,8 +205,10 @@ class TestAdaptiveThresholds:
         at = AdaptiveThresholds(min_feedback_samples=10)
         result = await at.update_from_feedback(
             "sales_drop_critical",
-            false_positive_count=1, false_negative_count=1,
-            true_positive_count=10, true_negative_count=10,
+            false_positive_count=1,
+            false_negative_count=1,
+            true_positive_count=10,
+            true_negative_count=10,
         )
         assert result is None  # balanced
 
@@ -182,17 +220,23 @@ class TestAdaptiveThresholds:
 
     def test_dynamic_threshold_no_adjustment(self):
         at = AdaptiveThresholds()
-        val = at.calculate_dynamic_threshold("sales_drop_critical", recent_volatility=0.0, seasonality_factor=1.0)
+        val = at.calculate_dynamic_threshold(
+            "sales_drop_critical", recent_volatility=0.0, seasonality_factor=1.0
+        )
         assert val == 70.0  # no adjustment
 
     def test_dynamic_threshold_high_volatility(self):
         at = AdaptiveThresholds()
-        val = at.calculate_dynamic_threshold("sales_drop_critical", recent_volatility=0.5, seasonality_factor=1.0)
+        val = at.calculate_dynamic_threshold(
+            "sales_drop_critical", recent_volatility=0.5, seasonality_factor=1.0
+        )
         assert val > 70.0  # relaxed
 
     def test_dynamic_threshold_peak_season(self):
         at = AdaptiveThresholds()
-        val = at.calculate_dynamic_threshold("sales_drop_critical", recent_volatility=0.0, seasonality_factor=2.0)
+        val = at.calculate_dynamic_threshold(
+            "sales_drop_critical", recent_volatility=0.0, seasonality_factor=2.0
+        )
         assert val > 70.0  # relaxed for peak season
 
     @pytest.mark.asyncio
@@ -203,6 +247,7 @@ class TestAdaptiveThresholds:
 
 
 # ── ParameterVersionManager ──────────────────────────────────────────────────
+
 
 class TestParameterVersionManager:
     @pytest.mark.asyncio
@@ -244,7 +289,7 @@ class TestParameterVersionManager:
     async def test_activate_version(self):
         mgr = ParameterVersionManager()
         v1 = await mgr.create_version(ParameterType.WEIGHTS, {"a": 1}, "v1")
-        v2 = await mgr.create_version(ParameterType.WEIGHTS, {"a": 2}, "v2")
+        await mgr.create_version(ParameterType.WEIGHTS, {"a": 2}, "v2")
         result = await mgr.activate_version(v1.version_id)
         assert result is True
         assert mgr.get_active_version(ParameterType.WEIGHTS).version_id == v1.version_id
@@ -259,7 +304,7 @@ class TestParameterVersionManager:
     async def test_rollback(self):
         mgr = ParameterVersionManager()
         v1 = await mgr.create_version(ParameterType.WEIGHTS, {"a": 1}, "v1")
-        v2 = await mgr.create_version(ParameterType.WEIGHTS, {"a": 2}, "v2")
+        await mgr.create_version(ParameterType.WEIGHTS, {"a": 2}, "v2")
         rolled = await mgr.rollback(ParameterType.WEIGHTS, steps=1)
         assert rolled is not None
         assert rolled.version_id == v1.version_id

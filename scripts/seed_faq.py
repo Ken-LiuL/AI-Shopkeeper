@@ -15,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 from typing import Any
 
 # ============================================================
@@ -186,7 +185,6 @@ FAQS: list[dict[str, Any]] = [
         "keywords": ["雅培", "瞬感", "免采血", "值不值"],
         "related_products": ["BG004"],
     },
-
     # ════════════════════════════════════════════
     # 使用方法 (15条)
     # ════════════════════════════════════════════
@@ -310,7 +308,6 @@ FAQS: list[dict[str, Any]] = [
         "keywords": ["助行器", "怎么用", "高度", "调节"],
         "related_products": ["WC003"],
     },
-
     # ════════════════════════════════════════════
     # 适用人群 (10条)
     # ════════════════════════════════════════════
@@ -394,7 +391,6 @@ FAQS: list[dict[str, Any]] = [
         "keywords": ["运动", "备什么", "器械", "防护"],
         "related_products": ["HT002", "AC004", "FA001", "FA003", "PO001"],
     },
-
     # ════════════════════════════════════════════
     # 售后物流 (10条)
     # ════════════════════════════════════════════
@@ -478,7 +474,6 @@ FAQS: list[dict[str, Any]] = [
         "keywords": ["货到付款", "付款方式", "支付"],
         "related_products": [],
     },
-
     # ════════════════════════════════════════════
     # 医疗合规 (5条)
     # ════════════════════════════════════════════
@@ -522,7 +517,6 @@ FAQS: list[dict[str, Any]] = [
         "keywords": ["分类", "一类", "二类", "三类", "区别"],
         "related_products": [],
     },
-
     # ════════════════════════════════════════════
     # 补充 FAQ (5条，凑够65条)
     # ════════════════════════════════════════════
@@ -573,6 +567,7 @@ FAQS: list[dict[str, Any]] = [
 # Neo4j 写入 / Dry-run
 # ============================================================
 
+
 def print_stats() -> None:
     """打印 FAQ 统计。"""
     categories: dict[str, int] = {}
@@ -584,7 +579,7 @@ def print_stats() -> None:
     print("📊 FAQ 种子数据统计")
     print("=" * 60)
     print(f"  总 FAQ 数量:  {len(FAQS)}")
-    print(f"  ────────────────────────────")
+    print("  ────────────────────────────")
     for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
         print(f"  {cat}: {count} 条")
     print("=" * 60)
@@ -613,9 +608,7 @@ def seed_neo4j(url: str, user: str, password: str) -> None:
 
     with driver.session() as session:
         # 创建约束
-        session.run(
-            "CREATE CONSTRAINT IF NOT EXISTS FOR (f:FAQ) REQUIRE f.faq_id IS UNIQUE"
-        )
+        session.run("CREATE CONSTRAINT IF NOT EXISTS FOR (f:FAQ) REQUIRE f.faq_id IS UNIQUE")
 
         # 写入 FAQ 节点
         for faq in FAQS:
@@ -625,8 +618,11 @@ def seed_neo4j(url: str, user: str, password: str) -> None:
                        f.category = $cat,
                        f.keywords = $kw,
                        f.question_embedding = null""",
-                fid=faq["id"], q=faq["question"], a=faq["answer"],
-                cat=faq["category"], kw=faq["keywords"],
+                fid=faq["id"],
+                q=faq["question"],
+                a=faq["answer"],
+                cat=faq["category"],
+                kw=faq["keywords"],
             )
 
             # 关联商品
@@ -634,7 +630,8 @@ def seed_neo4j(url: str, user: str, password: str) -> None:
                 session.run(
                     """MATCH (f:FAQ {faq_id: $fid}), (p:Product {product_id: $pid})
                        MERGE (f)-[:ANSWERS]->(p)""",
-                    fid=faq["id"], pid=pid,
+                    fid=faq["id"],
+                    pid=pid,
                 )
 
     driver.close()

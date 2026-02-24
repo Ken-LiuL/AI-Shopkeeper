@@ -6,50 +6,59 @@ import sys
 import types as _types
 
 # Stub heavy deps not installed in test env
-from unittest.mock import MagicMock as _MK
+from unittest.mock import MagicMock as _Mk
 
 # Stub redis package before anything imports it
 if "redis" not in sys.modules:
     _redis_pkg = _types.ModuleType("redis")
     _redis_asyncio = _types.ModuleType("redis.asyncio")
-    _redis_asyncio.Redis = _MK
-    _redis_asyncio.from_url = _MK(return_value=_MK())
+    _redis_asyncio.Redis = _Mk
+    _redis_asyncio.from_url = _Mk(return_value=_Mk())
     _redis_pkg.asyncio = _redis_asyncio
     sys.modules["redis"] = _redis_pkg
     sys.modules["redis.asyncio"] = _redis_asyncio
 
-for _mod in ("neo4j", "sentence_transformers", "asyncpg", "langfuse", "langfuse.decorators",
-             "prometheus_client", "apscheduler", "apscheduler.schedulers",
-             "apscheduler.schedulers.asyncio", "apscheduler.triggers", "apscheduler.triggers.cron",
-             "hiredis"):
+for _mod in (
+    "neo4j",
+    "sentence_transformers",
+    "asyncpg",
+    "langfuse",
+    "langfuse.decorators",
+    "prometheus_client",
+    "apscheduler",
+    "apscheduler.schedulers",
+    "apscheduler.schedulers.asyncio",
+    "apscheduler.triggers",
+    "apscheduler.triggers.cron",
+    "hiredis",
+):
     if _mod not in sys.modules:
         sys.modules[_mod] = _types.ModuleType(_mod)
 
 # Ensure neo4j stub has required attrs
 _neo4j = sys.modules["neo4j"]
 if not hasattr(_neo4j, "AsyncDriver") or isinstance(_neo4j.AsyncDriver, _types.ModuleType):
-    _neo4j.AsyncDriver = _MK
-    _neo4j.AsyncGraphDatabase = _MK
+    _neo4j.AsyncDriver = _Mk
+    _neo4j.AsyncGraphDatabase = _Mk
 
 if "aiohttp" not in sys.modules:
     from unittest.mock import MagicMock as _MagicMock
+
     _aiohttp = _types.ModuleType("aiohttp")
     _aiohttp.ClientSession = _MagicMock
     _aiohttp.ClientTimeout = _MagicMock
     _aiohttp.ClientError = Exception
     sys.modules["aiohttp"] = _aiohttp
 
-import asyncio
-import json
 from collections import defaultdict
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ── FakeRedis (dict-backed) ──────────────────────────────────
+
 
 class FakeRedis:
     """Minimal async Redis mock backed by dicts for E2E testing."""
@@ -69,7 +78,9 @@ class FakeRedis:
     async def get(self, key: str) -> str | None:
         return self._data.get(key)
 
-    async def set(self, key: str, value: str, nx: bool = False, ex: int | None = None) -> bool | None:
+    async def set(
+        self, key: str, value: str, nx: bool = False, ex: int | None = None
+    ) -> bool | None:
         if nx and key in self._data:
             return None
         self._data[key] = value
@@ -142,7 +153,7 @@ class FakeRedis:
 
     async def zrevrange(self, key: str, start: int, end: int) -> list[str]:
         items = sorted(self._zsets.get(key, {}).items(), key=lambda x: x[1], reverse=True)
-        return [k for k, _ in items[start:end + 1]]
+        return [k for k, _ in items[start : end + 1]]
 
     async def zrem(self, key: str, *members: str) -> int:
         zs = self._zsets.get(key, {})
@@ -184,6 +195,7 @@ class FakeRedisPipeline:
 
 # ── Fixtures ──────────────────────────────────────────────────
 
+
 @pytest.fixture
 def fake_redis():
     return FakeRedis()
@@ -193,25 +205,35 @@ def fake_redis():
 def mock_orchestrator():
     """Mock orchestrator that returns canned LLM responses."""
     orch = AsyncMock()
-    orch.run_customer_service = AsyncMock(return_value={
-        "reply": {"reply_text": "亲，在的呢~请问有什么可以帮您？😊", "confidence": 1.0},
-        "intent": {"intent": "greeting", "confidence": 0.98},
-    })
-    orch.run_selection = AsyncMock(return_value={
-        "recommendations": [{"rank": 1, "keyword": "血压计", "final_score": 85}],
-        "scoring_summary": {"total_evaluated": 1, "recommended_count": 1},
-    })
-    orch.run_alert = AsyncMock(return_value={
-        "anomalies": {"detection_summary": {"anomalies_found": 1, "critical_count": 1}},
-        "actions": {"recommended_actions": [{"action_type": "price_adjust"}]},
-    })
-    orch.run_listing = AsyncMock(return_value={
-        "meituan_listing": {"title": "测试商品", "description": "描述"},
-        "quality_report": {"overall_score": 90},
-    })
-    orch.run_bundle = AsyncMock(return_value={
-        "bundles": [{"name": "健康套餐", "products": [], "bundle_price": 99.9}],
-    })
+    orch.run_customer_service = AsyncMock(
+        return_value={
+            "reply": {"reply_text": "亲，在的呢~请问有什么可以帮您？😊", "confidence": 1.0},
+            "intent": {"intent": "greeting", "confidence": 0.98},
+        }
+    )
+    orch.run_selection = AsyncMock(
+        return_value={
+            "recommendations": [{"rank": 1, "keyword": "血压计", "final_score": 85}],
+            "scoring_summary": {"total_evaluated": 1, "recommended_count": 1},
+        }
+    )
+    orch.run_alert = AsyncMock(
+        return_value={
+            "anomalies": {"detection_summary": {"anomalies_found": 1, "critical_count": 1}},
+            "actions": {"recommended_actions": [{"action_type": "price_adjust"}]},
+        }
+    )
+    orch.run_listing = AsyncMock(
+        return_value={
+            "meituan_listing": {"title": "测试商品", "description": "描述"},
+            "quality_report": {"overall_score": 90},
+        }
+    )
+    orch.run_bundle = AsyncMock(
+        return_value={
+            "bundles": [{"name": "健康套餐", "products": [], "bundle_price": 99.9}],
+        }
+    )
     return orch
 
 
@@ -219,19 +241,22 @@ def mock_orchestrator():
 def app_client(fake_redis, mock_orchestrator):
     """Create a FastAPI TestClient with mocked dependencies."""
     # Pre-import modules so patch targets exist
-    import src.db.redis
-    import src.api.deps
     import src.api.customer_service
+    import src.api.deps
+    import src.db.redis
 
-    with patch.object(src.db.redis, "get_redis", return_value=fake_redis), \
-         patch.object(src.db.redis, "_redis", fake_redis), \
-         patch.object(src.api.deps, "get_orchestrator", return_value=mock_orchestrator):
+    with (
+        patch.object(src.db.redis, "get_redis", return_value=fake_redis),
+        patch.object(src.db.redis, "_redis", fake_redis),
+        patch.object(src.api.deps, "get_orchestrator", return_value=mock_orchestrator),
+    ):
         from fastapi import FastAPI
 
         app = FastAPI()
         app.include_router(src.api.customer_service.router)
 
         from src.api.errors import register_error_handlers
+
         register_error_handlers(app)
 
         client = TestClient(app)

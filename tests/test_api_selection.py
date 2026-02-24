@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Schema Tests
 # ---------------------------------------------------------------------------
+
 
 class TestSelectionRunRequest:
     """Tests for SelectionRunRequest schema."""
@@ -15,21 +13,21 @@ class TestSelectionRunRequest:
     def test_request_with_keywords(self):
         """Request accepts keywords."""
         from src.api.schemas import SelectionRunRequest
-        
+
         request = SelectionRunRequest(keywords=["血压计", "体温计"])
         assert request.keywords == ["血压计", "体温计"]
 
     def test_request_with_categories(self):
         """Request accepts categories."""
         from src.api.schemas import SelectionRunRequest
-        
+
         request = SelectionRunRequest(categories=["医疗器械"])
         assert request.categories == ["医疗器械"]
 
     def test_request_all_optional(self):
         """All request fields are optional."""
         from src.api.schemas import SelectionRunRequest
-        
+
         request = SelectionRunRequest()
         assert request.keywords is None
         assert request.categories is None
@@ -41,7 +39,7 @@ class TestSelectionRunSummary:
     def test_summary_creation(self):
         """Summary can be created with required fields."""
         from src.api.schemas import SelectionRunSummary
-        
+
         summary = SelectionRunSummary(
             run_id="sel_001",
             status="running",
@@ -53,8 +51,9 @@ class TestSelectionRunSummary:
     def test_summary_with_all_fields(self):
         """Summary accepts all fields."""
         from datetime import datetime
+
         from src.api.schemas import SelectionRunSummary
-        
+
         summary = SelectionRunSummary(
             run_id="sel_001",
             status="completed",
@@ -72,7 +71,7 @@ class TestSelectionRunDetail:
     def test_detail_extends_summary(self):
         """Detail includes summary fields plus recommendations."""
         from src.api.schemas import SelectionRunDetail
-        
+
         detail = SelectionRunDetail(
             run_id="sel_001",
             status="completed",
@@ -90,7 +89,7 @@ class TestGenId:
     def test_gen_id_with_prefix(self):
         """Generated ID includes prefix."""
         from src.api.deps import gen_id
-        
+
         id1 = gen_id("sel_")
         assert id1.startswith("sel_")
         assert len(id1) == 16  # sel_ + 12 chars
@@ -98,14 +97,14 @@ class TestGenId:
     def test_gen_id_without_prefix(self):
         """Generated ID works without prefix."""
         from src.api.deps import gen_id
-        
+
         id1 = gen_id()
         assert len(id1) == 12
 
     def test_gen_id_unique(self):
         """Generated IDs are unique."""
         from src.api.deps import gen_id
-        
+
         ids = [gen_id("test_") for _ in range(100)]
         assert len(set(ids)) == 100
 
@@ -116,7 +115,7 @@ class TestTaskCreatedResponse:
     def test_response_creation(self):
         """Response includes task_id and message."""
         from src.api.schemas import TaskCreatedResponse
-        
+
         response = TaskCreatedResponse(task_id="sel_001", message="Task started")
         assert response.success is True
         assert response.task_id == "sel_001"
@@ -128,7 +127,7 @@ class TestAPIResponse:
     def test_response_with_data(self):
         """Response wraps data correctly."""
         from src.api.schemas import APIResponse
-        
+
         response = APIResponse(data={"key": "value"})
         assert response.success is True
         assert response.data == {"key": "value"}
@@ -136,13 +135,13 @@ class TestAPIResponse:
     def test_response_with_list_data(self):
         """Response wraps list data."""
         from src.api.schemas import APIResponse
-        
+
         response = APIResponse(data=[1, 2, 3])
         assert response.data == [1, 2, 3]
 
     def test_response_default_message(self):
         """Response has default empty message."""
         from src.api.schemas import APIResponse
-        
+
         response = APIResponse()
         assert response.message == ""

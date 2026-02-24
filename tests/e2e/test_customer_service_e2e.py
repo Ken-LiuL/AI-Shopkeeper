@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
-from unittest.mock import AsyncMock, patch
-
-import pytest
 
 
 class TestCustomerServiceE2E:
@@ -23,10 +19,13 @@ class TestCustomerServiceE2E:
         assert len(session_id) == 32  # UUID hex
 
         # 2. Send chat message
-        res = app_client.post("/api/customer-service/chat", json={
-            "session_id": session_id,
-            "message": "你好",
-        })
+        res = app_client.post(
+            "/api/customer-service/chat",
+            json={
+                "session_id": session_id,
+                "message": "你好",
+            },
+        )
         assert res.status_code == 200
         chat_data = res.json()["data"]
         assert chat_data["reply"]
@@ -57,10 +56,13 @@ class TestCustomerServiceE2E:
 
     def test_chat_without_session_returns_404(self, app_client):
         """Chat with non-existent session should return 404."""
-        res = app_client.post("/api/customer-service/chat", json={
-            "session_id": "nonexistent",
-            "message": "hello",
-        })
+        res = app_client.post(
+            "/api/customer-service/chat",
+            json={
+                "session_id": "nonexistent",
+                "message": "hello",
+            },
+        )
         assert res.status_code == 404
 
     def test_delete_nonexistent_session_returns_404(self, app_client):
@@ -95,9 +97,13 @@ class TestCustomerServiceE2E:
 
         messages = ["第一条", "第二条", "第三条"]
         for msg in messages:
-            app_client.post("/api/customer-service/chat", json={
-                "session_id": sid, "message": msg,
-            })
+            app_client.post(
+                "/api/customer-service/chat",
+                json={
+                    "session_id": sid,
+                    "message": msg,
+                },
+            )
 
         res = app_client.get(f"/api/customer-service/sessions/{sid}/messages")
         history = res.json()["data"]["messages"]
@@ -117,15 +123,18 @@ class TestConcurrency:
         sid = res.json()["data"]["session_id"]
 
         # Manually acquire lock
-        import asyncio
         asyncio.get_event_loop().run_until_complete(
             fake_redis.set(f"cs:session:lock:{sid}", "1", nx=True, ex=30)
         )
 
         # Now try to chat — should be 429
-        res = app_client.post("/api/customer-service/chat", json={
-            "session_id": sid, "message": "test",
-        })
+        res = app_client.post(
+            "/api/customer-service/chat",
+            json={
+                "session_id": sid,
+                "message": "test",
+            },
+        )
         assert res.status_code == 429
 
 
@@ -141,18 +150,30 @@ class TestSessionIsolation:
         sid_b = rb.json()["data"]["session_id"]
 
         # Chat in session A
-        app_client.post("/api/customer-service/chat", json={
-            "session_id": sid_a, "message": "我是客户A",
-        })
+        app_client.post(
+            "/api/customer-service/chat",
+            json={
+                "session_id": sid_a,
+                "message": "我是客户A",
+            },
+        )
 
         # Chat in session B
-        app_client.post("/api/customer-service/chat", json={
-            "session_id": sid_b, "message": "我是客户B",
-        })
+        app_client.post(
+            "/api/customer-service/chat",
+            json={
+                "session_id": sid_b,
+                "message": "我是客户B",
+            },
+        )
 
         # Check histories are isolated
-        ha = app_client.get(f"/api/customer-service/sessions/{sid_a}/messages").json()["data"]["messages"]
-        hb = app_client.get(f"/api/customer-service/sessions/{sid_b}/messages").json()["data"]["messages"]
+        ha = app_client.get(f"/api/customer-service/sessions/{sid_a}/messages").json()["data"][
+            "messages"
+        ]
+        hb = app_client.get(f"/api/customer-service/sessions/{sid_b}/messages").json()["data"][
+            "messages"
+        ]
 
         user_a = [m["content"] for m in ha if m["role"] == "user"]
         user_b = [m["content"] for m in hb if m["role"] == "user"]
@@ -190,9 +211,12 @@ class TestCreateSession:
 
     def test_create_session_with_metadata(self, app_client):
         """Session with metadata should be created successfully."""
-        res = app_client.post("/api/customer-service/sessions", json={
-            "customer_id": "VIP001",
-            "metadata": {"channel": "wechat", "source": "ad"},
-        })
+        res = app_client.post(
+            "/api/customer-service/sessions",
+            json={
+                "customer_id": "VIP001",
+                "metadata": {"channel": "wechat", "source": "ad"},
+            },
+        )
         assert res.status_code == 200
         assert res.json()["data"]["session_id"]

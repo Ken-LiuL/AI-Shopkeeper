@@ -8,23 +8,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.agents.llm import (
-    MODEL_HAIKU,
-    MODEL_OPUS,
-    MODEL_SONNET,
-    MODEL_FLASH,
     MODEL_DEEPSEEK,
+    MODEL_FLASH,
+    MODEL_OPUS,
     MODEL_PRO,
+    MODEL_SONNET,
+    _get_openai_client,
+    _record_llm_metrics,
     call_tool,
     call_tool_with_reflection,
-    _record_llm_metrics,
-    _get_openai_client,
-    _get_anthropic_client,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def mock_tool():
@@ -72,7 +70,9 @@ def mock_openai_client():
     client.chat = AsyncMock()
     client.chat.completions = AsyncMock()
     client.chat.completions.create = AsyncMock(
-        return_value=_make_openai_response("test_output_tool", {"result": "test_result", "score": 0.9})
+        return_value=_make_openai_response(
+            "test_output_tool", {"result": "test_result", "score": 0.9}
+        )
     )
     return client
 
@@ -80,6 +80,7 @@ def mock_openai_client():
 # ---------------------------------------------------------------------------
 # Model Constants
 # ---------------------------------------------------------------------------
+
 
 class TestModelConstants:
     """Test model tier constants are defined correctly."""
@@ -106,6 +107,7 @@ class TestModelConstants:
 # call_tool (OpenRouter / OpenAI SDK path)
 # ---------------------------------------------------------------------------
 
+
 class TestCallTool:
     """Tests for call_tool function (default: openrouter)."""
 
@@ -113,7 +115,9 @@ class TestCallTool:
         with patch("src.agents.llm._get_openai_client", return_value=mock_openai_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
                 with patch("src.agents.llm.LLM_PROVIDER", "openrouter"):
-                    result = await call_tool(prompt="Test prompt", tool=mock_tool, model=MODEL_SONNET)
+                    result = await call_tool(
+                        prompt="Test prompt", tool=mock_tool, model=MODEL_SONNET
+                    )
         assert result["result"] == "test_result"
         assert result["score"] == 0.9
 
@@ -180,6 +184,7 @@ class TestCallTool:
 # call_tool — Anthropic path
 # ---------------------------------------------------------------------------
 
+
 class TestCallToolAnthropic:
     """Tests for call_tool when LLM_PROVIDER == 'anthropic'."""
 
@@ -199,7 +204,9 @@ class TestCallToolAnthropic:
         return client
 
     async def test_anthropic_path(self, mock_anthro_client, mock_tool):
-        import sys, types
+        import sys
+        import types
+
         # Stub anthropic module so `import anthropic` inside _call_anthropic works
         fake_anthropic = types.ModuleType("anthropic")
         with patch.dict(sys.modules, {"anthropic": fake_anthropic}):
@@ -214,6 +221,7 @@ class TestCallToolAnthropic:
 # call_tool_with_reflection
 # ---------------------------------------------------------------------------
 
+
 class TestCallToolWithReflection:
     """Tests for call_tool_with_reflection (two-round self-reflection)."""
 
@@ -223,7 +231,9 @@ class TestCallToolWithReflection:
         async def _mock_create(**kwargs):
             nonlocal call_count
             call_count += 1
-            return _make_openai_response("test_output_tool", {"result": f"round_{call_count}", "score": call_count})
+            return _make_openai_response(
+                "test_output_tool", {"result": f"round_{call_count}", "score": call_count}
+            )
 
         mock_client = AsyncMock()
         mock_client.chat = AsyncMock()
@@ -275,7 +285,9 @@ class TestCallToolWithReflection:
         mock_client = AsyncMock()
         mock_client.chat = AsyncMock()
         mock_client.chat.completions = AsyncMock()
-        mock_client.chat.completions.create = AsyncMock(side_effect=RuntimeError("First call failed"))
+        mock_client.chat.completions.create = AsyncMock(
+            side_effect=RuntimeError("First call failed")
+        )
 
         with patch("src.agents.llm._get_openai_client", return_value=mock_client):
             with patch("src.agents.llm._init_langfuse", return_value=None):
@@ -292,11 +304,13 @@ class TestCallToolWithReflection:
 # Client factory tests
 # ---------------------------------------------------------------------------
 
+
 class TestClientFactories:
     """Tests for _get_openai_client / _get_anthropic_client singletons."""
 
     def test_get_openai_client_returns_client(self):
         import src.agents.llm as llm_module
+
         llm_module._openai_client = None
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
             client = _get_openai_client()
@@ -305,6 +319,7 @@ class TestClientFactories:
 
     def test_get_openai_client_is_singleton(self):
         import src.agents.llm as llm_module
+
         llm_module._openai_client = None
         with patch.dict("os.environ", {"OPENROUTER_API_KEY": "test-key"}):
             c1 = _get_openai_client()
@@ -317,6 +332,7 @@ class TestClientFactories:
 # Metrics
 # ---------------------------------------------------------------------------
 
+
 class TestMetrics:
     def test_record_metrics_no_error_when_module_missing(self):
         _record_llm_metrics(MODEL_SONNET, 100, 50, 1.5)
@@ -324,10 +340,15 @@ class TestMetrics:
     def test_record_metrics_with_mock_prometheus(self):
         mock_counter = MagicMock()
         mock_histogram = MagicMock()
-        with patch.dict("sys.modules", {"src.metrics": MagicMock(
-            llm_tokens_total=mock_counter,
-            llm_request_duration=mock_histogram,
-        )}):
+        with patch.dict(
+            "sys.modules",
+            {
+                "src.metrics": MagicMock(
+                    llm_tokens_total=mock_counter,
+                    llm_request_duration=mock_histogram,
+                )
+            },
+        ):
             _record_llm_metrics(MODEL_SONNET, 100, 50, 1.5)
 
 
@@ -335,10 +356,12 @@ class TestMetrics:
 # Langfuse Init
 # ---------------------------------------------------------------------------
 
+
 class TestLangfuseInit:
     def test_langfuse_returns_none_when_disabled(self):
-        from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
+        from src.agents.llm import _init_langfuse
+
         llm_module._langfuse = None
         mock_settings = MagicMock()
         mock_settings.system.langfuse = {"enabled": False}
@@ -346,16 +369,18 @@ class TestLangfuseInit:
             assert _init_langfuse() is None
 
     def test_langfuse_returns_cached_instance(self):
-        from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
+        from src.agents.llm import _init_langfuse
+
         mock_lf = MagicMock()
         llm_module._langfuse = mock_lf
         assert _init_langfuse() is mock_lf
         llm_module._langfuse = None
 
     def test_langfuse_handles_import_error(self):
-        from src.agents.llm import _init_langfuse
         import src.agents.llm as llm_module
+        from src.agents.llm import _init_langfuse
+
         llm_module._langfuse = None
         mock_settings = MagicMock()
         mock_settings.system.langfuse = {"enabled": True}

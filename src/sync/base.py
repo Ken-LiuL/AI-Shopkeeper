@@ -9,15 +9,15 @@ import traceback
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 CST = timezone(timedelta(hours=8))
 
 
-class SyncMode(str, Enum):
+class SyncMode(StrEnum):
     FULL = "full"
     INCREMENTAL = "incremental"
 
@@ -25,15 +25,16 @@ class SyncMode(str, Enum):
 @dataclass
 class SyncResult:
     """Result of a sync operation."""
+
     syncer_name: str
     mode: SyncMode
     success: bool
     records_synced: int = 0
     records_failed: int = 0
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     duration_ms: int = 0
-    error: Optional[str] = None
+    error: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -60,7 +61,7 @@ class BaseSyncer(ABC):
 
     def __init__(self, client: Any, db_pool: Any) -> None:
         self.client = client  # QNHClient
-        self.pool = db_pool   # asyncpg pool
+        self.pool = db_pool  # asyncpg pool
         self.logger = logging.getLogger(f"sync.{self.name}")
 
     # ── Abstract methods ────────────────────────────────────────────────
@@ -89,7 +90,10 @@ class BaseSyncer(ABC):
         last_incr = state.get("last_incremental_sync")
         last_time = last_full or last_incr
 
-        if last_full is None or (datetime.now(CST) - last_full.replace(tzinfo=CST)) > self.full_sync_interval:
+        if (
+            last_full is None
+            or (datetime.now(CST) - last_full.replace(tzinfo=CST)) > self.full_sync_interval
+        ):
             self.logger.info("Full sync interval exceeded, running full sync")
             return await self._run_with_retry(SyncMode.FULL)
 
@@ -99,11 +103,9 @@ class BaseSyncer(ABC):
 
     # ── Internal ────────────────────────────────────────────────────────
 
-    async def _run_with_retry(
-        self, mode: SyncMode, since: Optional[datetime] = None
-    ) -> SyncResult:
+    async def _run_with_retry(self, mode: SyncMode, since: datetime | None = None) -> SyncResult:
         """Execute sync with exponential backoff retry."""
-        last_error: Optional[str] = None
+        last_error: str | None = None
         for attempt in range(1, self.max_retries + 1):
             start = time.monotonic()
             started_at = datetime.now(CST)
@@ -126,9 +128,7 @@ class BaseSyncer(ABC):
                     return result
 
                 last_error = result.error
-                self.logger.warning(
-                    f"Attempt {attempt}/{self.max_retries} failed: {result.error}"
-                )
+                self.logger.warning(f"Attempt {attempt}/{self.max_retries} failed: {result.error}")
             except Exception as e:
                 last_error = f"{type(e).__name__}: {e}"
                 self.logger.error(
@@ -137,7 +137,7 @@ class BaseSyncer(ABC):
                 )
 
             if attempt < self.max_retries:
-                delay = self.retry_base_delay ** attempt
+                delay = self.retry_base_delay**attempt
                 self.logger.info(f"Retrying in {delay:.1f}s...")
                 await asyncio.sleep(delay)
 
@@ -155,7 +155,7 @@ class BaseSyncer(ABC):
         self.logger.error(f"All retries exhausted: {result.summary}")
         return result
 
-    async def _get_sync_state(self) -> Optional[dict[str, Any]]:
+    async def _get_sync_state(self) -> dict[str, Any] | None:
         """Get current sync state from DB."""
         if self.pool is None:
             return None
@@ -169,9 +169,7 @@ class BaseSyncer(ABC):
             self.logger.warning(f"Failed to get sync state: {e}")
             return None
 
-    async def _update_sync_state(
-        self, status: str, error: Optional[str] = None
-    ) -> None:
+    async def _update_sync_state(self, status: str, error: str | None = None) -> None:
         """Update sync state in DB."""
         if self.pool is None:
             return
@@ -183,7 +181,9 @@ class BaseSyncer(ABC):
                 ON CONFLICT (syncer_name) DO UPDATE
                 SET last_sync_status = $2, last_sync_error = $3, updated_at = NOW()
                 """,
-                self.name, status, error,
+                self.name,
+                status,
+                error,
             )
         except Exception as e:
             self.logger.warning(f"Failed to update sync state: {e}")
@@ -205,7 +205,10 @@ class BaseSyncer(ABC):
                     records_synced = $3, last_sync_duration_ms = $4,
                     last_sync_error = NULL, updated_at = NOW()
                 """,
-                self.name, result.finished_at, result.records_synced, result.duration_ms,
+                self.name,
+                result.finished_at,
+                result.records_synced,
+                result.duration_ms,
             )
         except Exception as e:
             self.logger.warning(f"Failed to save sync state: {e}")

@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import random
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
@@ -15,9 +15,10 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BehaviorConfig:
     """行为模拟参数配置。"""
-    typing_speed_ms: Tuple[int, int] = (50, 200)
-    scroll_pause_ms: Tuple[int, int] = (1000, 5000)
-    page_stay_ms: Tuple[int, int] = (3000, 30000)
+
+    typing_speed_ms: tuple[int, int] = (50, 200)
+    scroll_pause_ms: tuple[int, int] = (1000, 5000)
+    page_stay_ms: tuple[int, int] = (3000, 30000)
     click_offset_px: int = 3
     mouse_steps: int = 20
     scroll_speed_variation: float = 0.4  # ±40% 速度变化
@@ -26,20 +27,15 @@ class BehaviorConfig:
 
 def _bezier_point(t: float, p0: float, p1: float, p2: float, p3: float) -> float:
     """三次贝塞尔曲线插值。"""
-    return (
-        (1 - t) ** 3 * p0
-        + 3 * (1 - t) ** 2 * t * p1
-        + 3 * (1 - t) * t ** 2 * p2
-        + t ** 3 * p3
-    )
+    return (1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * p1 + 3 * (1 - t) * t**2 * p2 + t**3 * p3
 
 
 def generate_mouse_path(
-    start: Tuple[float, float],
-    end: Tuple[float, float],
+    start: tuple[float, float],
+    end: tuple[float, float],
     steps: int = 20,
     jitter: float = 3.0,
-) -> List[Tuple[float, float]]:
+) -> list[tuple[float, float]]:
     """生成贝塞尔曲线鼠标轨迹 + 随机抖动。
 
     Args:
@@ -92,12 +88,12 @@ def generate_slider_path(
     start_x: float,
     distance: float,
     steps: int = 30,
-) -> List[Tuple[float, float, int]]:
+) -> list[tuple[float, float, int]]:
     """生成滑块验证码拖动轨迹 (x_offset, y_offset, time_ms)。
 
     模拟：快速启动 → 减速 → 微调。
     """
-    path: List[Tuple[float, float, int]] = [(0, 0, 0)]
+    path: list[tuple[float, float, int]] = [(0, 0, 0)]
     total_time = 0
     current_x = 0.0
 
@@ -130,7 +126,13 @@ def generate_slider_path(
     overshoot = current_x - distance
     if abs(overshoot) > 1:
         total_time += random.randint(50, 150)
-        path.append((round(distance + random.uniform(-0.5, 0.5), 1), round(random.gauss(0, 0.5), 1), total_time))
+        path.append(
+            (
+                round(distance + random.uniform(-0.5, 0.5), 1),
+                round(random.gauss(0, 0.5), 1),
+                total_time,
+            )
+        )
 
     total_time += random.randint(30, 80)
     path.append((round(distance, 1), 0, total_time))
@@ -141,10 +143,10 @@ def generate_slider_path(
 class BehaviorSimulator:
     """行为模拟器 — 生成 JS 代码注入或直接通过 CDP 执行。"""
 
-    def __init__(self, config: Optional[BehaviorConfig] = None):
+    def __init__(self, config: BehaviorConfig | None = None):
         self.config = config or BehaviorConfig()
 
-    async def random_delay(self, min_ms: Optional[int] = None, max_ms: Optional[int] = None) -> None:
+    async def random_delay(self, min_ms: int | None = None, max_ms: int | None = None) -> None:
         """基于行为模型的随机延迟。"""
         lo = min_ms or self.config.page_stay_ms[0]
         hi = max_ms or self.config.page_stay_ms[1]
@@ -163,7 +165,7 @@ class BehaviorSimulator:
         else:
             await asyncio.sleep(random.uniform(lo / 1000, hi / 1000))
 
-    def generate_typing_sequence(self, text: str) -> List[dict]:
+    def generate_typing_sequence(self, text: str) -> list[dict]:
         """生成打字序列，包括偶尔的退格修正。
 
         Returns:
@@ -172,31 +174,37 @@ class BehaviorSimulator:
         sequence = []
         rng = random.Random()
 
-        for i, char in enumerate(text):
+        for _i, char in enumerate(text):
             # 偶尔打错字再退格
             if rng.random() < self.config.typo_probability and char.isalpha():
                 wrong_char = chr(ord(char) + rng.choice([-1, 1]))
-                sequence.append({
-                    "action": "type",
-                    "char": wrong_char,
-                    "delay_ms": rng.randint(*self.config.typing_speed_ms),
-                })
-                sequence.append({
-                    "action": "type",
-                    "char": "Backspace",
-                    "delay_ms": rng.randint(50, 150),
-                })
+                sequence.append(
+                    {
+                        "action": "type",
+                        "char": wrong_char,
+                        "delay_ms": rng.randint(*self.config.typing_speed_ms),
+                    }
+                )
+                sequence.append(
+                    {
+                        "action": "type",
+                        "char": "Backspace",
+                        "delay_ms": rng.randint(50, 150),
+                    }
+                )
 
             delay = rng.randint(*self.config.typing_speed_ms)
             # 空格/标点后偶尔长停顿
             if char in " ,.;!?" and rng.random() < 0.2:
                 delay += rng.randint(200, 500)
 
-            sequence.append({
-                "action": "type",
-                "char": char,
-                "delay_ms": delay,
-            })
+            sequence.append(
+                {
+                    "action": "type",
+                    "char": char,
+                    "delay_ms": delay,
+                }
+            )
 
         return sequence
 
@@ -214,7 +222,9 @@ class BehaviorSimulator:
             scroll_amount = min(scroll_amount, total_distance - current)
 
             # 速度变化
-            speed_var = 1 + random.uniform(-self.config.scroll_speed_variation, self.config.scroll_speed_variation)
+            speed_var = 1 + random.uniform(
+                -self.config.scroll_speed_variation, self.config.scroll_speed_variation
+            )
             duration = int(300 * speed_var)
 
             # 滚动后停顿
@@ -226,7 +236,13 @@ class BehaviorSimulator:
             # 5% 概率回滚一点（模拟回看）
             if random.random() < 0.05 and current > 200:
                 back = random.randint(50, 200)
-                segments.append({"amount": -back, "duration": random.randint(200, 400), "pause": random.randint(500, 1500)})
+                segments.append(
+                    {
+                        "amount": -back,
+                        "duration": random.randint(200, 400),
+                        "pause": random.randint(500, 1500),
+                    }
+                )
                 current -= back
 
             # 10% 概率长停顿（模拟阅读）
@@ -253,7 +269,7 @@ class BehaviorSimulator:
     }}
 }})()"""
 
-    def generate_click_offset(self) -> Tuple[int, int]:
+    def generate_click_offset(self) -> tuple[int, int]:
         """生成不精确的点击偏移。"""
         px = self.config.click_offset_px
         return (
@@ -263,8 +279,8 @@ class BehaviorSimulator:
 
     def generate_mouse_move_js(
         self,
-        start: Tuple[float, float],
-        end: Tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
     ) -> str:
         """生成鼠标移动的 JS（触发 mousemove 事件）。"""
         path = generate_mouse_path(start, end, steps=self.config.mouse_steps)
@@ -295,4 +311,3 @@ class BehaviorSimulator:
 
 
 # 需要 import json 用于 JS 生成
-import json

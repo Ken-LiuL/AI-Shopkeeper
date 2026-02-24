@@ -13,6 +13,7 @@ T = TypeVar("T")
 
 # ── Generic wrappers ─────────────────────────────────────────
 
+
 class APIResponse(BaseModel, Generic[T]):
     success: bool = True
     data: T | None = None
@@ -35,6 +36,7 @@ class TaskCreatedResponse(BaseModel):
 
 # ── Selection ────────────────────────────────────────────────
 
+
 class SelectionRunRequest(BaseModel):
     keywords: list[str] | None = None
     categories: list[str] | None = None
@@ -55,6 +57,7 @@ class SelectionRunDetail(SelectionRunSummary):
 
 
 # ── Customer Service ─────────────────────────────────────────
+
 
 class CreateSessionRequest(BaseModel):
     customer_id: str | None = None
@@ -94,6 +97,7 @@ class SessionHistory(BaseModel):
 
 # ── Alerts ───────────────────────────────────────────────────
 
+
 class AlertUpdateRequest(BaseModel):
     status: str = Field(..., pattern="^(acknowledged|resolved|ignored)$")
 
@@ -104,6 +108,7 @@ class AlertScanResponse(BaseModel):
 
 
 # ── Bundles ──────────────────────────────────────────────────
+
 
 class BundleGenerateRequest(BaseModel):
     min_support: float | None = None
@@ -118,6 +123,7 @@ class BundleUpdateRequest(BaseModel):
 
 
 # ── Listing ──────────────────────────────────────────────────
+
 
 class ListingParseRequest(BaseModel):
     url: str
@@ -139,6 +145,7 @@ class ListingDetail(BaseModel):
 
 
 # ── Products ─────────────────────────────────────────────────
+
 
 class ProductCreateRequest(BaseModel):
     name: str = Field(..., max_length=200)
@@ -171,6 +178,7 @@ class SalesRecord(BaseModel):
 
 
 # ── Dashboard ────────────────────────────────────────────────
+
 
 class DashboardOverview(BaseModel):
     total_products: int = 0

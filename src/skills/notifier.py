@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 from pydantic import BaseModel, Field
 
-
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class AlertPayload(BaseModel):
     severity: str  # critical/warning/info
@@ -19,10 +19,11 @@ class AlertPayload(BaseModel):
     root_cause: str = ""
     action: str = ""
 
+
 class DailyReportPayload(BaseModel):
     date: str
-    metrics: Dict[str, Any]
-    top_recommendations: List[Dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any]
+    top_recommendations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 # ── Emoji mapping ────────────────────────────────────────────────────────────

@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from src.api.schemas import APIResponse, DashboardOverview, SalesTrendPoint, TopProduct
 
-
 # ── Schema Tests ─────────────────────────────────────────────────────────────
+
 
 class TestDashboardOverview:
     def test_defaults(self):
@@ -20,7 +18,9 @@ class TestDashboardOverview:
         assert o.pending_tasks == 0
 
     def test_with_values(self):
-        o = DashboardOverview(total_products=100, today_orders=50, pending_alerts=3, pending_tasks=2)
+        o = DashboardOverview(
+            total_products=100, today_orders=50, pending_alerts=3, pending_tasks=2
+        )
         assert o.total_products == 100
         assert o.pending_tasks == 2
 
@@ -86,6 +86,7 @@ class TestAPIResponseWrapper:
 
 
 # ── DashboardOverview edge cases ─────────────────────────────────────────────
+
 
 class TestDashboardOverviewEdgeCases:
     def test_large_numbers(self):

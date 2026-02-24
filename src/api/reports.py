@@ -31,11 +31,14 @@ async def _period_report(days: int) -> dict:
     d = dict(row)
     d["refund_rate"] = round(d["refund_count"] / max(d["order_count"], 1), 4)
     # cs responses
-    cs_count = await pool.fetchval(
-        """SELECT COUNT(*)::int FROM cs_sessions
+    cs_count = (
+        await pool.fetchval(
+            """SELECT COUNT(*)::int FROM cs_sessions
            WHERE created_at >= CURRENT_DATE - make_interval(days => $1)""",
-        days,
-    ) or 0
+            days,
+        )
+        or 0
+    )
     d["cs_responses"] = cs_count
     return d
 
@@ -45,31 +48,35 @@ async def daily_report(date: str | None = None) -> APIResponse[dict]:
     """日报 — 支持 ?date=2026-02-12 查询指定日期的智能日报"""
     if date:
         from datetime import date as date_type
+
         from src.services.daily_report import DailyReportService
+
         try:
             d = date_type.fromisoformat(date)
             svc = DailyReportService()
             report = await svc.generate_daily_report(d)
-            return APIResponse(data={
-                "date": report.date,
-                "revenue": report.revenue,
-                "order_count": report.order_count,
-                "avg_order_value": report.avg_order_value,
-                "revenue_vs_yesterday": report.revenue_vs_yesterday,
-                "revenue_vs_last_week": report.revenue_vs_last_week,
-                "order_vs_yesterday": report.order_vs_yesterday,
-                "order_vs_last_week": report.order_vs_last_week,
-                "top_products": report.top_products,
-                "slow_products": report.slow_products,
-                "cs_total": report.cs_total,
-                "cs_ai_ratio": report.cs_ai_ratio,
-                "cs_human_transfer": report.cs_human_transfer,
-                "alerts_triggered": report.alerts_triggered,
-                "alerts_pending": report.alerts_pending,
-                "alerts_resolved": report.alerts_resolved,
-                "todo_items": report.todo_items,
-                "competitor_changes": report.competitor_changes,
-            })
+            return APIResponse(
+                data={
+                    "date": report.date,
+                    "revenue": report.revenue,
+                    "order_count": report.order_count,
+                    "avg_order_value": report.avg_order_value,
+                    "revenue_vs_yesterday": report.revenue_vs_yesterday,
+                    "revenue_vs_last_week": report.revenue_vs_last_week,
+                    "order_vs_yesterday": report.order_vs_yesterday,
+                    "order_vs_last_week": report.order_vs_last_week,
+                    "top_products": report.top_products,
+                    "slow_products": report.slow_products,
+                    "cs_total": report.cs_total,
+                    "cs_ai_ratio": report.cs_ai_ratio,
+                    "cs_human_transfer": report.cs_human_transfer,
+                    "alerts_triggered": report.alerts_triggered,
+                    "alerts_pending": report.alerts_pending,
+                    "alerts_resolved": report.alerts_resolved,
+                    "todo_items": report.todo_items,
+                    "competitor_changes": report.competitor_changes,
+                }
+            )
         except ValueError:
             pass
     return APIResponse(data=await _period_report(1))
@@ -102,7 +109,8 @@ async def product_performance(
            WHERE o.order_time >= CURRENT_DATE - make_interval(days => $1)
            GROUP BY oi.product_id, p.name, p.category
            ORDER BY total_revenue DESC LIMIT $2""",
-        days, limit,
+        days,
+        limit,
     )
     return APIResponse(data=[dict(r) for r in rows])
 
@@ -130,7 +138,7 @@ async def category_analysis(
 @router.post("/export")
 async def export_report(
     report_type: str = Query("daily", pattern="^(daily|weekly|monthly|product-performance)$"),
-    format: str = Query("csv", pattern="^(csv|json)$"),
+    format: str = Query("csv", pattern="^(csv|json)$"),  # noqa: A002
 ) -> StreamingResponse:
     """Export report as CSV (PDF/Excel can be added later)."""
     if report_type == "product-performance":
@@ -153,6 +161,7 @@ async def export_report(
         )
 
     import json
+
     return StreamingResponse(
         io.BytesIO(json.dumps(data, default=str).encode()),
         media_type="application/json",

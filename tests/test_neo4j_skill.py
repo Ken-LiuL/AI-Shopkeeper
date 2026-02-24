@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import pytest
-
 from src.skills.neo4j_skill import (
-    Neo4jSkill,
-    VectorSearchResult,
     KeywordSearchResult,
+    Neo4jSkill,
+    Population,
     ProductGraph,
     RelatedProduct,
-    Population,
+    VectorSearchResult,
 )
-
 
 # ---------------------------------------------------------------------------
 # Pydantic Model Tests
 # ---------------------------------------------------------------------------
+
 
 class TestVectorSearchResult:
     """Tests for VectorSearchResult Pydantic model."""
@@ -122,6 +120,7 @@ class TestPopulation:
 # Neo4jSkill Instance Tests
 # ---------------------------------------------------------------------------
 
+
 class TestNeo4jSkillInit:
     """Tests for Neo4jSkill initialization."""
 
@@ -193,6 +192,7 @@ class TestNeo4jSkillNoDriver:
 # RRF Merge Tests
 # ---------------------------------------------------------------------------
 
+
 class TestRRFMerge:
     """Tests for _rrf_merge static method."""
 
@@ -203,9 +203,9 @@ class TestRRFMerge:
             VectorSearchResult(id="b", name="B", score=0.8),
         ]
         keyword_results = []
-        
+
         merged = Neo4jSkill._rrf_merge(vector_results, keyword_results)
-        
+
         assert len(merged) == 2
         assert merged[0].id == "a"
         assert merged[1].id == "b"
@@ -222,9 +222,9 @@ class TestRRFMerge:
             KeywordSearchResult(id="d", name="D", score=4.0),
             KeywordSearchResult(id="a", name="A", score=3.0),
         ]
-        
+
         merged = Neo4jSkill._rrf_merge(vector_results, keyword_results)
-        
+
         # a and b appear in both lists, should be boosted
         ids = [r.id for r in merged]
         assert set(ids[:2]) == {"a", "b"}
@@ -239,9 +239,9 @@ class TestRRFMerge:
         vector_results = [
             VectorSearchResult(id="a", name="Product A", description="Desc A", score=0.9),
         ]
-        
+
         merged = Neo4jSkill._rrf_merge(vector_results, [])
-        
+
         assert merged[0].name == "Product A"
         assert merged[0].description == "Desc A"
 
@@ -253,9 +253,9 @@ class TestRRFMerge:
         keyword_results = [
             KeywordSearchResult(id="a", name="A", score=5.0),
         ]
-        
+
         merged = Neo4jSkill._rrf_merge(vector_results, keyword_results)
-        
+
         # Score should be 1/(60+1) + 1/(60+1) = 2/61
         expected_score = 2 / 61
         assert abs(merged[0].score - expected_score) < 0.001
@@ -266,9 +266,9 @@ class TestRRFMerge:
             VectorSearchResult(id="a", name="A", score=0.9),
             VectorSearchResult(id="b", name="B", score=0.8),
         ]
-        
+
         # Merge twice and verify same order
         merged1 = Neo4jSkill._rrf_merge(vector_results, [])
         merged2 = Neo4jSkill._rrf_merge(vector_results, [])
-        
+
         assert [r.id for r in merged1] == [r.id for r in merged2]

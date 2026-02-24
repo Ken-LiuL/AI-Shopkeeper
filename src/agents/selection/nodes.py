@@ -7,7 +7,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from ..llm import MODEL_FLASH, MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
+from ..llm import MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.selection import (
     competitor_analysis_prompt,
     gap_identification_prompt,
@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Phase 1: 数据采集（并行）
 # =============================================================================
+
 
 async def fetch_data(state: SelectionState) -> dict:
     """采集所有原始数据（通过 Skills 层）"""
@@ -124,6 +125,7 @@ async def seasonal_analysis_node(state: SelectionState) -> dict:
 # Phase 2: 缺品识别
 # =============================================================================
 
+
 async def gap_identification_node(state: SelectionState) -> dict:
     """Gap Identification: 缺品机会识别"""
     try:
@@ -143,6 +145,7 @@ async def gap_identification_node(state: SelectionState) -> dict:
 # =============================================================================
 # Phase 3: 供应链评估
 # =============================================================================
+
 
 async def supplier_evaluation_node(state: SelectionState) -> dict:
     """Supplier Sub-Agent: 双渠道供应链评估（逐个关键词）"""
@@ -181,12 +184,15 @@ async def supplier_evaluation_node(state: SelectionState) -> dict:
 # Phase 4: 综合评分 + Self-Reflection
 # =============================================================================
 
+
 async def scorer_node(state: SelectionState) -> dict:
     """Scorer Sub-Agent: 6维度评分 + 自我反思（使用 Opus）"""
     try:
         initial_prompt = scorer_prompt(
             gap_opportunities=json.dumps(state.get("gap_opportunities", {}), ensure_ascii=False),
-            supplier_evaluations=json.dumps(state.get("supplier_evaluations", []), ensure_ascii=False),
+            supplier_evaluations=json.dumps(
+                state.get("supplier_evaluations", []), ensure_ascii=False
+            ),
             seasonal_factors=json.dumps(state.get("seasonal_factors", {}), ensure_ascii=False),
             market_data=json.dumps(state.get("market_analysis", {}), ensure_ascii=False),
             competitor_data=json.dumps(state.get("competitor_analysis", {}), ensure_ascii=False),

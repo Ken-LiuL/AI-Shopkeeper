@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
-from ..llm import MODEL_FLASH, MODEL_DEEPSEEK, MODEL_SONNET, call_tool
+from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool
 from ..prompts.listing import compliance_prompt, filler_prompt, matcher_prompt, parser_prompt
 from ..tools import COMPLIANCE_CHECK_TOOL, LISTING_INFO_TOOL, PARSED_PRODUCT_TOOL
 from .state import ListingState
@@ -45,6 +44,7 @@ async def matcher_node(state: ListingState) -> dict:
         # NOTE: Matcher 不用 tool_use，直接返回文本
         # 实际中可能用数据库精确查询 + LLM 辅助模糊匹配
         from ..llm import get_client
+
         client = get_client()
         response = await client.messages.create(
             model=MODEL_FLASH,

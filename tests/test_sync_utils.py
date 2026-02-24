@@ -3,21 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
 import time
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from src.sync.utils import (
+    RateLimitedSession,
     load_cookies_from_file,
     save_cookies_to_file,
-    RateLimitedSession,
 )
 
-
 # ── Cookie Tests ─────────────────────────────────────────────────────────────
+
 
 class TestLoadCookies:
     def test_json_dict(self, tmp_path):
@@ -64,6 +62,7 @@ class TestSaveCookies:
 
 
 # ── RateLimitedSession Tests ────────────────────────────────────────────────
+
 
 class TestRateLimitedSession:
     @pytest.mark.asyncio

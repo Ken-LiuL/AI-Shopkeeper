@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from .base import BaseSyncer, SyncMode, SyncResult, CST
+from .base import CST, BaseSyncer, SyncMode, SyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +40,10 @@ class MetricsSyncer(BaseSyncer):
 
     async def _sync_date_range(self, start: Any, end: Any, mode: SyncMode) -> SyncResult:
         total = 0
-        from datetime import date as Date
-        current = start if isinstance(start, Date) else start.date()
-        end_date = end if isinstance(end, Date) else end.date()
+        from datetime import date as date_cls
+
+        current = start if isinstance(start, date_cls) else start.date()
+        end_date = end if isinstance(end, date_cls) else end.date()
 
         try:
             while current <= end_date:
@@ -66,18 +67,25 @@ class MetricsSyncer(BaseSyncer):
                             await self._upsert_metrics(current, channel, data)
                             total += 1
                     except Exception as e:
-                        self.logger.warning(f"Failed to fetch metrics for {date_str} channel={channel}: {e}")
+                        self.logger.warning(
+                            f"Failed to fetch metrics for {date_str} channel={channel}: {e}"
+                        )
 
                 current += timedelta(days=1)
 
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=True, records_synced=total,
+                syncer_name=self.name,
+                mode=mode,
+                success=True,
+                records_synced=total,
             )
         except Exception as e:
             return SyncResult(
-                syncer_name=self.name, mode=mode,
-                success=False, records_synced=total, error=str(e),
+                syncer_name=self.name,
+                mode=mode,
+                success=False,
+                records_synced=total,
+                error=str(e),
             )
 
     async def _upsert_metrics(

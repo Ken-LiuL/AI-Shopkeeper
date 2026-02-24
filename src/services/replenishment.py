@@ -5,8 +5,8 @@ from __future__ import annotations
 import logging
 import math
 import uuid
-from dataclasses import dataclass, field
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from src.db import postgres as pg
@@ -53,9 +53,7 @@ class ReplenishmentService:
 
     Z_SCORE = 1.65  # 95% 服务水平
 
-    async def calculate_safety_stock(
-        self, product_id: str, lead_time_days: int = 3
-    ) -> SafetyStock:
+    async def calculate_safety_stock(self, product_id: str, lead_time_days: int = 3) -> SafetyStock:
         """计算单品安全库存
 
         安全库存 = 日均销量 × 补货周期 + Z × 标准差 × √补货周期
@@ -121,16 +119,18 @@ class ReplenishmentService:
                     # 建议补到安全库存的1.5倍
                     suggested = math.ceil(gap * 1.5)
                     cost = float(p["cost_price"] or 0)
-                    suggestions.append(ReplenishmentItem(
-                        product_id=p["product_id"],
-                        product_name=p["name"],
-                        current_stock=p["stock"],
-                        safety_stock=ss.safety_stock,
-                        suggested_qty=suggested,
-                        cost_price=cost,
-                        estimated_cost=round(cost * suggested, 2),
-                        supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={p['name']}",
-                    ))
+                    suggestions.append(
+                        ReplenishmentItem(
+                            product_id=p["product_id"],
+                            product_name=p["name"],
+                            current_stock=p["stock"],
+                            safety_stock=ss.safety_stock,
+                            suggested_qty=suggested,
+                            cost_price=cost,
+                            estimated_cost=round(cost * suggested, 2),
+                            supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={p['name']}",
+                        )
+                    )
             except Exception as e:
                 logger.warning(f"Failed to calculate safety stock for {p['product_id']}: {e}")
 
@@ -148,19 +148,24 @@ class ReplenishmentService:
         for item in items:
             cost = float(item.get("estimated_cost", 0))
             total += cost
-            order_items.append({
-                "product_id": item["product_id"],
-                "product_name": item.get("product_name", ""),
-                "quantity": item.get("suggested_qty", 0),
-                "unit_cost": item.get("cost_price", 0),
-                "estimated_cost": cost,
-            })
+            order_items.append(
+                {
+                    "product_id": item["product_id"],
+                    "product_name": item.get("product_name", ""),
+                    "quantity": item.get("suggested_qty", 0),
+                    "unit_cost": item.get("cost_price", 0),
+                    "estimated_cost": cost,
+                }
+            )
 
         import json
+
         await pool.execute(
             """INSERT INTO purchase_orders (order_id, items, total_cost, status, created_at, updated_at)
                VALUES ($1, $2, $3, 'draft', NOW(), NOW())""",
-            order_id, json.dumps(order_items), total,
+            order_id,
+            json.dumps(order_items),
+            total,
         )
 
         return PurchaseOrder(
@@ -181,15 +186,17 @@ class ReplenishmentService:
         for p in products:
             try:
                 ss = await self.calculate_safety_stock(p["product_id"])
-                results.append({
-                    "product_id": ss.product_id,
-                    "product_name": ss.product_name,
-                    "current_stock": ss.current_stock,
-                    "safety_stock": ss.safety_stock,
-                    "reorder_point": ss.reorder_point,
-                    "avg_daily_sales": ss.avg_daily_sales,
-                    "status": "ok" if ss.current_stock >= ss.safety_stock else "low",
-                })
+                results.append(
+                    {
+                        "product_id": ss.product_id,
+                        "product_name": ss.product_name,
+                        "current_stock": ss.current_stock,
+                        "safety_stock": ss.safety_stock,
+                        "reorder_point": ss.reorder_point,
+                        "avg_daily_sales": ss.avg_daily_sales,
+                        "status": "ok" if ss.current_stock >= ss.safety_stock else "low",
+                    }
+                )
             except Exception:
                 pass
         return results

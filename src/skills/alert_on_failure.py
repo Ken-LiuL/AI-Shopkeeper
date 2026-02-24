@@ -2,7 +2,7 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +13,8 @@ async def alert_scrape_failure(
     source: str,
     keyword: str,
     error: str,
-    db_pool: Optional[Any] = None,
-    notifier: Optional[Any] = None,
+    db_pool: Any | None = None,
+    notifier: Any | None = None,
 ):
     """采集失败时发送告警。
 
@@ -36,7 +36,10 @@ async def alert_scrape_failure(
                 INSERT INTO alerts (type, source, keyword, error_message, created_at)
                 VALUES ('scrape_failure', $1, $2, $3, $4)
                 """,
-                source, keyword, error, datetime.now(CST),
+                source,
+                keyword,
+                error,
+                datetime.now(CST),
             )
         except Exception as e:
             logger.error(f"Failed to write alert to DB: {e}")

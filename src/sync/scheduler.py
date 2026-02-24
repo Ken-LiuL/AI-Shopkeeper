@@ -5,9 +5,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any
 
-from .base import BaseSyncer, SyncResult, CST
+from .base import CST, BaseSyncer, SyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class SyncScheduler:
         await scheduler.run_forever()
     """
 
-    def __init__(self, schedule: Optional[dict[str, dict[str, str]]] = None) -> None:
+    def __init__(self, schedule: dict[str, dict[str, str]] | None = None) -> None:
         self.schedule = schedule or SYNC_SCHEDULE
         self.syncers: dict[str, BaseSyncer] = {}
         self._last_run: dict[str, datetime] = {}
@@ -74,10 +74,14 @@ class SyncScheduler:
                     self._last_run[name] = now
                 except Exception as e:
                     logger.error(f"Scheduled sync {name} failed: {e}")
-                    results.append(SyncResult(
-                        syncer_name=name, mode=syncer.name,  # type: ignore
-                        success=False, error=str(e),
-                    ))
+                    results.append(
+                        SyncResult(
+                            syncer_name=name,
+                            mode=syncer.name,  # type: ignore
+                            success=False,
+                            error=str(e),
+                        )
+                    )
 
         return results
 
@@ -113,10 +117,14 @@ class SyncScheduler:
                 results.append(result)
             except Exception as e:
                 logger.error(f"Force sync {name} failed: {e}")
-                results.append(SyncResult(
-                    syncer_name=name, mode=syncer.name,  # type: ignore
-                    success=False, error=str(e),
-                ))
+                results.append(
+                    SyncResult(
+                        syncer_name=name,
+                        mode=syncer.name,  # type: ignore
+                        success=False,
+                        error=str(e),
+                    )
+                )
         return results
 
     # ── Internal ────────────────────────────────────────────────────────
@@ -160,8 +168,6 @@ class SyncScheduler:
         return {
             "running": self._running,
             "syncers": list(self.syncers.keys()),
-            "last_runs": {
-                name: ts.isoformat() for name, ts in self._last_run.items()
-            },
+            "last_runs": {name: ts.isoformat() for name, ts in self._last_run.items()},
             "schedule": self.schedule,
         }

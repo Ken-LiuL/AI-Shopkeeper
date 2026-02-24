@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, patch
-
-import pytest
 
 from src.agents.selection.nodes import (
     competitor_analysis_node,
@@ -19,10 +16,10 @@ from src.agents.selection.nodes import (
 )
 from src.agents.selection.state import SelectionState
 
-
 # ---------------------------------------------------------------------------
 # Phase 1: fetch_data
 # ---------------------------------------------------------------------------
+
 
 class TestFetchData:
     async def test_sets_date_and_season(self):
@@ -37,17 +34,22 @@ class TestFetchData:
 # Phase 1: 4 节点并行（Market / Competitor / Inventory / Seasonal）
 # ---------------------------------------------------------------------------
 
+
 class TestParallelAnalysisNodes:
     """测试四个分析节点各自正确调用 call_tool 并返回结果"""
 
     async def test_market_analysis(self, tool_response_factory, sample_market_analysis):
-        resp = tool_response_factory("output_market_analysis", sample_market_analysis)
+        tool_response_factory("output_market_analysis", sample_market_analysis)
         state: SelectionState = {
             "raw_keywords_data": "kw data",
             "raw_products_data": "prod data",
             "categories": ["医疗器械"],
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_market_analysis):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_market_analysis,
+        ):
             result = await market_analysis_node(state)
         assert "market_analysis" in result
         assert result["market_analysis"]["keywords"][0]["keyword"] == "电子血压计"
@@ -59,13 +61,21 @@ class TestParallelAnalysisNodes:
             "raw_stockouts": "stockouts",
             "raw_our_products": "our",
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_competitor_analysis):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_competitor_analysis,
+        ):
             result = await competitor_analysis_node(state)
         assert result["competitor_analysis"]["gap_products"][0]["product_name"] == "制氧机"
 
     async def test_inventory_analysis(self, sample_inventory_analysis):
         state: SelectionState = {"raw_our_products": "our", "raw_sales_data": "sales"}
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_inventory_analysis):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_inventory_analysis,
+        ):
             result = await inventory_analysis_node(state)
         assert result["inventory_analysis"]["inventory_summary"]["total_sku"] == 120
 
@@ -77,14 +87,22 @@ class TestParallelAnalysisNodes:
             "raw_weather_forecast": "weather",
             "raw_trending_events": "无",
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_seasonal_factors):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_seasonal_factors,
+        ):
             result = await seasonal_analysis_node(state)
         assert result["seasonal_factors"]["factors"][0]["event_name"] == "冬季流感"
 
     async def test_node_error_appends_to_errors(self):
         """节点异常时，errors 列表正确追加"""
         state: SelectionState = {"categories": ["医疗器械"], "errors": ["prev_error"]}
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, side_effect=RuntimeError("API down")):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API down"),
+        ):
             result = await market_analysis_node(state)
         assert len(result["errors"]) == 2
         assert "market_analysis" in result["errors"][-1]
@@ -94,17 +112,27 @@ class TestParallelAnalysisNodes:
 # Phase 2: Gap Identification
 # ---------------------------------------------------------------------------
 
+
 class TestGapIdentification:
-    async def test_identifies_gaps(self, sample_gap_opportunities, sample_market_analysis,
-                                    sample_competitor_analysis, sample_inventory_analysis,
-                                    sample_seasonal_factors):
+    async def test_identifies_gaps(
+        self,
+        sample_gap_opportunities,
+        sample_market_analysis,
+        sample_competitor_analysis,
+        sample_inventory_analysis,
+        sample_seasonal_factors,
+    ):
         state: SelectionState = {
             "market_analysis": sample_market_analysis,
             "competitor_analysis": sample_competitor_analysis,
             "inventory_analysis": sample_inventory_analysis,
             "seasonal_factors": sample_seasonal_factors,
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_gap_opportunities):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_gap_opportunities,
+        ):
             result = await gap_identification_node(state)
         gaps = result["gap_opportunities"]
         assert gaps["gap_summary"]["total_opportunities"] == 3
@@ -115,15 +143,22 @@ class TestGapIdentification:
 # Phase 3: Supplier Evaluation（双渠道）
 # ---------------------------------------------------------------------------
 
+
 class TestSupplierEvaluation:
-    async def test_evaluates_each_opportunity(self, sample_gap_opportunities, sample_supplier_evaluation):
+    async def test_evaluates_each_opportunity(
+        self, sample_gap_opportunities, sample_supplier_evaluation
+    ):
         state: SelectionState = {
             "gap_opportunities": sample_gap_opportunities,
             "raw_alibaba_results": {"制氧机": "ali data", "雾化器": "ali data2"},
             "raw_pdd_results": {"制氧机": "pdd data", "雾化器": "pdd data2"},
             "errors": [],
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_supplier_evaluation):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_supplier_evaluation,
+        ):
             result = await supplier_evaluation_node(state)
         # 2 opportunities → 2 evaluations
         assert len(result["supplier_evaluations"]) == 2
@@ -135,7 +170,11 @@ class TestSupplierEvaluation:
             },
             "errors": [],
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, return_value=sample_supplier_evaluation):
+        with patch(
+            "src.agents.selection.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_supplier_evaluation,
+        ):
             result = await supplier_evaluation_node(state)
         assert len(result["supplier_evaluations"]) == 0
 
@@ -152,10 +191,13 @@ class TestSupplierEvaluation:
 
         state: SelectionState = {
             "gap_opportunities": sample_gap_opportunities,
-            "raw_alibaba_results": {}, "raw_pdd_results": {},
+            "raw_alibaba_results": {},
+            "raw_pdd_results": {},
             "errors": [],
         }
-        with patch("src.agents.selection.nodes.call_tool", new_callable=AsyncMock, side_effect=_side_effect):
+        with patch(
+            "src.agents.selection.nodes.call_tool", new_callable=AsyncMock, side_effect=_side_effect
+        ):
             result = await supplier_evaluation_node(state)
         assert len(result["supplier_evaluations"]) == 1
         assert len(result["errors"]) == 1
@@ -165,11 +207,18 @@ class TestSupplierEvaluation:
 # Phase 4: Scorer（含 Self-Reflection）
 # ---------------------------------------------------------------------------
 
+
 class TestScorer:
-    async def test_scorer_with_reflection(self, sample_recommendations, sample_gap_opportunities,
-                                           sample_supplier_evaluation, sample_seasonal_factors,
-                                           sample_market_analysis, sample_competitor_analysis,
-                                           sample_inventory_analysis):
+    async def test_scorer_with_reflection(
+        self,
+        sample_recommendations,
+        sample_gap_opportunities,
+        sample_supplier_evaluation,
+        sample_seasonal_factors,
+        sample_market_analysis,
+        sample_competitor_analysis,
+        sample_inventory_analysis,
+    ):
         state: SelectionState = {
             "gap_opportunities": sample_gap_opportunities,
             "supplier_evaluations": [sample_supplier_evaluation],
@@ -178,8 +227,11 @@ class TestScorer:
             "competitor_analysis": sample_competitor_analysis,
             "inventory_analysis": sample_inventory_analysis,
         }
-        with patch("src.agents.selection.nodes.call_tool_with_reflection",
-                    new_callable=AsyncMock, return_value=sample_recommendations):
+        with patch(
+            "src.agents.selection.nodes.call_tool_with_reflection",
+            new_callable=AsyncMock,
+            return_value=sample_recommendations,
+        ):
             result = await scorer_node(state)
         recs = result["recommendations"]
         assert recs["scoring_summary"]["recommended_count"] == 2
@@ -188,8 +240,11 @@ class TestScorer:
 
     async def test_scorer_error(self):
         state: SelectionState = {"errors": []}
-        with patch("src.agents.selection.nodes.call_tool_with_reflection",
-                    new_callable=AsyncMock, side_effect=RuntimeError("opus error")):
+        with patch(
+            "src.agents.selection.nodes.call_tool_with_reflection",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("opus error"),
+        ):
             result = await scorer_node(state)
         assert any("scorer" in e for e in result["errors"])
 
@@ -197,6 +252,7 @@ class TestScorer:
 # ---------------------------------------------------------------------------
 # 端到端状态传递
 # ---------------------------------------------------------------------------
+
 
 class TestStateFlow:
     """验证各阶段输出可正确被下游节点读取"""
@@ -242,14 +298,23 @@ class TestStateFlow:
             state.update(await supplier_evaluation_node(state))
 
         # Phase 4
-        with patch("src.agents.selection.nodes.call_tool_with_reflection",
-                    new_callable=AsyncMock, return_value=sample_recommendations):
+        with patch(
+            "src.agents.selection.nodes.call_tool_with_reflection",
+            new_callable=AsyncMock,
+            return_value=sample_recommendations,
+        ):
             state.update(await scorer_node(state))
 
         # 验证所有关键 state key 存在
         for key in [
-            "current_date", "current_season",
-            "market_analysis", "competitor_analysis", "inventory_analysis", "seasonal_factors",
-            "gap_opportunities", "supplier_evaluations", "recommendations",
+            "current_date",
+            "current_season",
+            "market_analysis",
+            "competitor_analysis",
+            "inventory_analysis",
+            "seasonal_factors",
+            "gap_opportunities",
+            "supplier_evaluations",
+            "recommendations",
         ]:
             assert key in state, f"Missing state key: {key}"

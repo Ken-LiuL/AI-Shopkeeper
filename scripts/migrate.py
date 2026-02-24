@@ -7,8 +7,6 @@ import argparse
 import asyncio
 import glob
 import os
-import re
-import sys
 
 import asyncpg
 from neo4j import AsyncGraphDatabase
@@ -45,9 +43,7 @@ async def run_postgres_migrations(dsn: str, migrations_dir: str):
             sql = open(fpath).read()
             async with conn.transaction():
                 await conn.execute(sql)
-                await conn.execute(
-                    "INSERT INTO migration_history (filename) VALUES ($1)", fname
-                )
+                await conn.execute("INSERT INTO migration_history (filename) VALUES ($1)", fname)
     finally:
         await conn.close()
 
@@ -64,9 +60,7 @@ async def run_neo4j_migrations(uri: str, auth: tuple[str, str], migrations_dir: 
             files = sorted(glob.glob(os.path.join(migrations_dir, "*.cypher")))
             for fpath in files:
                 fname = os.path.basename(fpath)
-                result = await session.run(
-                    "MATCH (m:Migration {filename: $f}) RETURN m", f=fname
-                )
+                result = await session.run("MATCH (m:Migration {filename: $f}) RETURN m", f=fname)
                 if await result.single():
                     print(f"  [skip] {fname}")
                     continue
@@ -92,7 +86,9 @@ async def main():
     run_neo = not args.postgres_only
 
     if run_pg:
-        dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ai_store_manager")
+        dsn = os.environ.get(
+            "DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/ai_store_manager"
+        )
         print("=== PostgreSQL Migrations ===")
         await run_postgres_migrations(dsn, os.path.join(base, "migrations", "postgres"))
 
@@ -101,8 +97,9 @@ async def main():
         neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
         neo4j_pass = os.environ.get("NEO4J_PASSWORD", "password")
         print("=== Neo4j Migrations ===")
-        await run_neo4j_migrations(neo4j_uri, (neo4j_user, neo4j_pass),
-                                   os.path.join(base, "migrations", "neo4j"))
+        await run_neo4j_migrations(
+            neo4j_uri, (neo4j_user, neo4j_pass), os.path.join(base, "migrations", "neo4j")
+        )
 
     print("Done.")
 

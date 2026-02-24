@@ -2,29 +2,27 @@
 
 from __future__ import annotations
 
-import pytest
-
-from src.agents.prompts.selection import (
-    market_analysis_prompt,
-    competitor_analysis_prompt,
-    inventory_analysis_prompt,
-    seasonal_factors_prompt,
-    gap_identification_prompt,
-    supplier_evaluation_prompt,
-    scorer_prompt,
-    scorer_reflection_prompt,
-)
 from src.agents.prompts.customer_service import (
-    intent_prompt,
-    reply_prompt,
     FAQ_TEMPLATES,
     HUMAN_TRANSFER_KEYWORDS,
+    intent_prompt,
+    reply_prompt,
 )
-
+from src.agents.prompts.selection import (
+    competitor_analysis_prompt,
+    gap_identification_prompt,
+    inventory_analysis_prompt,
+    market_analysis_prompt,
+    scorer_prompt,
+    scorer_reflection_prompt,
+    seasonal_factors_prompt,
+    supplier_evaluation_prompt,
+)
 
 # ---------------------------------------------------------------------------
 # Selection Prompts Tests
 # ---------------------------------------------------------------------------
+
 
 class TestMarketAnalysisPrompt:
     """Tests for market_analysis_prompt."""
@@ -261,11 +259,11 @@ class TestScorerPrompt:
         """Prompt generates without raising exception."""
         result = scorer_prompt(
             gap_opportunities='{"opportunities": []}',
-            supplier_evaluations='[]',
-            seasonal_factors='{}',
-            market_data='{}',
-            competitor_data='{}',
-            inventory_summary='{}',
+            supplier_evaluations="[]",
+            seasonal_factors="{}",
+            market_data="{}",
+            competitor_data="{}",
+            inventory_summary="{}",
         )
         assert isinstance(result, str)
 
@@ -318,19 +316,20 @@ class TestScorerReflectionPrompt:
 
     def test_includes_verification_checklist(self):
         """Prompt includes verification items."""
-        result = scorer_reflection_prompt('{}')
+        result = scorer_reflection_prompt("{}")
         # Should mention checking/验证
         assert "检查" in result or "verify" in result.lower() or "验证" in result
 
     def test_asks_for_reflection_notes(self):
         """Prompt asks to fill reflection_notes."""
-        result = scorer_reflection_prompt('{}')
+        result = scorer_reflection_prompt("{}")
         assert "reflection_notes" in result
 
 
 # ---------------------------------------------------------------------------
 # CustomerService Prompts Tests
 # ---------------------------------------------------------------------------
+
 
 class TestIntentPrompt:
     """Tests for intent_prompt."""
@@ -397,8 +396,8 @@ class TestReplyPrompt:
         """Prompt includes user message."""
         result = reply_prompt(
             user_message="老人用什么血压计好",
-            intent='{}',
-            retrieved_products_with_graph='[]',
+            intent="{}",
+            retrieved_products_with_graph="[]",
         )
         assert "老人用什么血压计好" in result
 
@@ -407,7 +406,7 @@ class TestReplyPrompt:
         result = reply_prompt(
             user_message="test",
             intent='{"intent": "recommendation", "confidence": 0.9}',
-            retrieved_products_with_graph='[]',
+            retrieved_products_with_graph="[]",
         )
         assert "recommendation" in result
 
@@ -415,7 +414,7 @@ class TestReplyPrompt:
         """Prompt includes retrieved products."""
         result = reply_prompt(
             user_message="test",
-            intent='{}',
+            intent="{}",
             retrieved_products_with_graph='[{"name": "欧姆龙血压计", "price": 299}]',
         )
         assert "欧姆龙血压计" in result
@@ -443,6 +442,7 @@ class TestReplyPrompt:
 # ---------------------------------------------------------------------------
 # FAQ Templates Tests
 # ---------------------------------------------------------------------------
+
 
 class TestFAQTemplates:
     """Tests for FAQ_TEMPLATES configuration."""

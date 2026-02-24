@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
-
-
 # ---------------------------------------------------------------------------
 # Schema Tests
 # ---------------------------------------------------------------------------
+
 
 class TestChatRequest:
     """Tests for ChatRequest schema."""
@@ -15,7 +13,7 @@ class TestChatRequest:
     def test_request_with_required_fields(self):
         """Request accepts required fields."""
         from src.api.schemas import ChatRequest
-        
+
         request = ChatRequest(
             session_id="session_001",
             message="有血压计吗",
@@ -26,7 +24,7 @@ class TestChatRequest:
     def test_request_minimal(self):
         """Request only requires session_id and message (no conversation_history)."""
         from src.api.schemas import ChatRequest
-        
+
         request = ChatRequest(
             session_id="session_001",
             message="有血压计吗",
@@ -42,7 +40,7 @@ class TestChatResponse:
     def test_response_with_all_fields(self):
         """Response accepts all fields."""
         from src.api.schemas import ChatResponse
-        
+
         response = ChatResponse(
             session_id="session_001",
             reply="亲，推荐这款血压计~",
@@ -56,7 +54,7 @@ class TestChatResponse:
     def test_response_optional_fields(self):
         """Response allows optional fields."""
         from src.api.schemas import ChatResponse
-        
+
         response = ChatResponse(
             session_id="session_001",
             reply="亲，在的呢~",
@@ -71,7 +69,7 @@ class TestSessionHistory:
     def test_history_creation(self):
         """History can be created with messages."""
         from src.api.schemas import SessionHistory
-        
+
         history = SessionHistory(
             session_id="session_001",
             messages=[
@@ -85,7 +83,7 @@ class TestSessionHistory:
     def test_history_default_empty(self):
         """History defaults to empty messages."""
         from src.api.schemas import SessionHistory
-        
+
         history = SessionHistory(session_id="session_001")
         assert history.messages == []
 
@@ -94,13 +92,14 @@ class TestSessionHistory:
 # Additional Schema Tests
 # ---------------------------------------------------------------------------
 
+
 class TestAlertSchemas:
     """Tests for Alert-related schemas."""
 
     def test_alert_update_request(self):
         """AlertUpdateRequest validates status."""
         from src.api.schemas import AlertUpdateRequest
-        
+
         # Valid statuses
         for status in ["acknowledged", "resolved", "ignored"]:
             request = AlertUpdateRequest(status=status)
@@ -113,7 +112,7 @@ class TestBundleSchemas:
     def test_bundle_generate_request(self):
         """BundleGenerateRequest has optional fields."""
         from src.api.schemas import BundleGenerateRequest
-        
+
         request = BundleGenerateRequest()
         assert request.min_support is None
         assert request.min_confidence is None
@@ -122,7 +121,7 @@ class TestBundleSchemas:
     def test_bundle_generate_with_params(self):
         """BundleGenerateRequest accepts params."""
         from src.api.schemas import BundleGenerateRequest
-        
+
         request = BundleGenerateRequest(
             min_support=0.01,
             min_confidence=0.5,
@@ -137,7 +136,7 @@ class TestListingSchemas:
     def test_listing_parse_request(self):
         """ListingParseRequest has url and platform."""
         from src.api.schemas import ListingParseRequest
-        
+
         request = ListingParseRequest(url="https://example.com")
         assert request.url == "https://example.com"
         assert request.platform == "alibaba"
@@ -145,7 +144,7 @@ class TestListingSchemas:
     def test_listing_parse_pdd(self):
         """ListingParseRequest supports pdd platform."""
         from src.api.schemas import ListingParseRequest
-        
+
         request = ListingParseRequest(url="https://pdd.com", platform="pdd")
         assert request.platform == "pdd"
 
@@ -156,7 +155,7 @@ class TestProductSchemas:
     def test_product_create_request(self):
         """ProductCreateRequest has name as required."""
         from src.api.schemas import ProductCreateRequest
-        
+
         request = ProductCreateRequest(name="测试商品")
         assert request.name == "测试商品"
         assert request.stock == 0
@@ -165,7 +164,7 @@ class TestProductSchemas:
     def test_product_update_request(self):
         """ProductUpdateRequest has all optional fields."""
         from src.api.schemas import ProductUpdateRequest
-        
+
         request = ProductUpdateRequest()
         assert request.name is None
         assert request.retail_price is None
@@ -177,7 +176,7 @@ class TestDashboardSchemas:
     def test_dashboard_overview(self):
         """DashboardOverview has default values."""
         from src.api.schemas import DashboardOverview
-        
+
         overview = DashboardOverview()
         assert overview.total_products == 0
         assert overview.today_orders == 0
@@ -186,8 +185,9 @@ class TestDashboardSchemas:
     def test_top_product(self):
         """TopProduct has required fields."""
         from decimal import Decimal
+
         from src.api.schemas import TopProduct
-        
+
         product = TopProduct(
             product_id="P001",
             name="血压计",
@@ -203,7 +203,7 @@ class TestPaginatedResponse:
     def test_paginated_response_defaults(self):
         """PaginatedResponse has sensible defaults."""
         from src.api.schemas import PaginatedResponse
-        
+
         response = PaginatedResponse()
         assert response.success is True
         assert response.data == []
@@ -214,7 +214,7 @@ class TestPaginatedResponse:
     def test_paginated_response_with_data(self):
         """PaginatedResponse works with data."""
         from src.api.schemas import PaginatedResponse
-        
+
         response = PaginatedResponse(
             data=[{"id": 1}, {"id": 2}],
             total=100,

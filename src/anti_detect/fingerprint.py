@@ -9,21 +9,33 @@ import random
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # ── 常见分辨率池 ─────────────────────────────────────────────────────────────
-DEFAULT_RESOLUTIONS: List[Tuple[int, int]] = [
-    (1920, 1080), (1440, 900), (1366, 768), (1536, 864),
-    (1280, 720), (1600, 900), (1280, 800), (2560, 1440),
+DEFAULT_RESOLUTIONS: list[tuple[int, int]] = [
+    (1920, 1080),
+    (1440, 900),
+    (1366, 768),
+    (1536, 864),
+    (1280, 720),
+    (1600, 900),
+    (1280, 800),
+    (2560, 1440),
 ]
 
 # ── 常见 User-Agent 池 ──────────────────────────────────────────────────────
 _CHROME_VERSIONS = [
-    "120.0.6099.109", "120.0.6099.130", "121.0.6167.85",
-    "121.0.6167.140", "122.0.6261.57", "122.0.6261.94",
-    "123.0.6312.58", "123.0.6312.86", "124.0.6367.91",
+    "120.0.6099.109",
+    "120.0.6099.130",
+    "121.0.6167.85",
+    "121.0.6167.140",
+    "122.0.6261.57",
+    "122.0.6261.94",
+    "123.0.6312.58",
+    "123.0.6312.86",
+    "124.0.6367.91",
 ]
 
 _PLATFORMS = [
@@ -52,7 +64,7 @@ _WEBGL_RENDERERS = [
 
 # ── 时区映射 ─────────────────────────────────────────────────────────────────
 _TIMEZONE_MAP = {
-    "zh-CN": ("Asia/Shanghai", 480),   # UTC+8
+    "zh-CN": ("Asia/Shanghai", 480),  # UTC+8
     "en-US": ("America/New_York", -300),
     "ja-JP": ("Asia/Tokyo", 540),
 }
@@ -61,6 +73,7 @@ _TIMEZONE_MAP = {
 @dataclass
 class BrowserFingerprint:
     """一个完整的浏览器指纹配置。"""
+
     session_id: str
     user_agent: str
     platform: str
@@ -68,7 +81,7 @@ class BrowserFingerprint:
     screen_height: int
     color_depth: int = 24
     pixel_ratio: float = 1.0
-    languages: List[str] = field(default_factory=lambda: ["zh-CN", "zh", "en-US", "en"])
+    languages: list[str] = field(default_factory=lambda: ["zh-CN", "zh", "en-US", "en"])
     timezone: str = "Asia/Shanghai"
     timezone_offset: int = -480  # getTimezoneOffset() 返回负值
     webgl_vendor: str = ""
@@ -78,10 +91,10 @@ class BrowserFingerprint:
     hardware_concurrency: int = 8
     device_memory: int = 8
     max_touch_points: int = 0
-    do_not_track: Optional[str] = "1"
+    do_not_track: str | None = "1"
     created_at: float = field(default_factory=time.time)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "session_id": self.session_id,
             "user_agent": self.user_agent,
@@ -223,13 +236,13 @@ class FingerprintManager:
     def __init__(
         self,
         rotate_every: int = 3600,
-        resolution_pool: Optional[List[Tuple[int, int]]] = None,
-        cache_dir: Optional[Path] = None,
+        resolution_pool: list[tuple[int, int]] | None = None,
+        cache_dir: Path | None = None,
     ):
         self._rotate_every = rotate_every
         self._resolution_pool = resolution_pool or DEFAULT_RESOLUTIONS
         self._cache_dir = cache_dir
-        self._cache: Dict[str, BrowserFingerprint] = {}
+        self._cache: dict[str, BrowserFingerprint] = {}
 
     def get_fingerprint(self, session_key: str = "default") -> BrowserFingerprint:
         """获取指纹，过期自动轮换。
@@ -276,10 +289,16 @@ class FingerprintManager:
         tz_info = _TIMEZONE_MAP.get(languages[0], ("Asia/Shanghai", 480))
 
         # 根据平台调整
-        pixel_ratio = rng.choice([1.0, 1.25, 1.5, 2.0]) if "Mac" in platform_str else rng.choice([1.0, 1.25, 1.5])
+        pixel_ratio = (
+            rng.choice([1.0, 1.25, 1.5, 2.0])
+            if "Mac" in platform_str
+            else rng.choice([1.0, 1.25, 1.5])
+        )
         hw_concurrency = rng.choice([4, 8, 12, 16])
         dev_memory = rng.choice([4, 8, 16])
-        touch_points = 0 if "Win" in platform_str or "Mac" in platform_str else rng.choice([0, 1, 5])
+        touch_points = (
+            0 if "Win" in platform_str or "Mac" in platform_str else rng.choice([0, 1, 5])
+        )
 
         return BrowserFingerprint(
             session_id=hashlib.md5(seed_str.encode()).hexdigest()[:12],

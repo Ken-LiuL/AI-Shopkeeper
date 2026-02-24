@@ -1,6 +1,6 @@
 """Prometheus metrics for AI Store Manager."""
 
-from prometheus_client import Counter, Histogram, Gauge
+from prometheus_client import Counter, Gauge, Histogram
 
 # ── LLM 指标 ────────────────────────────────────────────────────────────────
 
@@ -93,6 +93,7 @@ db_query_duration = Histogram(
 
 
 # ── Helper functions ────────────────────────────────────────────────────────
+
 
 def record_agent_execution(agent_type: str, duration: float, success: bool = True) -> None:
     """记录 Agent 执行指标"""

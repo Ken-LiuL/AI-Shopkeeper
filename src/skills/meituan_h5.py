@@ -12,20 +12,19 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import random
 import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
 from urllib.parse import quote
 
-from src.skills.actionbook import CompetitorProduct, CompetitorStore, _ActionBookCLI
-from src.anti_detect.fingerprint import FingerprintManager
-from src.anti_detect.behavior import BehaviorSimulator, BehaviorConfig
+from src.anti_detect.behavior import BehaviorSimulator
 from src.anti_detect.captcha import CaptchaHandler
+from src.anti_detect.fingerprint import FingerprintManager
 from src.anti_detect.scheduler import SmartScheduler
+from src.skills.actionbook import CompetitorProduct, _ActionBookCLI
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +37,13 @@ DEFAULT_LOCATION = (114.43, 30.51)  # (lng, lat)
 
 # ── URL 模板 ─────────────────────────────────────────────────────────────────
 _SEARCH_URL = (
-    "https://h5.waimai.meituan.com/waimai/mindex/search/list"
-    "?query={keyword}&lat={lat}&lng={lng}"
+    "https://h5.waimai.meituan.com/waimai/mindex/search/list?query={keyword}&lat={lat}&lng={lng}"
 )
 _STORE_URL = (
-    "https://h5.waimai.meituan.com/waimai/mindex/menu"
-    "?dpShopId={store_id}&lat={lat}&lng={lng}"
+    "https://h5.waimai.meituan.com/waimai/mindex/menu?dpShopId={store_id}&lat={lat}&lng={lng}"
 )
 _CATEGORY_URL = (
-    "https://h5.waimai.meituan.com/waimai/mindex/category"
-    "?category={category}&lat={lat}&lng={lng}"
+    "https://h5.waimai.meituan.com/waimai/mindex/category?category={category}&lat={lat}&lng={lng}"
 )
 
 # ── XHR 拦截器 JS ────────────────────────────────────────────────────────────
@@ -104,7 +100,7 @@ _JS_GET_CAPTURED = """(() => {
 })()"""
 
 # ── 页面文本提取 JS（降级方案）────────────────────────────────────────────────
-_JS_EXTRACT_SEARCH_RESULTS = """(() => {
+_JS_EXTRACT_SEARCH_RESULTS = r"""(() => {
     const items = [];
     // 美团 H5 搜索结果通常在列表容器中
     const selectors = [
@@ -236,12 +232,12 @@ class MeituanH5Scraper:
 
     def __init__(
         self,
-        cli: Optional[_ActionBookCLI] = None,
-        default_location: Tuple[float, float] = DEFAULT_LOCATION,
-        fingerprint_mgr: Optional[FingerprintManager] = None,
-        behavior_sim: Optional[BehaviorSimulator] = None,
-        captcha_handler: Optional[CaptchaHandler] = None,
-        scheduler: Optional[SmartScheduler] = None,
+        cli: _ActionBookCLI | None = None,
+        default_location: tuple[float, float] = DEFAULT_LOCATION,
+        fingerprint_mgr: FingerprintManager | None = None,
+        behavior_sim: BehaviorSimulator | None = None,
+        captcha_handler: CaptchaHandler | None = None,
+        scheduler: SmartScheduler | None = None,
     ):
         self._cli = cli or _ActionBookCLI(use_extension=True, timeout=30)
         self._default_location = default_location
@@ -276,20 +272,20 @@ class MeituanH5Scraper:
             return True  # 无验证码
         return result.success
 
-    def _build_search_url(self, keyword: str, location: Optional[Tuple[float, float]] = None) -> str:
+    def _build_search_url(self, keyword: str, location: tuple[float, float] | None = None) -> str:
         lng, lat = location or self._default_location
         return _SEARCH_URL.format(keyword=quote(keyword), lat=lat, lng=lng)
 
-    def _build_store_url(self, store_id: str, location: Optional[Tuple[float, float]] = None) -> str:
+    def _build_store_url(self, store_id: str, location: tuple[float, float] | None = None) -> str:
         lng, lat = location or self._default_location
         return _STORE_URL.format(store_id=store_id, lat=lat, lng=lng)
 
     async def search_products(
         self,
         keyword: str,
-        location: Optional[Tuple[float, float]] = None,
+        location: tuple[float, float] | None = None,
         limit: int = 20,
-    ) -> List[CompetitorProduct]:
+    ) -> list[CompetitorProduct]:
         """搜索美团 H5 页面的商品/店铺。
 
         Args:
@@ -348,16 +344,16 @@ class MeituanH5Scraper:
 
         except Exception as e:
             logger.error(f"H5 search '{keyword}' failed: {e}")
-            self._scheduler.report_failure("meituan", is_anti_crawl="403" in str(e) or "验证" in str(e))
+            self._scheduler.report_failure(
+                "meituan", is_anti_crawl="403" in str(e) or "验证" in str(e)
+            )
             return []
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await self._cli.browser_close()
-            except Exception:
-                pass
             await self._smart_delay()
 
-    async def _extract_from_xhr(self, limit: int) -> List[CompetitorProduct]:
+    async def _extract_from_xhr(self, limit: int) -> list[CompetitorProduct]:
         """从拦截的 XHR 响应中提取数据。"""
         try:
             raw = await self._cli.browser_eval(_JS_GET_CAPTURED)
@@ -382,9 +378,9 @@ class MeituanH5Scraper:
                     # 店铺级别的数据
                     store_name = poi.get("name", "")
                     store_id = str(poi.get("poiId", poi.get("dpShopId", "")))
-                    rating = float(poi.get("wmPoiScore", poi.get("wm_poi_score", 0)) or 0)
+                    float(poi.get("wmPoiScore", poi.get("wm_poi_score", 0)) or 0)
                     distance_text = poi.get("distance", "0")
-                    distance = self._parse_distance(distance_text)
+                    self._parse_distance(distance_text)
                     monthly_sales = self._parse_monthly_sales(
                         poi.get("monthSaleTip", poi.get("month_sale_tip", ""))
                     )
@@ -395,32 +391,49 @@ class MeituanH5Scraper:
                         for spu in spus:
                             if isinstance(spu, dict):
                                 for food in spu.get("spus", [spu]):
-                                    products.append(CompetitorProduct(
-                                        product_id=str(food.get("spuId", food.get("id", store_id))),
-                                        name=food.get("name", food.get("spuName", store_name)),
-                                        price=float(food.get("price", food.get("currentPrice", 0)) or 0) / 100
+                                    products.append(
+                                        CompetitorProduct(
+                                            product_id=str(
+                                                food.get("spuId", food.get("id", store_id))
+                                            ),
+                                            name=food.get("name", food.get("spuName", store_name)),
+                                            price=float(
+                                                food.get("price", food.get("currentPrice", 0)) or 0
+                                            )
+                                            / 100
                                             if food.get("price", 0) > 1000
-                                            else float(food.get("price", food.get("currentPrice", 0)) or 0),
-                                        monthly_sales=int(food.get("monthSale", food.get("month_sale", monthly_sales)) or 0),
-                                        store_name=store_name,
-                                    ))
+                                            else float(
+                                                food.get("price", food.get("currentPrice", 0)) or 0
+                                            ),
+                                            monthly_sales=int(
+                                                food.get(
+                                                    "monthSale",
+                                                    food.get("month_sale", monthly_sales),
+                                                )
+                                                or 0
+                                            ),
+                                            store_name=store_name,
+                                        )
+                                    )
 
                     # 如果没有商品细节，至少记录店铺
                     if not spus:
-                        products.append(CompetitorProduct(
-                            product_id=store_id,
-                            name=store_name,
-                            price=0.0,
-                            monthly_sales=monthly_sales,
-                            store_name=store_name,
-                        ))
+                        products.append(
+                            CompetitorProduct(
+                                product_id=store_id,
+                                name=store_name,
+                                price=0.0,
+                                monthly_sales=monthly_sales,
+                                store_name=store_name,
+                            )
+                        )
 
             return products[:limit]
         except Exception as e:
             logger.debug(f"XHR extraction failed: {e}")
             return []
 
-    async def _extract_from_dom(self, limit: int) -> List[CompetitorProduct]:
+    async def _extract_from_dom(self, limit: int) -> list[CompetitorProduct]:
         """从 DOM 提取搜索结果。"""
         try:
             raw = await self._cli.browser_eval(_JS_EXTRACT_SEARCH_RESULTS)
@@ -432,19 +445,21 @@ class MeituanH5Scraper:
 
             products = []
             for item in items[:limit]:
-                products.append(CompetitorProduct(
-                    product_id=item.get("storeId", ""),
-                    name=item.get("name", ""),
-                    price=float(item.get("price", 0)),
-                    monthly_sales=int(item.get("sales", 0)),
-                    store_name=item.get("storeName", item.get("name", "")),
-                ))
+                products.append(
+                    CompetitorProduct(
+                        product_id=item.get("storeId", ""),
+                        name=item.get("name", ""),
+                        price=float(item.get("price", 0)),
+                        monthly_sales=int(item.get("sales", 0)),
+                        store_name=item.get("storeName", item.get("name", "")),
+                    )
+                )
             return products
         except Exception as e:
             logger.debug(f"DOM extraction failed: {e}")
             return []
 
-    async def _extract_from_text(self, keyword: str, limit: int) -> List[CompetitorProduct]:
+    async def _extract_from_text(self, keyword: str, limit: int) -> list[CompetitorProduct]:
         """从页面纯文本中解析数据（最后手段）。"""
         try:
             text = await self._cli.browser_text()
@@ -462,16 +477,18 @@ class MeituanH5Scraper:
 
                 sales_match = re.search(r"月售\s*(\d+)", line)
                 price_match = re.search(r"[¥￥]\s*(\d+\.?\d*)", line)
-                rating_match = re.search(r"(\d\.\d)\s*分?", line)
+                re.search(r"(\d\.\d)\s*分?", line)
 
                 if sales_match and current_store:
-                    products.append(CompetitorProduct(
-                        product_id="",
-                        name=current_store,
-                        price=float(price_match.group(1)) if price_match else 0.0,
-                        monthly_sales=int(sales_match.group(1)),
-                        store_name=current_store,
-                    ))
+                    products.append(
+                        CompetitorProduct(
+                            product_id="",
+                            name=current_store,
+                            price=float(price_match.group(1)) if price_match else 0.0,
+                            monthly_sales=int(sales_match.group(1)),
+                            store_name=current_store,
+                        )
+                    )
                     current_store = ""
                 elif len(line) > 4 and not sales_match and not price_match:
                     # 可能是店名/商品名
@@ -486,8 +503,8 @@ class MeituanH5Scraper:
     async def get_store_products(
         self,
         store_id: str,
-        location: Optional[Tuple[float, float]] = None,
-    ) -> List[CompetitorProduct]:
+        location: tuple[float, float] | None = None,
+    ) -> list[CompetitorProduct]:
         """获取指定店铺的商品列表。
 
         Args:
@@ -515,13 +532,15 @@ class MeituanH5Scraper:
                 items = json.loads(raw)
                 products = []
                 for item in items:
-                    products.append(CompetitorProduct(
-                        product_id=store_id,
-                        name=item.get("name", ""),
-                        price=float(item.get("price", 0)),
-                        monthly_sales=int(item.get("sales", 0)),
-                        store_name="",
-                    ))
+                    products.append(
+                        CompetitorProduct(
+                            product_id=store_id,
+                            name=item.get("name", ""),
+                            price=float(item.get("price", 0)),
+                            monthly_sales=int(item.get("sales", 0)),
+                            store_name="",
+                        )
+                    )
                 if products:
                     logger.info(f"Store {store_id}: got {len(products)} products")
                     return products
@@ -534,18 +553,16 @@ class MeituanH5Scraper:
             self._scheduler.report_failure("meituan", is_anti_crawl="403" in str(e))
             return []
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await self._cli.browser_close()
-            except Exception:
-                pass
             await self._smart_delay()
 
     async def get_category_ranking(
         self,
         category: str,
-        location: Optional[Tuple[float, float]] = None,
+        location: tuple[float, float] | None = None,
         limit: int = 20,
-    ) -> List[dict]:
+    ) -> list[dict]:
         """获取品类页热门排行。
 
         Args:
@@ -561,13 +578,15 @@ class MeituanH5Scraper:
             products = await self.search_products(category, location, limit)
             ranking = []
             for i, p in enumerate(products):
-                ranking.append({
-                    "rank": i + 1,
-                    "name": p.name,
-                    "price": p.price,
-                    "monthly_sales": p.monthly_sales,
-                    "store_name": p.store_name,
-                })
+                ranking.append(
+                    {
+                        "rank": i + 1,
+                        "name": p.name,
+                        "price": p.price,
+                        "monthly_sales": p.monthly_sales,
+                        "store_name": p.store_name,
+                    }
+                )
             return ranking
         except Exception as e:
             logger.error(f"Category ranking '{category}' failed: {e}")
@@ -576,7 +595,7 @@ class MeituanH5Scraper:
     async def search_hot_keywords(
         self,
         category: str = "",
-    ) -> List[str]:
+    ) -> list[str]:
         """获取搜索框热搜词/联想词。
 
         Args:
@@ -597,10 +616,8 @@ class MeituanH5Scraper:
             raw = await self._cli.browser_eval(_JS_EXTRACT_HOT_KEYWORDS)
             keywords = []
             if raw:
-                try:
+                with contextlib.suppress(json.JSONDecodeError):
                     keywords = json.loads(raw)
-                except json.JSONDecodeError:
-                    pass
 
             # 如果有 category 过滤，输入触发联想词
             if category and not keywords:
@@ -644,10 +661,8 @@ class MeituanH5Scraper:
             logger.error(f"Hot keywords failed: {e}")
             return []
         finally:
-            try:
+            with contextlib.suppress(Exception):
                 await self._cli.browser_close()
-            except Exception:
-                pass
             await _random_delay(2.0, 4.0)
 
     async def cleanup(self):
@@ -659,7 +674,7 @@ class MeituanH5Scraper:
     @staticmethod
     def _parse_distance(text) -> float:
         """解析距离文本，返回 km。"""
-        if isinstance(text, (int, float)):
+        if isinstance(text, int | float):
             return float(text)
         text = str(text)
         m = re.search(r"([\d.]+)\s*(km|m|米|公里)?", text, re.IGNORECASE)
@@ -674,7 +689,7 @@ class MeituanH5Scraper:
     @staticmethod
     def _parse_monthly_sales(text) -> int:
         """解析月销文本，如 '月售1234'。"""
-        if isinstance(text, (int, float)):
+        if isinstance(text, int | float):
             return int(text)
         text = str(text)
         m = re.search(r"(\d+)", text)

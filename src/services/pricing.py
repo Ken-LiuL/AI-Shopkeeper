@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
-import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 
 from src.db import postgres as pg
@@ -120,21 +117,23 @@ class PricingService:
                 cost = analysis.cost_price
                 proj_margin = (suggested - cost) / suggested if suggested > 0 else 0
 
-                suggestions.append(PricingSuggestion(
-                    product_id=analysis.product_id,
-                    product_name=analysis.product_name,
-                    current_price=analysis.current_price,
-                    suggested_price=round(suggested, 2),
-                    reason=reason,
-                    current_margin=round(analysis.gross_margin, 4),
-                    projected_margin=round(proj_margin, 4),
-                    competitor_ref={
-                        "avg": analysis.competitor_avg,
-                        "min": analysis.competitor_min,
-                        "max": analysis.competitor_max,
-                        "count": analysis.competitor_count,
-                    },
-                ))
+                suggestions.append(
+                    PricingSuggestion(
+                        product_id=analysis.product_id,
+                        product_name=analysis.product_name,
+                        current_price=analysis.current_price,
+                        suggested_price=round(suggested, 2),
+                        reason=reason,
+                        current_margin=round(analysis.gross_margin, 4),
+                        projected_margin=round(proj_margin, 4),
+                        competitor_ref={
+                            "avg": analysis.competitor_avg,
+                            "min": analysis.competitor_min,
+                            "max": analysis.competitor_max,
+                            "count": analysis.competitor_count,
+                        },
+                    )
+                )
             except Exception as e:
                 logger.warning(f"Pricing analysis failed for {p['product_id']}: {e}")
 
@@ -157,19 +156,25 @@ class PricingService:
 
             await pool.execute(
                 "UPDATE products SET retail_price = $1 WHERE product_id = $2",
-                new_price, pid,
+                new_price,
+                pid,
             )
             await pool.execute(
                 """INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
                    VALUES ($1, $2, $3, $4, NOW())""",
-                pid, old_price, new_price, reason,
+                pid,
+                old_price,
+                new_price,
+                reason,
             )
-            results.append({
-                "product_id": pid,
-                "old_price": old_price,
-                "new_price": new_price,
-                "status": "applied",
-            })
+            results.append(
+                {
+                    "product_id": pid,
+                    "old_price": old_price,
+                    "new_price": new_price,
+                    "status": "applied",
+                }
+            )
 
         return results
 
@@ -181,12 +186,18 @@ class PricingService:
             target = a.competitor_avg * 0.98
             floor = a.cost_price / (1 - self.MARGIN_FLOOR) if a.cost_price > 0 else target
             suggested = max(target, floor)
-            return suggested, f"价格高于竞品均价{((a.current_price / a.competitor_avg - 1) * 100):.0f}%，建议降价"
+            return (
+                suggested,
+                f"价格高于竞品均价{((a.current_price / a.competitor_avg - 1) * 100):.0f}%，建议降价",
+            )
 
         elif a.recommendation == "raise":
             # 提价到至少20%毛利
             target = a.cost_price / (1 - self.MARGIN_FLOOR)
-            return target, f"当前毛利率{a.gross_margin:.0%}低于{self.MARGIN_FLOOR:.0%}下限，建议涨价"
+            return (
+                target,
+                f"当前毛利率{a.gross_margin:.0%}低于{self.MARGIN_FLOOR:.0%}下限，建议涨价",
+            )
 
         elif a.recommendation == "promote":
             # 促销价降5-10%
@@ -219,21 +230,27 @@ class PricingService:
 
     async def _sales_trend(self, pool, product_id: str) -> float:
         """近期vs前期销量变化率"""
-        recent = await pool.fetchval(
-            """SELECT COALESCE(SUM(oi.quantity), 0)
+        recent = (
+            await pool.fetchval(
+                """SELECT COALESCE(SUM(oi.quantity), 0)
                FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
                WHERE oi.product_id = $1 AND o.order_time >= CURRENT_DATE - INTERVAL '7 days'""",
-            product_id,
-        ) or 0
+                product_id,
+            )
+            or 0
+        )
 
-        prev = await pool.fetchval(
-            """SELECT COALESCE(SUM(oi.quantity), 0)
+        prev = (
+            await pool.fetchval(
+                """SELECT COALESCE(SUM(oi.quantity), 0)
                FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
                WHERE oi.product_id = $1
                  AND o.order_time >= CURRENT_DATE - INTERVAL '14 days'
                  AND o.order_time < CURRENT_DATE - INTERVAL '7 days'""",
-            product_id,
-        ) or 0
+                product_id,
+            )
+            or 0
+        )
 
         if prev == 0:
             return 0.0

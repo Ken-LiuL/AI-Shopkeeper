@@ -8,7 +8,6 @@ import random
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class DomainState:
     """每个域名的调度状态。"""
+
     request_count: int = 0
     daily_count: int = 0
     last_request: float = 0
@@ -39,8 +39,8 @@ class SmartScheduler:
     def __init__(
         self,
         active_hours: tuple = (8, 23),
-        max_requests_per_hour: Optional[Dict[str, int]] = None,
-        max_daily_requests: Optional[Dict[str, int]] = None,
+        max_requests_per_hour: dict[str, int] | None = None,
+        max_daily_requests: dict[str, int] | None = None,
         failure_backoff_multiplier: float = 2.0,
         base_interval: float = 5.0,
     ):
@@ -58,7 +58,7 @@ class SmartScheduler:
         self.failure_backoff_multiplier = failure_backoff_multiplier
         self.base_interval = base_interval
 
-        self._states: Dict[str, DomainState] = defaultdict(DomainState)
+        self._states: dict[str, DomainState] = defaultdict(DomainState)
 
     def _resolve_domain(self, domain: str) -> str:
         """将域名映射到限速 key。"""
@@ -95,7 +95,8 @@ class SmartScheduler:
             return False
 
         # 检查时段（凌晨降频但不完全停止）
-        from datetime import datetime, timezone, timedelta
+        from datetime import datetime, timedelta, timezone
+
         cst = timezone(timedelta(hours=8))
         hour = datetime.now(cst).hour
         lo, hi = self.active_hours
@@ -156,13 +157,15 @@ class SmartScheduler:
         if is_anti_crawl:
             # 反爬响应：指数退避
             backoff = min(
-                self.base_interval * (self.failure_backoff_multiplier ** state.failure_count),
+                self.base_interval * (self.failure_backoff_multiplier**state.failure_count),
                 600,  # 最大退避 10 分钟
             )
             # 随机化
             backoff *= random.uniform(0.8, 1.2)
             state.backoff_until = time.time() + backoff
-            logger.warning(f"Anti-crawl detected for {key}, backing off {backoff:.0f}s (failures: {state.failure_count})")
+            logger.warning(
+                f"Anti-crawl detected for {key}, backing off {backoff:.0f}s (failures: {state.failure_count})"
+            )
         else:
             # 普通失败：轻微退避
             backoff = self.base_interval * random.uniform(1, 2)
@@ -194,7 +197,7 @@ class SmartScheduler:
         return elapsed >= min_interval * 0.7
 
     @property
-    def stats(self) -> Dict[str, dict]:
+    def stats(self) -> dict[str, dict]:
         now = time.time()
         return {
             key: {

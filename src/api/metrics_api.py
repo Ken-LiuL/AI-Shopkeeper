@@ -68,13 +68,15 @@ async def llm_metrics(
         days,
     )
 
-    return APIResponse(data={
-        "period_days": days,
-        "total_input_tokens": totals["total_input_tokens"],
-        "total_output_tokens": totals["total_output_tokens"],
-        "total_cost_usd": float(totals["total_cost_usd"]),
-        "total_requests": totals["total_requests"],
-        "by_model": [dict(r) for r in by_model],
-        "by_agent": [dict(r) for r in by_agent],
-        "daily_trend": [dict(r) for r in daily],
-    })
+    return APIResponse(
+        data={
+            "period_days": days,
+            "total_input_tokens": totals["total_input_tokens"],
+            "total_output_tokens": totals["total_output_tokens"],
+            "total_cost_usd": float(totals["total_cost_usd"]),
+            "total_requests": totals["total_requests"],
+            "by_model": [dict(r) for r in by_model],
+            "by_agent": [dict(r) for r in by_agent],
+            "daily_trend": [dict(r) for r in daily],
+        }
+    )

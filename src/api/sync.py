@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks
 
@@ -21,7 +20,8 @@ async def sync_history(
 ) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
-        """SELECT * FROM sync_history ORDER BY started_at DESC LIMIT $1""", limit,
+        """SELECT * FROM sync_history ORDER BY started_at DESC LIMIT $1""",
+        limit,
     )
     return APIResponse(data=[dict(r) for r in rows])
 
@@ -30,10 +30,12 @@ async def sync_history(
 async def single_syncer_status(syncer_name: str) -> APIResponse[dict]:
     pool = pg.get_pool()
     row = await pool.fetchrow(
-        "SELECT * FROM sync_state WHERE syncer_name = $1", syncer_name,
+        "SELECT * FROM sync_state WHERE syncer_name = $1",
+        syncer_name,
     )
     if not row:
         from .errors import NotFoundError
+
         raise NotFoundError("Syncer", syncer_name)
     return APIResponse(data=dict(row))
 
@@ -50,15 +52,18 @@ async def trigger_single_syncer(syncer_name: str, bg: BackgroundTasks) -> APIRes
     }
     if syncer_name not in syncer_map:
         from .errors import NotFoundError
+
         raise NotFoundError("Syncer", syncer_name)
 
     async def _run() -> None:
         try:
             module_path, class_name = syncer_map[syncer_name].rsplit(":", 1)
             import importlib
+
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
             from src.sync.qnh_client import QNHClient
+
             syncer = cls(QNHClient())
             await syncer.sync_full()
         except Exception:
@@ -84,13 +89,13 @@ async def sync_status() -> APIResponse[list[dict]]:
 async def _trigger_sync_all() -> None:
     """Run all syncers once in background."""
     try:
-        from src.sync.products import ProductSyncer
-        from src.sync.orders import OrderSyncer
         from src.sync.inventory import InventorySyncer
         from src.sync.metrics import MetricsSyncer
-        from src.sync.traffic import TrafficSyncer
-        from src.sync.reviews import ReviewSyncer
+        from src.sync.orders import OrderSyncer
+        from src.sync.products import ProductSyncer
         from src.sync.qnh_client import QNHClient
+        from src.sync.reviews import ReviewSyncer
+        from src.sync.traffic import TrafficSyncer
 
         client = QNHClient()
         syncers = [

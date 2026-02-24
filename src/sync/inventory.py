@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from datetime import datetime, timedelta
 from typing import Any
 
-from .base import BaseSyncer, SyncMode, SyncResult, CST
+from .base import CST, BaseSyncer, SyncMode, SyncResult
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,18 @@ class InventorySyncer(BaseSyncer):
                 page += 1
 
             return SyncResult(
-                syncer_name=self.name, mode=SyncMode.FULL,
-                success=True, records_synced=total,
+                syncer_name=self.name,
+                mode=SyncMode.FULL,
+                success=True,
+                records_synced=total,
             )
         except Exception as e:
             return SyncResult(
-                syncer_name=self.name, mode=SyncMode.FULL,
-                success=False, records_synced=total, error=str(e),
+                syncer_name=self.name,
+                mode=SyncMode.FULL,
+                success=False,
+                records_synced=total,
+                error=str(e),
             )
 
     async def incremental_sync(self, since: datetime) -> SyncResult:
@@ -112,14 +118,19 @@ class InventorySyncer(BaseSyncer):
                     total += len(items)
 
             return SyncResult(
-                syncer_name=self.name, mode=SyncMode.INCREMENTAL,
-                success=True, records_synced=total,
+                syncer_name=self.name,
+                mode=SyncMode.INCREMENTAL,
+                success=True,
+                records_synced=total,
                 details={"affected_skus": len(affected_skus)},
             )
         except Exception as e:
             return SyncResult(
-                syncer_name=self.name, mode=SyncMode.INCREMENTAL,
-                success=False, records_synced=total, error=str(e),
+                syncer_name=self.name,
+                mode=SyncMode.INCREMENTAL,
+                success=False,
+                records_synced=total,
+                error=str(e),
             )
 
     async def _upsert_inventory(self, items: list[dict[str, Any]]) -> None:
@@ -136,10 +147,8 @@ class InventorySyncer(BaseSyncer):
             cost_price = item.get("costPrice")
             stock_value = None
             if current_stock and cost_price:
-                try:
+                with contextlib.suppress(ValueError, TypeError):
                     stock_value = float(current_stock) * float(cost_price)
-                except (ValueError, TypeError):
-                    pass
 
             await self.pool.execute(
                 """

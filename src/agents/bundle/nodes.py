@@ -13,13 +13,16 @@ from .state import BundleState
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_FP_CONFIG = json.dumps({
-    "min_support": 0.01,
-    "min_confidence": 0.30,
-    "min_lift": 1.5,
-    "max_itemset_size": 4,
-    "min_order_count": 30,
-}, ensure_ascii=False)
+DEFAULT_FP_CONFIG = json.dumps(
+    {
+        "min_support": 0.01,
+        "min_confidence": 0.30,
+        "min_lift": 1.5,
+        "max_itemset_size": 4,
+        "min_order_count": 30,
+    },
+    ensure_ascii=False,
+)
 
 
 async def order_mining_node(state: BundleState) -> dict:

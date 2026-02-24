@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from src.skills.meituan_h5 import MeituanH5Scraper, DEFAULT_LOCATION
+import pytest
+
+from src.skills.meituan_h5 import MeituanH5Scraper
 
 
 @pytest.fixture
@@ -23,6 +24,7 @@ def mock_cli():
 @pytest.fixture
 def scraper(mock_cli):
     from unittest.mock import MagicMock
+
     fp_mgr = MagicMock()
     fp = MagicMock()
     fp.generate_inject_js = MagicMock(return_value="")
@@ -48,15 +50,19 @@ def scraper(mock_cli):
 # Disable all delays in tests
 @pytest.fixture(autouse=True)
 def no_delay():
-    with patch("src.skills.meituan_h5._random_delay", new_callable=AsyncMock), \
-         patch("src.skills.meituan_h5.asyncio.sleep", new_callable=AsyncMock):
+    with (
+        patch("src.skills.meituan_h5._random_delay", new_callable=AsyncMock),
+        patch("src.skills.meituan_h5.asyncio.sleep", new_callable=AsyncMock),
+    ):
         yield
 
 
 # ── search_products ──────────────────────────────────────────────────────────
 
+
 def _make_eval_fn(captured_data=None, dom_data=None):
     """Create a browser_eval mock that returns data based on JS content."""
+
     async def eval_fn(js_code, *args, **kwargs):
         js = str(js_code)
         if "__mt_captured" in js and "JSON.stringify" in js:
@@ -68,6 +74,7 @@ def _make_eval_fn(captured_data=None, dom_data=None):
         if "hot-word" in js or "HotWord" in js:
             return json.dumps([])
         return ""
+
     return eval_fn
 
 
@@ -158,13 +165,12 @@ class TestSearchProducts:
 
 # ── get_store_products ───────────────────────────────────────────────────────
 
+
 class TestGetStoreProducts:
     @pytest.mark.asyncio
     async def test_success(self, scraper, mock_cli):
         items = [{"name": "产品A", "price": 99, "sales": 30}]
-        mock_cli.browser_eval = AsyncMock(
-            side_effect=_make_eval_fn(dom_data=items)
-        )
+        mock_cli.browser_eval = AsyncMock(side_effect=_make_eval_fn(dom_data=items))
 
         products = await scraper.get_store_products("12345")
         assert len(products) == 1
@@ -185,13 +191,17 @@ class TestGetStoreProducts:
 
 # ── get_category_ranking ─────────────────────────────────────────────────────
 
+
 class TestGetCategoryRanking:
     @pytest.mark.asyncio
     async def test_delegates_to_search(self, scraper):
         with patch.object(scraper, "search_products", new_callable=AsyncMock) as mock_search:
             from src.skills.actionbook import CompetitorProduct
+
             mock_search.return_value = [
-                CompetitorProduct(product_id="1", name="A", price=10, monthly_sales=100, store_name="S"),
+                CompetitorProduct(
+                    product_id="1", name="A", price=10, monthly_sales=100, store_name="S"
+                ),
             ]
             ranking = await scraper.get_category_ranking("医疗器械")
             assert len(ranking) == 1
@@ -207,14 +217,17 @@ class TestGetCategoryRanking:
 
 # ── search_hot_keywords ──────────────────────────────────────────────────────
 
+
 class TestSearchHotKeywords:
     @pytest.mark.asyncio
     async def test_success(self, scraper, mock_cli):
         hot_words = ["血压计", "口罩", "体温计"]
+
         async def eval_fn(js, *a, **kw):
             if "hot-word" in str(js) or "HotWord" in str(js):
                 return json.dumps(hot_words)
             return ""
+
         mock_cli.browser_eval = AsyncMock(side_effect=eval_fn)
         keywords = await scraper.search_hot_keywords()
         assert keywords == hot_words
@@ -233,6 +246,7 @@ class TestSearchHotKeywords:
 
 
 # ── Static helpers ───────────────────────────────────────────────────────────
+
 
 class TestParseDistance:
     def test_km(self):

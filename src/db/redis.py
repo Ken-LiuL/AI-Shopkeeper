@@ -22,6 +22,7 @@ async def init_redis() -> aioredis.Redis:
         return _redis
 
     import os
+
     redis_url = os.environ.get("REDIS_URL")
     if not redis_url:
         cfg = get_settings().system.database["redis"]
@@ -57,6 +58,7 @@ async def close_redis() -> None:
 # ---------------------------------------------------------------------------
 # Convenience helpers
 # ---------------------------------------------------------------------------
+
 
 async def get_json(key: str) -> Any | None:
     """Get a key and parse it as JSON."""

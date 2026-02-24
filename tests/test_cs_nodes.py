@@ -4,26 +4,24 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from src.agents.customer_service.nodes import (
-    intent_recognition_node,
-    route_node,
-    get_route,
     faq_reply_node,
-    hybrid_search_node,
-    reranker_node,
+    get_route,
     graphrag_node,
-    reply_generation_node,
     human_transfer_node,
+    hybrid_search_node,
+    intent_recognition_node,
+    reply_generation_node,
+    reranker_node,
+    route_node,
 )
 from src.agents.customer_service.state import CustomerServiceState
 from src.agents.prompts.customer_service import HUMAN_TRANSFER_KEYWORDS
 
-
 # ---------------------------------------------------------------------------
 # Intent Recognition Tests
 # ---------------------------------------------------------------------------
+
 
 class TestIntentRecognitionNode:
     """Tests for intent_recognition_node."""
@@ -34,10 +32,14 @@ class TestIntentRecognitionNode:
             "user_message": "有没有适合老人用的血压计？",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_product_inquiry):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_product_inquiry,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "product_inquiry"
         assert result["intent"]["confidence"] > 0.9
 
@@ -50,15 +52,19 @@ class TestIntentRecognitionNode:
             "sentiment": "neutral",
             "requires_human": False,
         }
-        
+
         state: CustomerServiceState = {
             "user_message": "血压计怎么用？",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=mock_intent):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_intent,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "usage_question"
 
     async def test_recommendation_intent(self):
@@ -70,15 +76,19 @@ class TestIntentRecognitionNode:
             "sentiment": "neutral",
             "requires_human": False,
         }
-        
+
         state: CustomerServiceState = {
             "user_message": "推荐一款适合老人的血压计",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=mock_intent):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_intent,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "recommendation"
 
     async def test_logistics_intent(self):
@@ -90,15 +100,19 @@ class TestIntentRecognitionNode:
             "sentiment": "neutral",
             "requires_human": False,
         }
-        
+
         state: CustomerServiceState = {
             "user_message": "多久能送到？",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=mock_intent):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_intent,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "logistics"
 
     async def test_after_sales_intent(self):
@@ -111,15 +125,19 @@ class TestIntentRecognitionNode:
             "requires_human": True,
             "human_reason": "售后问题需人工处理",
         }
-        
+
         state: CustomerServiceState = {
             "user_message": "体温计坏了要退货",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=mock_intent):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_intent,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "after_sales"
         assert result["intent"]["requires_human"] is True
 
@@ -129,10 +147,14 @@ class TestIntentRecognitionNode:
             "user_message": "你们店太差了！骗子！",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_complaint):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_complaint,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "complaint"
         assert result["intent"]["requires_human"] is True
 
@@ -142,10 +164,14 @@ class TestIntentRecognitionNode:
             "user_message": "你好",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_greeting):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_greeting,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["intent"] == "greeting"
 
     async def test_low_confidence_fallback(self):
@@ -158,15 +184,19 @@ class TestIntentRecognitionNode:
             "requires_human": True,
             "human_reason": "无法确定意图",
         }
-        
+
         state: CustomerServiceState = {
             "user_message": "嗯嗯",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=mock_intent):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=mock_intent,
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["requires_human"] is True
 
     async def test_error_fallback(self):
@@ -175,10 +205,14 @@ class TestIntentRecognitionNode:
             "user_message": "test",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, side_effect=RuntimeError("API error")):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("API error"),
+        ):
             result = await intent_recognition_node(state)
-        
+
         assert result["intent"]["requires_human"] is True
         assert result["intent"]["confidence"] == 0
         assert "errors" in result
@@ -189,10 +223,14 @@ class TestIntentRecognitionNode:
             "user_message": "血压计多少钱",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_product_inquiry):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_product_inquiry,
+        ):
             result = await intent_recognition_node(state)
-        
+
         entities = result["intent"]["extracted_entities"]
         assert "product_mentioned" in entities
 
@@ -202,10 +240,14 @@ class TestIntentRecognitionNode:
             "user_message": "有没有适合老人用的血压计",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_product_inquiry):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_product_inquiry,
+        ):
             result = await intent_recognition_node(state)
-        
+
         entities = result["intent"]["extracted_entities"]
         assert "target_population" in entities
 
@@ -213,6 +255,7 @@ class TestIntentRecognitionNode:
 # ---------------------------------------------------------------------------
 # Route Node Tests
 # ---------------------------------------------------------------------------
+
 
 class TestRouteNode:
     """Tests for route_node."""
@@ -223,7 +266,7 @@ class TestRouteNode:
             "user_message": "你好",
             "intent": {"intent": "greeting", "confidence": 0.98, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "faq"
 
@@ -233,7 +276,7 @@ class TestRouteNode:
             "user_message": "多久能到？",
             "intent": {"intent": "logistics", "confidence": 0.95, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "faq"
 
@@ -243,7 +286,7 @@ class TestRouteNode:
             "user_message": "太差了",
             "intent": {"intent": "complaint", "confidence": 0.88, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "human"
 
@@ -253,7 +296,7 @@ class TestRouteNode:
             "user_message": "退货",
             "intent": {"intent": "after_sales", "confidence": 0.85, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "human"
 
@@ -263,7 +306,7 @@ class TestRouteNode:
             "user_message": "test",
             "intent": {"intent": "product_inquiry", "confidence": 0.5, "requires_human": True},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "human"
 
@@ -274,7 +317,7 @@ class TestRouteNode:
                 "user_message": f"我要{keyword}",
                 "intent": {"intent": "product_inquiry", "confidence": 0.9, "requires_human": False},
             }
-            
+
             result = await route_node(state)
             assert result["route"] == "human", f"Keyword '{keyword}' should route to human"
 
@@ -284,7 +327,7 @@ class TestRouteNode:
             "user_message": "有血压计吗",
             "intent": {"intent": "product_inquiry", "confidence": 0.9, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "search"
 
@@ -294,7 +337,7 @@ class TestRouteNode:
             "user_message": "推荐一款",
             "intent": {"intent": "recommendation", "confidence": 0.9, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "search"
 
@@ -304,7 +347,7 @@ class TestRouteNode:
             "user_message": "test",
             "intent": {"intent": "other", "confidence": 0.6, "requires_human": False},
         }
-        
+
         result = await route_node(state)
         assert result["route"] == "search"
 
@@ -328,6 +371,7 @@ class TestGetRoute:
 # FAQ Reply Tests
 # ---------------------------------------------------------------------------
 
+
 class TestFAQReplyNode:
     """Tests for faq_reply_node."""
 
@@ -337,9 +381,9 @@ class TestFAQReplyNode:
             "user_message": "你好",
             "intent": {"intent": "greeting"},
         }
-        
+
         result = await faq_reply_node(state)
-        
+
         assert "faq_reply" in result
         assert "在的" in result["faq_reply"]
 
@@ -349,7 +393,7 @@ class TestFAQReplyNode:
             "user_message": "在吗",
             "intent": {"intent": "greeting"},
         }
-        
+
         result = await faq_reply_node(state)
         assert "faq_reply" in result
 
@@ -359,7 +403,7 @@ class TestFAQReplyNode:
             "user_message": "多久能到",
             "intent": {"intent": "logistics"},
         }
-        
+
         result = await faq_reply_node(state)
         assert "faq_reply" in result
 
@@ -369,7 +413,7 @@ class TestFAQReplyNode:
             "user_message": "发货了吗",
             "intent": {"intent": "logistics"},
         }
-        
+
         result = await faq_reply_node(state)
         assert "faq_reply" in result
 
@@ -379,7 +423,7 @@ class TestFAQReplyNode:
             "user_message": "能送到吗",
             "intent": {"intent": "logistics"},
         }
-        
+
         result = await faq_reply_node(state)
         assert "faq_reply" in result
 
@@ -389,7 +433,7 @@ class TestFAQReplyNode:
             "user_message": "随便问问",
             "intent": {"intent": "greeting"},
         }
-        
+
         result = await faq_reply_node(state)
         assert "faq_reply" in result
 
@@ -397,6 +441,7 @@ class TestFAQReplyNode:
 # ---------------------------------------------------------------------------
 # Human Transfer Tests
 # ---------------------------------------------------------------------------
+
 
 class TestHumanTransferNode:
     """Tests for human_transfer_node."""
@@ -406,9 +451,9 @@ class TestHumanTransferNode:
         state: CustomerServiceState = {
             "intent": {"human_reason": "用户投诉"},
         }
-        
+
         result = await human_transfer_node(state)
-        
+
         assert "转接人工" in result["reply"]["reply_text"]
 
     async def test_sets_requires_human_review(self):
@@ -416,9 +461,9 @@ class TestHumanTransferNode:
         state: CustomerServiceState = {
             "intent": {"human_reason": "用户投诉"},
         }
-        
+
         result = await human_transfer_node(state)
-        
+
         assert result["reply"]["requires_human_review"] is True
 
     async def test_includes_review_reason(self):
@@ -426,9 +471,9 @@ class TestHumanTransferNode:
         state: CustomerServiceState = {
             "intent": {"human_reason": "复杂售后问题"},
         }
-        
+
         result = await human_transfer_node(state)
-        
+
         assert result["reply"]["review_reason"] == "复杂售后问题"
 
     async def test_default_reason_when_missing(self):
@@ -436,9 +481,9 @@ class TestHumanTransferNode:
         state: CustomerServiceState = {
             "intent": {},
         }
-        
+
         result = await human_transfer_node(state)
-        
+
         assert result["reply"]["review_reason"] is not None
 
     async def test_high_confidence(self):
@@ -446,15 +491,16 @@ class TestHumanTransferNode:
         state: CustomerServiceState = {
             "intent": {},
         }
-        
+
         result = await human_transfer_node(state)
-        
+
         assert result["reply"]["confidence"] == 1.0
 
 
 # ---------------------------------------------------------------------------
 # Search Pipeline Tests
 # ---------------------------------------------------------------------------
+
 
 class TestHybridSearchNode:
     """Tests for hybrid_search_node."""
@@ -467,9 +513,9 @@ class TestHybridSearchNode:
                 {"product_id": "P001", "name": "血压计", "score": 0.9},
             ],
         }
-        
+
         result = await hybrid_search_node(state)
-        
+
         assert len(result["search_results"]) == 1
 
     async def test_empty_search_results(self):
@@ -477,9 +523,9 @@ class TestHybridSearchNode:
         state: CustomerServiceState = {
             "intent": {"extracted_entities": {}},
         }
-        
+
         result = await hybrid_search_node(state)
-        
+
         assert result["search_results"] == []
 
 
@@ -491,9 +537,9 @@ class TestRerankerNode:
         state: CustomerServiceState = {
             "search_results": [{"id": str(i)} for i in range(10)],
         }
-        
+
         result = await reranker_node(state)
-        
+
         assert len(result["reranked_results"]) == 5
 
     async def test_handles_less_than_5(self):
@@ -501,9 +547,9 @@ class TestRerankerNode:
         state: CustomerServiceState = {
             "search_results": [{"id": "1"}, {"id": "2"}],
         }
-        
+
         result = await reranker_node(state)
-        
+
         assert len(result["reranked_results"]) == 2
 
     async def test_empty_results(self):
@@ -511,9 +557,9 @@ class TestRerankerNode:
         state: CustomerServiceState = {
             "search_results": [],
         }
-        
+
         result = await reranker_node(state)
-        
+
         assert result["reranked_results"] == []
 
 
@@ -527,9 +573,9 @@ class TestGraphRAGNode:
                 {"product_id": "P001", "name": "血压计"},
             ],
         }
-        
+
         result = await graphrag_node(state)
-        
+
         assert len(result["enriched_results"]) == 1
 
     async def test_empty_results(self):
@@ -537,15 +583,16 @@ class TestGraphRAGNode:
         state: CustomerServiceState = {
             "reranked_results": [],
         }
-        
+
         result = await graphrag_node(state)
-        
+
         assert result["enriched_results"] == []
 
 
 # ---------------------------------------------------------------------------
 # Reply Generation Tests
 # ---------------------------------------------------------------------------
+
 
 class TestReplyGenerationNode:
     """Tests for reply_generation_node."""
@@ -556,9 +603,9 @@ class TestReplyGenerationNode:
             "user_message": "你好",
             "faq_reply": "亲，在的呢~",
         }
-        
+
         result = await reply_generation_node(state)
-        
+
         assert result["reply"]["reply_text"] == "亲，在的呢~"
         assert result["reply"]["confidence"] == 1.0
 
@@ -569,10 +616,14 @@ class TestReplyGenerationNode:
             "intent": {"intent": "product_inquiry"},
             "enriched_results": [{"product_id": "P001", "name": "血压计"}],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_reply):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_reply,
+        ):
             result = await reply_generation_node(state)
-        
+
         assert result["reply"]["confidence"] == 0.85
 
     async def test_includes_products_mentioned(self, sample_reply):
@@ -582,10 +633,14 @@ class TestReplyGenerationNode:
             "intent": {"intent": "product_inquiry"},
             "enriched_results": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_reply):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_reply,
+        ):
             result = await reply_generation_node(state)
-        
+
         assert "products_mentioned" in result["reply"]
 
     async def test_includes_upsell_suggestions(self, sample_reply):
@@ -595,10 +650,14 @@ class TestReplyGenerationNode:
             "intent": {"intent": "product_inquiry"},
             "enriched_results": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_reply):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_reply,
+        ):
             result = await reply_generation_node(state)
-        
+
         assert "upsell_suggestions" in result["reply"]
 
     async def test_error_fallback(self):
@@ -608,10 +667,14 @@ class TestReplyGenerationNode:
             "intent": {"intent": "product_inquiry"},
             "enriched_results": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, side_effect=RuntimeError("LLM error")):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            side_effect=RuntimeError("LLM error"),
+        ):
             result = await reply_generation_node(state)
-        
+
         assert result["reply"]["requires_human_review"] is True
         assert result["reply"]["confidence"] == 0
 
@@ -622,10 +685,14 @@ class TestReplyGenerationNode:
             "intent": {"intent": "product_inquiry"},
             "enriched_results": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_reply):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_reply,
+        ):
             result = await reply_generation_node(state)
-        
+
         # Reply tool schema has maxLength: 150
         assert len(result["reply"]["reply_text"]) <= 150
 
@@ -633,6 +700,7 @@ class TestReplyGenerationNode:
 # ---------------------------------------------------------------------------
 # End-to-End Flow Tests
 # ---------------------------------------------------------------------------
+
 
 class TestEndToEndFlows:
     """Tests for complete flow scenarios."""
@@ -643,21 +711,25 @@ class TestEndToEndFlows:
             "user_message": "你好",
             "conversation_history": [],
         }
-        
+
         # Intent recognition
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_greeting):
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_greeting,
+        ):
             state.update(await intent_recognition_node(state))
-        
+
         # Route
         state.update(await route_node(state))
         assert state["route"] == "faq"
-        
+
         # FAQ
         state.update(await faq_reply_node(state))
-        
+
         # Reply (uses FAQ)
         state.update(await reply_generation_node(state))
-        
+
         # Should have reply without additional LLM call
         assert "在的" in state["reply"]["reply_text"]
 
@@ -668,25 +740,27 @@ class TestEndToEndFlows:
             "conversation_history": [],
             "search_results": [{"product_id": "P001", "name": "血压计"}],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock) as mock_call:
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock
+        ) as mock_call:
             # Intent
             mock_call.return_value = sample_intent_product_inquiry
             state.update(await intent_recognition_node(state))
-            
+
             # Route
             state.update(await route_node(state))
             assert state["route"] == "search"
-            
+
             # Search pipeline
             state.update(await hybrid_search_node(state))
             state.update(await reranker_node(state))
             state.update(await graphrag_node(state))
-            
+
             # Reply
             mock_call.return_value = sample_reply
             state.update(await reply_generation_node(state))
-        
+
         assert state["reply"]["confidence"] > 0
 
     async def test_human_flow(self, sample_intent_complaint):
@@ -695,12 +769,16 @@ class TestEndToEndFlows:
             "user_message": "垃圾店铺，要投诉！",
             "conversation_history": [],
         }
-        
-        with patch("src.agents.customer_service.nodes.call_tool", new_callable=AsyncMock, return_value=sample_intent_complaint):
+
+        with patch(
+            "src.agents.customer_service.nodes.call_tool",
+            new_callable=AsyncMock,
+            return_value=sample_intent_complaint,
+        ):
             state.update(await intent_recognition_node(state))
-        
+
         state.update(await route_node(state))
         assert state["route"] == "human"
-        
+
         state.update(await human_transfer_node(state))
         assert "转接人工" in state["reply"]["reply_text"]

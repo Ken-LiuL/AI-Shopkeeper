@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 
 from src.agents.orchestrator import Orchestrator
 from src.db import redis as redis_db
@@ -33,6 +32,7 @@ def _get_session_manager() -> SessionManager:
 
 # ── Create session ────────────────────────────────────────────
 
+
 @router.post("/sessions", response_model=APIResponse[CreateSessionResponse])
 async def create_session(
     request: CreateSessionRequest | None = None,
@@ -47,6 +47,7 @@ async def create_session(
 
 
 # ── Chat ──────────────────────────────────────────────────────
+
 
 @router.post("/chat", response_model=APIResponse[ChatResponse])
 async def chat(
@@ -79,7 +80,9 @@ async def chat(
 
         # Extract reply
         reply_data = result.get("reply", {})
-        reply = reply_data.get("reply_text", "") if isinstance(reply_data, dict) else str(reply_data)
+        reply = (
+            reply_data.get("reply_text", "") if isinstance(reply_data, dict) else str(reply_data)
+        )
         intent_data = result.get("intent", {})
         intent = intent_data.get("intent") if isinstance(intent_data, dict) else None
         sources = result.get("enriched_results", result.get("sources", []))
@@ -101,6 +104,7 @@ async def chat(
 
 # ── List sessions ─────────────────────────────────────────────
 
+
 @router.get("/sessions", response_model=APIResponse[list[SessionListItem]])
 async def list_sessions(
     customer_id: str | None = Query(None),
@@ -113,6 +117,7 @@ async def list_sessions(
 
 # ── Get session messages ──────────────────────────────────────
 
+
 @router.get("/sessions/{session_id}/messages", response_model=APIResponse[SessionHistory])
 async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
     sm = _get_session_manager()
@@ -123,6 +128,7 @@ async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
 
 
 # ── Delete session ────────────────────────────────────────────
+
 
 @router.delete("/sessions/{session_id}", response_model=APIResponse[dict])
 async def delete_session(session_id: str) -> APIResponse[dict]:

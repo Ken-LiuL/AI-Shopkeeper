@@ -18,6 +18,7 @@ _ENV_VAR_PATTERN = re.compile(r"\$\{(?P<name>[^:}]+)(?::(?P<default>[^}]*))?\}")
 def _resolve_env_vars(value: Any) -> Any:
     """Recursively resolve ${VAR:default} patterns in config values."""
     if isinstance(value, str):
+
         def _replacer(match: re.Match[str]) -> str:
             env_name = match.group("name")
             default = match.group("default") or ""

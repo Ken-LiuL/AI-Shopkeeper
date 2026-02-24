@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from pydantic import BaseModel, Field
-
+from pydantic import BaseModel
 
 # ── Pydantic Models ──────────────────────────────────────────────────────────
+
 
 class Product(BaseModel):
     product_id: str
@@ -20,8 +19,9 @@ class Product(BaseModel):
     stock: int = 0
     status: str = "active"  # active/inactive/discontinued
     description: str = ""
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
 
 class ProductCreate(BaseModel):
     name: str
@@ -31,14 +31,16 @@ class ProductCreate(BaseModel):
     stock: int = 0
     description: str = ""
 
+
 class ProductUpdate(BaseModel):
-    name: Optional[str] = None
-    category: Optional[str] = None
-    price: Optional[float] = None
-    cost: Optional[float] = None
-    stock: Optional[int] = None
-    status: Optional[str] = None
-    description: Optional[str] = None
+    name: str | None = None
+    category: str | None = None
+    price: float | None = None
+    cost: float | None = None
+    stock: int | None = None
+    status: str | None = None
+    description: str | None = None
+
 
 class Order(BaseModel):
     order_id: str
@@ -47,8 +49,9 @@ class Order(BaseModel):
     quantity: int = 1
     unit_price: float = 0.0
     total_amount: float = 0.0
-    order_date: Optional[datetime] = None
+    order_date: datetime | None = None
     status: str = "completed"
+
 
 class SalesStats(BaseModel):
     product_id: str
@@ -60,8 +63,9 @@ class SalesStats(BaseModel):
     gross_margin: float = 0.0
     order_count: int = 0
 
+
 class AlertRecord(BaseModel):
-    alert_id: Optional[int] = None
+    alert_id: int | None = None
     product_id: str
     alert_type: str  # sales_drop/price_gap/stockout/margin_warning/zero_sales
     severity: str = "warning"  # critical/warning/info
@@ -70,8 +74,9 @@ class AlertRecord(BaseModel):
     root_cause: str = ""
     suggestion: str = ""
     status: str = "open"  # open/acknowledged/resolved
-    created_at: Optional[datetime] = None
-    resolved_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    resolved_at: datetime | None = None
+
 
 class AlertCreate(BaseModel):
     product_id: str
@@ -82,16 +87,17 @@ class AlertCreate(BaseModel):
     root_cause: str = ""
     suggestion: str = ""
 
+
 class SelectionRun(BaseModel):
-    run_id: Optional[int] = None
+    run_id: int | None = None
     trigger: str = "scheduled"  # scheduled/manual
     status: str = "running"  # running/completed/failed
     total_evaluated: int = 0
     recommended_count: int = 0
     top_score: float = 0.0
-    results: Optional[Dict[str, Any]] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
+    results: dict[str, Any] | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
 
 
 class DatabaseSkill:
@@ -104,14 +110,14 @@ class DatabaseSkill:
         """
         self._pool = pool
 
-    async def _fetch(self, query: str, *args: Any) -> List[Dict[str, Any]]:
+    async def _fetch(self, query: str, *args: Any) -> list[dict[str, Any]]:
         if self._pool is None:
             return []
         async with self._pool.acquire() as conn:
             rows = await conn.fetch(query, *args)
             return [dict(r) for r in rows]
 
-    async def _fetchrow(self, query: str, *args: Any) -> Optional[Dict[str, Any]]:
+    async def _fetchrow(self, query: str, *args: Any) -> dict[str, Any] | None:
         if self._pool is None:
             return None
         async with self._pool.acquire() as conn:
@@ -126,19 +132,17 @@ class DatabaseSkill:
 
     # ── 商品 CRUD ────────────────────────────────────────────────────────
 
-    async def get_product(self, product_id: str) -> Optional[Product]:
-        row = await self._fetchrow(
-            "SELECT * FROM products WHERE product_id = $1", product_id
-        )
+    async def get_product(self, product_id: str) -> Product | None:
+        row = await self._fetchrow("SELECT * FROM products WHERE product_id = $1", product_id)
         return Product(**row) if row else None
 
     async def list_products(
         self,
-        category: Optional[str] = None,
+        category: str | None = None,
         status: str = "active",
         limit: int = 50,
         offset: int = 0,
-    ) -> List[Product]:
+    ) -> list[Product]:
         conditions = ["status = $1"]
         params: list[Any] = [status]
         idx = 2
@@ -149,32 +153,37 @@ class DatabaseSkill:
         params.extend([limit, offset])
         query = f"""
         SELECT * FROM products
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         ORDER BY created_at DESC
         LIMIT ${idx} OFFSET ${idx + 1}
         """
         rows = await self._fetch(query, *params)
         return [Product(**r) for r in rows]
 
-    async def create_product(self, data: ProductCreate) -> Optional[Product]:
+    async def create_product(self, data: ProductCreate) -> Product | None:
         row = await self._fetchrow(
             """
             INSERT INTO products (name, category, price, cost, stock, description)
             VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             """,
-            data.name, data.category, data.price, data.cost, data.stock, data.description,
+            data.name,
+            data.category,
+            data.price,
+            data.cost,
+            data.stock,
+            data.description,
         )
         return Product(**row) if row else None
 
-    async def update_product(self, product_id: str, data: ProductUpdate) -> Optional[Product]:
+    async def update_product(self, product_id: str, data: ProductUpdate) -> Product | None:
         updates = data.model_dump(exclude_none=True)
         if not updates:
             return await self.get_product(product_id)
-        set_clauses = [f"{k} = ${i+2}" for i, k in enumerate(updates)]
+        set_clauses = [f"{k} = ${i + 2}" for i, k in enumerate(updates)]
         values = list(updates.values())
         query = f"""
-        UPDATE products SET {', '.join(set_clauses)}, updated_at = NOW()
+        UPDATE products SET {", ".join(set_clauses)}, updated_at = NOW()
         WHERE product_id = $1
         RETURNING *
         """
@@ -192,11 +201,11 @@ class DatabaseSkill:
 
     async def get_orders(
         self,
-        product_id: Optional[str] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
+        product_id: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
         limit: int = 50,
-    ) -> List[Order]:
+    ) -> list[Order]:
         conditions: list[str] = []
         params: list[Any] = []
         idx = 1
@@ -228,7 +237,7 @@ class DatabaseSkill:
         self,
         product_id: str,
         days: int = 30,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """获取商品每日销量（供 Prophet 训练用）。"""
         rows = await self._fetch(
             """
@@ -238,7 +247,8 @@ class DatabaseSkill:
               AND order_date >= CURRENT_DATE - $2 * INTERVAL '1 day'
             GROUP BY ds ORDER BY ds
             """,
-            product_id, days,
+            product_id,
+            days,
         )
         return rows
 
@@ -246,10 +256,10 @@ class DatabaseSkill:
 
     async def get_sales_stats(
         self,
-        product_id: Optional[str] = None,
-        start_date: Optional[date] = None,
-        end_date: Optional[date] = None,
-    ) -> List[SalesStats]:
+        product_id: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[SalesStats]:
         conditions: list[str] = []
         params: list[Any] = []
         idx = 1
@@ -288,25 +298,30 @@ class DatabaseSkill:
 
     # ── 预警记录 CRUD ────────────────────────────────────────────────────
 
-    async def create_alert(self, data: AlertCreate) -> Optional[AlertRecord]:
+    async def create_alert(self, data: AlertCreate) -> AlertRecord | None:
         row = await self._fetchrow(
             """
             INSERT INTO alerts (product_id, alert_type, severity, title, description, root_cause, suggestion)
             VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             """,
-            data.product_id, data.alert_type, data.severity,
-            data.title, data.description, data.root_cause, data.suggestion,
+            data.product_id,
+            data.alert_type,
+            data.severity,
+            data.title,
+            data.description,
+            data.root_cause,
+            data.suggestion,
         )
         return AlertRecord(**row) if row else None
 
     async def get_alerts(
         self,
-        product_id: Optional[str] = None,
+        product_id: str | None = None,
         status: str = "open",
-        severity: Optional[str] = None,
+        severity: str | None = None,
         limit: int = 50,
-    ) -> List[AlertRecord]:
+    ) -> list[AlertRecord]:
         conditions = ["status = $1"]
         params: list[Any] = [status]
         idx = 2
@@ -321,7 +336,7 @@ class DatabaseSkill:
         params.append(limit)
         query = f"""
         SELECT * FROM alerts
-        WHERE {' AND '.join(conditions)}
+        WHERE {" AND ".join(conditions)}
         ORDER BY created_at DESC
         LIMIT ${idx}
         """
@@ -344,7 +359,7 @@ class DatabaseSkill:
 
     # ── 选品运行记录 ─────────────────────────────────────────────────────
 
-    async def create_selection_run(self, trigger: str = "scheduled") -> Optional[SelectionRun]:
+    async def create_selection_run(self, trigger: str = "scheduled") -> SelectionRun | None:
         row = await self._fetchrow(
             """
             INSERT INTO selection_runs (trigger, status) VALUES ($1, 'running')
@@ -360,9 +375,10 @@ class DatabaseSkill:
         total_evaluated: int,
         recommended_count: int,
         top_score: float,
-        results: Optional[Dict[str, Any]] = None,
+        results: dict[str, Any] | None = None,
     ) -> bool:
         import json
+
         result = await self._execute(
             """
             UPDATE selection_runs
@@ -371,7 +387,10 @@ class DatabaseSkill:
                 top_score = $4, results = $5
             WHERE run_id = $1
             """,
-            run_id, total_evaluated, recommended_count, top_score,
+            run_id,
+            total_evaluated,
+            recommended_count,
+            top_score,
             json.dumps(results) if results else None,
         )
         return "UPDATE 1" in result
@@ -384,11 +403,12 @@ class DatabaseSkill:
                 results = jsonb_build_object('error', $2)
             WHERE run_id = $1
             """,
-            run_id, error,
+            run_id,
+            error,
         )
         return "UPDATE 1" in result
 
-    async def get_latest_selection_runs(self, limit: int = 10) -> List[SelectionRun]:
+    async def get_latest_selection_runs(self, limit: int = 10) -> list[SelectionRun]:
         rows = await self._fetch(
             "SELECT * FROM selection_runs ORDER BY started_at DESC LIMIT $1",
             limit,

@@ -9,7 +9,7 @@ from src.db import postgres as pg
 
 from .deps import gen_id, get_orchestrator
 from .errors import NotFoundError
-from .schemas import APIResponse, AlertScanResponse, AlertUpdateRequest
+from .schemas import AlertScanResponse, AlertUpdateRequest, APIResponse
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -68,7 +68,9 @@ async def update_alert(alert_id: str, body: AlertUpdateRequest) -> APIResponse[d
 
 
 async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:
-    import json, logging
+    import json
+    import logging
+
     logger = logging.getLogger(__name__)
     try:
         result = await orch.run_alert()
@@ -76,7 +78,8 @@ async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:
         # Store scan result
         await pool.execute(
             "INSERT INTO alert_scans (scan_id, status, result, created_at) VALUES ($1, 'completed', $2::jsonb, NOW())",
-            task_id, json.dumps(result, default=str),
+            task_id,
+            json.dumps(result, default=str),
         )
     except Exception:
         logger.exception("Alert scan %s failed", task_id)

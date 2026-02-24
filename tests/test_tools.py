@@ -2,45 +2,43 @@
 
 from __future__ import annotations
 
-import pytest
-
 from src.agents.tools import (
-    # Selection
-    MARKET_ANALYSIS_TOOL,
-    COMPETITOR_ANALYSIS_TOOL,
-    INVENTORY_ANALYSIS_TOOL,
-    SEASONAL_FACTORS_TOOL,
-    GAP_OPPORTUNITIES_TOOL,
-    SUPPLIER_EVALUATION_TOOL,
-    RECOMMENDATIONS_TOOL,
-    # CustomerService
-    INTENT_TOOL,
-    REPLY_TOOL,
-    # Alert
-    ANOMALIES_TOOL,
-    ROOT_CAUSES_TOOL,
     ACTIONS_TOOL,
-    # Bundle
-    ASSOCIATION_RULES_TOOL,
-    BUNDLE_PROPOSALS_TOOL,
-    BUNDLE_PRICING_TOOL,
-    # Listing
-    PARSED_PRODUCT_TOOL,
-    LISTING_INFO_TOOL,
-    COMPLIANCE_CHECK_TOOL,
+    ALERT_TOOLS,
     # Collections
     ALL_TOOLS,
-    SELECTION_TOOLS,
-    CUSTOMER_SERVICE_TOOLS,
-    ALERT_TOOLS,
+    # Alert
+    ANOMALIES_TOOL,
+    # Bundle
+    ASSOCIATION_RULES_TOOL,
+    BUNDLE_PRICING_TOOL,
+    BUNDLE_PROPOSALS_TOOL,
     BUNDLE_TOOLS,
+    COMPETITOR_ANALYSIS_TOOL,
+    COMPLIANCE_CHECK_TOOL,
+    CUSTOMER_SERVICE_TOOLS,
+    GAP_OPPORTUNITIES_TOOL,
+    # CustomerService
+    INTENT_TOOL,
+    INVENTORY_ANALYSIS_TOOL,
+    LISTING_INFO_TOOL,
     LISTING_TOOLS,
+    # Selection
+    MARKET_ANALYSIS_TOOL,
+    # Listing
+    PARSED_PRODUCT_TOOL,
+    RECOMMENDATIONS_TOOL,
+    REPLY_TOOL,
+    ROOT_CAUSES_TOOL,
+    SEASONAL_FACTORS_TOOL,
+    SELECTION_TOOLS,
+    SUPPLIER_EVALUATION_TOOL,
 )
-
 
 # ---------------------------------------------------------------------------
 # Schema Validation Helpers
 # ---------------------------------------------------------------------------
+
 
 def validate_tool_schema(tool: dict) -> list[str]:
     """
@@ -84,7 +82,7 @@ def validate_property_types(properties: dict) -> list[str]:
     """Validate property type definitions."""
     errors = []
     valid_types = {"string", "number", "integer", "boolean", "array", "object", "null"}
-    
+
     for prop_name, prop_def in properties.items():
         if isinstance(prop_def, dict):
             # Check type field
@@ -109,6 +107,7 @@ def validate_property_types(properties: dict) -> list[str]:
 # ---------------------------------------------------------------------------
 # Selection Tools Tests
 # ---------------------------------------------------------------------------
+
 
 class TestSelectionTools:
     """Tests for Selection Agent tool schemas."""
@@ -158,7 +157,9 @@ class TestSelectionTools:
 
     def test_seasonal_factors_enums(self):
         """Seasonal factors has correct enum values."""
-        factors_props = SEASONAL_FACTORS_TOOL["input_schema"]["properties"]["factors"]["items"]["properties"]
+        factors_props = SEASONAL_FACTORS_TOOL["input_schema"]["properties"]["factors"]["items"][
+            "properties"
+        ]
         assert "season" in factors_props["event_type"]["enum"]
         assert "holiday" in factors_props["event_type"]["enum"]
         assert "high" in factors_props["impact_level"]["enum"]
@@ -204,8 +205,12 @@ class TestSelectionTools:
         recs_items = RECOMMENDATIONS_TOOL["input_schema"]["properties"]["recommendations"]["items"]
         breakdown = recs_items["properties"]["score_breakdown"]["properties"]
         expected_dims = [
-            "market_heat", "competition_gap", "supply_chain",
-            "profit_margin", "category_synergy", "seasonal_fit"
+            "market_heat",
+            "competition_gap",
+            "supply_chain",
+            "profit_margin",
+            "category_synergy",
+            "seasonal_fit",
         ]
         for dim in expected_dims:
             assert dim in breakdown, f"Missing dimension: {dim}"
@@ -219,6 +224,7 @@ class TestSelectionTools:
 # ---------------------------------------------------------------------------
 # CustomerService Tools Tests
 # ---------------------------------------------------------------------------
+
 
 class TestCustomerServiceTools:
     """Tests for CustomerService Agent tool schemas."""
@@ -239,8 +245,14 @@ class TestCustomerServiceTools:
         """Intent tool covers all expected intent types."""
         intent_enum = INTENT_TOOL["input_schema"]["properties"]["intent"]["enum"]
         expected_intents = [
-            "product_inquiry", "usage_question", "recommendation",
-            "logistics", "after_sales", "complaint", "greeting", "other"
+            "product_inquiry",
+            "usage_question",
+            "recommendation",
+            "logistics",
+            "after_sales",
+            "complaint",
+            "greeting",
+            "other",
         ]
         for intent in expected_intents:
             assert intent in intent_enum, f"Missing intent: {intent}"
@@ -278,6 +290,7 @@ class TestCustomerServiceTools:
 # Alert Tools Tests
 # ---------------------------------------------------------------------------
 
+
 class TestAlertTools:
     """Tests for Alert Agent tool schemas."""
 
@@ -288,10 +301,15 @@ class TestAlertTools:
 
     def test_anomalies_tool_types(self):
         """Anomalies tool covers all anomaly types."""
-        anomaly_types = ANOMALIES_TOOL["input_schema"]["properties"]["anomalies"]["items"]["properties"]["anomaly_type"]["enum"]
+        anomaly_types = ANOMALIES_TOOL["input_schema"]["properties"]["anomalies"]["items"][
+            "properties"
+        ]["anomaly_type"]["enum"]
         expected_types = [
-            "sales_drop_prophet", "sales_spike_prophet", "zero_sales",
-            "stockout_urgent", "margin_warning"
+            "sales_drop_prophet",
+            "sales_spike_prophet",
+            "zero_sales",
+            "stockout_urgent",
+            "margin_warning",
         ]
         for t in expected_types:
             assert t in anomaly_types, f"Missing anomaly type: {t}"
@@ -308,7 +326,9 @@ class TestAlertTools:
 
     def test_actions_tool_priorities(self):
         """Actions tool has correct priority levels."""
-        action_props = ACTIONS_TOOL["input_schema"]["properties"]["recommended_actions"]["items"]["properties"]
+        action_props = ACTIONS_TOOL["input_schema"]["properties"]["recommended_actions"]["items"][
+            "properties"
+        ]
         priority_enum = action_props["priority"]["enum"]
         assert set(priority_enum) == {"P0", "P1", "P2", "P3"}
 
@@ -316,6 +336,7 @@ class TestAlertTools:
 # ---------------------------------------------------------------------------
 # Bundle Tools Tests
 # ---------------------------------------------------------------------------
+
 
 class TestBundleTools:
     """Tests for Bundle Agent tool schemas."""
@@ -339,6 +360,7 @@ class TestBundleTools:
 # ---------------------------------------------------------------------------
 # Listing Tools Tests
 # ---------------------------------------------------------------------------
+
 
 class TestListingTools:
     """Tests for Listing Agent tool schemas."""
@@ -371,7 +393,9 @@ class TestListingTools:
 
     def test_compliance_severity_levels(self):
         """Compliance check has correct severity levels."""
-        issues = COMPLIANCE_CHECK_TOOL["input_schema"]["properties"]["issues"]["items"]["properties"]
+        issues = COMPLIANCE_CHECK_TOOL["input_schema"]["properties"]["issues"]["items"][
+            "properties"
+        ]
         severity_enum = issues["severity"]["enum"]
         assert set(severity_enum) == {"fatal", "error", "warning", "info"}
 
@@ -379,6 +403,7 @@ class TestListingTools:
 # ---------------------------------------------------------------------------
 # Tool Collections Tests
 # ---------------------------------------------------------------------------
+
 
 class TestToolCollections:
     """Tests for tool collection lists."""
@@ -406,11 +431,11 @@ class TestToolCollections:
     def test_all_tools_is_union(self):
         """ALL_TOOLS is union of all agent-specific tool lists."""
         expected_count = (
-            len(SELECTION_TOOLS) +
-            len(CUSTOMER_SERVICE_TOOLS) +
-            len(ALERT_TOOLS) +
-            len(BUNDLE_TOOLS) +
-            len(LISTING_TOOLS)
+            len(SELECTION_TOOLS)
+            + len(CUSTOMER_SERVICE_TOOLS)
+            + len(ALERT_TOOLS)
+            + len(BUNDLE_TOOLS)
+            + len(LISTING_TOOLS)
         )
         assert len(ALL_TOOLS) == expected_count
 

@@ -167,24 +167,47 @@ class ProductSyncer(BaseSyncer):
                 item.get("status", item.get("spuStatus", "")),
                 _json_or_none(item.get("channelStatus")),
                 item.get("imageUrl", item.get("picUrl", "")),
-                _json_or_none({
-                    k: v for k, v in item.items()
-                    if k not in {
-                        "spuId", "id", "skuId", "name", "spuName", "barcode", "upc",
-                        "categoryName", "category", "brandName", "brand", "spec",
-                        "specification", "unit", "costPrice", "retailPrice", "price",
-                        "channelPrice", "status", "spuStatus", "channelStatus",
-                        "imageUrl", "picUrl",
+                _json_or_none(
+                    {
+                        k: v
+                        for k, v in item.items()
+                        if k
+                        not in {
+                            "spuId",
+                            "id",
+                            "skuId",
+                            "name",
+                            "spuName",
+                            "barcode",
+                            "upc",
+                            "categoryName",
+                            "category",
+                            "brandName",
+                            "brand",
+                            "spec",
+                            "specification",
+                            "unit",
+                            "costPrice",
+                            "retailPrice",
+                            "price",
+                            "channelPrice",
+                            "status",
+                            "spuStatus",
+                            "channelStatus",
+                            "imageUrl",
+                            "picUrl",
+                        }
                     }
-                }),
+                ),
             )
 
 
 def _json_or_none(val: Any) -> Any:
     """Convert dict/list to JSON string for JSONB column, or None."""
     import json
+
     if val is None:
         return None
-    if isinstance(val, (dict, list)):
+    if isinstance(val, dict | list):
         return json.dumps(val, ensure_ascii=False)
     return None

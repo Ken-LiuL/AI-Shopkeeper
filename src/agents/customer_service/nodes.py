@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from ..llm import MODEL_FLASH, MODEL_SONNET, call_tool
-from ..prompts.customer_service import FAQ_TEMPLATES, HUMAN_TRANSFER_KEYWORDS, intent_prompt, reply_prompt
+from ..prompts.customer_service import (
+    FAQ_TEMPLATES,
+    HUMAN_TRANSFER_KEYWORDS,
+    intent_prompt,
+    reply_prompt,
+)
 from ..tools import INTENT_TOOL, REPLY_TOOL
 from .state import CustomerServiceState
 
@@ -163,11 +167,15 @@ async def reranker_node(state: CustomerServiceState) -> dict:
     query = state.get("user_message", "")
 
     if not reranker or not candidates:
-        logger.info(f"Reranker skip: reranker={'yes' if reranker else 'no'}, candidates={len(candidates)}")
+        logger.info(
+            f"Reranker skip: reranker={'yes' if reranker else 'no'}, candidates={len(candidates)}"
+        )
         return {"reranked_results": candidates[:5]}
 
     try:
-        reranked = reranker.rerank(query=query, documents=candidates, text_field="description", top_k=5)
+        reranked = reranker.rerank(
+            query=query, documents=candidates, text_field="description", top_k=5
+        )
         logger.info(f"Reranked {len(candidates)} → {len(reranked)} results")
         return {"reranked_results": reranked}
     except Exception as e:
@@ -194,19 +202,23 @@ async def graphrag_node(state: CustomerServiceState) -> dict:
         graphs = await asyncio.gather(*tasks, return_exceptions=True)
 
         enriched = []
-        for item, graph in zip(reranked, graphs):
+        for item, graph in zip(reranked, graphs, strict=False):
             enriched_item = dict(item)
             if isinstance(graph, Exception):
                 logger.warning(f"Graph fetch failed for {item.get('id')}: {graph}")
             elif graph is not None:
-                enriched_item.update({
-                    "suitable_for": graph.suitable_for,
-                    "contraindicated_for": [c for c in graph.contraindicated_for if c.get("name")],
-                    "scenarios": graph.scenarios,
-                    "related_products": graph.related_products,
-                    "faqs": graph.faqs,
-                    "price": graph.price,
-                })
+                enriched_item.update(
+                    {
+                        "suitable_for": graph.suitable_for,
+                        "contraindicated_for": [
+                            c for c in graph.contraindicated_for if c.get("name")
+                        ],
+                        "scenarios": graph.scenarios,
+                        "related_products": graph.related_products,
+                        "faqs": graph.faqs,
+                        "price": graph.price,
+                    }
+                )
             enriched.append(enriched_item)
 
         logger.info(f"GraphRAG enriched {len(enriched)} products")

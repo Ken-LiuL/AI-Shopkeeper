@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
-from typing import Any
 
 from src.db import postgres as pg
 
@@ -33,28 +31,35 @@ class FeedbackLoopService:
         for rec in recs:
             keyword = rec.get("keyword", "")
             # 查找该关键词相关商品的实际销量
-            sales = await pool.fetchval(
-                """SELECT COALESCE(SUM(oi.quantity), 0)
+            sales = (
+                await pool.fetchval(
+                    """SELECT COALESCE(SUM(oi.quantity), 0)
                    FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
                    JOIN products p ON oi.product_id = p.product_id
                    WHERE p.name ILIKE $1
                      AND o.order_time >= $2
                      AND o.order_time <= $2 + INTERVAL '30 days'""",
-                f"%{keyword}%", created,
-            ) or 0
+                    f"%{keyword}%",
+                    created,
+                )
+                or 0
+            )
 
-            outcomes.append({
-                "keyword": keyword,
-                "predicted_score": rec.get("score", 0),
-                "actual_sales_30d": int(sales),
-                "success": sales > 0,
-            })
+            outcomes.append(
+                {
+                    "keyword": keyword,
+                    "predicted_score": rec.get("score", 0),
+                    "actual_sales_30d": int(sales),
+                    "success": sales > 0,
+                }
+            )
 
         # 保存追踪记录
         await pool.execute(
             """INSERT INTO feedback_tracking (tracking_type, reference_id, outcome_data, performance_score)
                VALUES ('selection', $1, $2, $3)""",
-            run_id, json.dumps(outcomes),
+            run_id,
+            json.dumps(outcomes),
             sum(1 for o in outcomes if o["success"]) / max(len(outcomes), 1),
         )
 
@@ -71,19 +76,28 @@ class FeedbackLoopService:
         if not bundle:
             return {"error": "Bundle not found"}
 
-        products = bundle["products"] if isinstance(bundle["products"], list) else json.loads(bundle["products"] or "[]")
+        products = (
+            bundle["products"]
+            if isinstance(bundle["products"], list)
+            else json.loads(bundle["products"] or "[]")
+        )
         product_ids = [p.get("product_id", "") for p in products if p.get("product_id")]
 
         # 套餐创建后的订单中同时包含这些商品的次数
         if product_ids:
-            co_purchase = await pool.fetchval(
-                """SELECT COUNT(DISTINCT o.order_id)
+            co_purchase = (
+                await pool.fetchval(
+                    """SELECT COUNT(DISTINCT o.order_id)
                    FROM orders o
                    WHERE o.order_time >= $1
                      AND (SELECT COUNT(DISTINCT oi.product_id) FROM order_items oi
                           WHERE oi.order_id = o.order_id AND oi.product_id = ANY($2)) = $3""",
-                bundle["created_at"], product_ids, len(product_ids),
-            ) or 0
+                    bundle["created_at"],
+                    product_ids,
+                    len(product_ids),
+                )
+                or 0
+            )
         else:
             co_purchase = 0
 
@@ -97,7 +111,9 @@ class FeedbackLoopService:
         await pool.execute(
             """INSERT INTO feedback_tracking (tracking_type, reference_id, outcome_data, performance_score)
                VALUES ('bundle', $1, $2, $3)""",
-            bundle_id, json.dumps(outcome), float(co_purchase),
+            bundle_id,
+            json.dumps(outcome),
+            float(co_purchase),
         )
 
         return outcome
@@ -106,35 +122,43 @@ class FeedbackLoopService:
         """调价后销量变化"""
         pool = pg.get_pool()
 
-        change = await pool.fetchrow(
-            "SELECT * FROM price_history WHERE id = $1", price_change_id
-        )
+        change = await pool.fetchrow("SELECT * FROM price_history WHERE id = $1", price_change_id)
         if not change:
             return {"error": "Price change not found"}
 
         # 调价前7天 vs 调价后7天
-        before = await pool.fetchval(
-            """SELECT COALESCE(SUM(oi.quantity), 0)
+        before = (
+            await pool.fetchval(
+                """SELECT COALESCE(SUM(oi.quantity), 0)
                FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
                WHERE oi.product_id = $1
                  AND o.order_time >= $2 - INTERVAL '7 days'
                  AND o.order_time < $2""",
-            change["product_id"], change["changed_at"],
-        ) or 0
+                change["product_id"],
+                change["changed_at"],
+            )
+            or 0
+        )
 
-        after = await pool.fetchval(
-            """SELECT COALESCE(SUM(oi.quantity), 0)
+        after = (
+            await pool.fetchval(
+                """SELECT COALESCE(SUM(oi.quantity), 0)
                FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
                WHERE oi.product_id = $1
                  AND o.order_time >= $2
                  AND o.order_time < $2 + INTERVAL '7 days'""",
-            change["product_id"], change["changed_at"],
-        ) or 0
+                change["product_id"],
+                change["changed_at"],
+            )
+            or 0
+        )
 
         # 更新price_history记录
         await pool.execute(
             "UPDATE price_history SET outcome_tracked = TRUE, sales_before = $1, sales_after = $2 WHERE id = $3",
-            int(before), int(after), price_change_id,
+            int(before),
+            int(after),
+            price_change_id,
         )
 
         outcome = {
@@ -150,7 +174,8 @@ class FeedbackLoopService:
         await pool.execute(
             """INSERT INTO feedback_tracking (tracking_type, reference_id, outcome_data, performance_score)
                VALUES ('pricing', $1, $2, $3)""",
-            str(price_change_id), json.dumps(outcome),
+            str(price_change_id),
+            json.dumps(outcome),
             (after - before) / max(before, 1),
         )
 
@@ -160,6 +185,7 @@ class FeedbackLoopService:
         """根据反馈调整 self-learning 权重"""
         try:
             from src.learning.weight_learner import WeightLearner
+
             learner = WeightLearner()
 
             adjustments = {}

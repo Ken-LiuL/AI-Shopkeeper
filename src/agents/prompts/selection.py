@@ -1,8 +1,5 @@
 """Selection Agent Prompt 模板"""
 
-import json
-from typing import Any
-
 
 def market_analysis_prompt(
     keywords_data: str,
