@@ -102,7 +102,7 @@ class DailyReportService:
                LEFT JOIN (
                    SELECT oi.product_id, SUM(oi.quantity) AS qty
                    FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
-                   WHERE o.order_time >= $1 - INTERVAL '7 days' AND o.order_time < $1 + INTERVAL '1 day'
+                   WHERE o.order_time >= $1::timestamp - INTERVAL '7 days' AND o.order_time < $1::timestamp + INTERVAL '1 day'
                    GROUP BY oi.product_id
                ) s ON p.product_id = s.product_id
                WHERE p.status = 'active'
