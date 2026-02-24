@@ -26,7 +26,7 @@ class RefundSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_REFUND = "refundDetail"
+    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到退款专用 viewCode
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -44,7 +44,7 @@ class RefundSyncer(BaseSyncer):
         try:
             while True:
                 resp = await self.client.golden_query(
-                    module=self.MODULE_REFUND,
+                    view_code=self.VIEW_CODE,
                     start_date=start.strftime("%Y-%m-%d"),
                     end_date=end.strftime("%Y-%m-%d"),
                     page=page,

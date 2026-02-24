@@ -26,7 +26,7 @@ class CustomerSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_CUSTOMER = "customerRank"
+    VIEW_CODE = "customer_consume_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
         return await self._sync_customers(SyncMode.FULL)
@@ -45,7 +45,7 @@ class CustomerSyncer(BaseSyncer):
                     "sortOrder": "desc",
                 }
                 resp = await self.client.golden_query(
-                    module=self.MODULE_CUSTOMER,
+                    view_code=self.VIEW_CODE,
                     start_date=since.strftime("%Y-%m-%d") if since else None,
                     page=page,
                     page_size=50,

@@ -1,6 +1,7 @@
 """牵牛花数据同步模块 — QNH (qnh.meituan.com) data sync engine."""
 
 from .base import BaseSyncer, SyncMode, SyncResult
+from .browser_client import BrowserClient
 from .channels import ChannelSyncer
 from .customers import CustomerSyncer
 from .finance import FinanceSyncer
@@ -20,6 +21,7 @@ from .utils import RateLimitedSession, load_cookies_from_file, save_cookies_to_f
 
 __all__ = [
     "BaseSyncer",
+    "BrowserClient",
     "SyncResult",
     "SyncMode",
     "QNHClient",

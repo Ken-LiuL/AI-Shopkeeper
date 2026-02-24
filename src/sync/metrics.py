@@ -24,7 +24,7 @@ class MetricsSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=20)
 
     # 推断的 module 名，需验证
-    MODULE_STORE_DETAIL = "storeDetail"
+    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 30 days of daily metrics."""
@@ -53,7 +53,7 @@ class MetricsSyncer(BaseSyncer):
                 # NOTE: module 和参数格式为推断，需抓包验证
                 try:
                     resp = await self.client.golden_query(
-                        module=self.MODULE_STORE_DETAIL,
+                        view_code=self.VIEW_CODE,
                         start_date=date_str,
                         end_date=date_str,
                     )

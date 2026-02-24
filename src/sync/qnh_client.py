@@ -33,15 +33,30 @@ MAX_CONCURRENT = 3
 
 # ── goldengateway 通用查询接口 ──────────────────────────────────────
 # POST /goldengateway/empower/generic/table/query
-# 推断的请求格式 (需根据实际抓包验证):
+# 真实请求格式 (2026-02-24 Playwright 抓包验证):
 # {
-#   "tenantId": "1011766",
-#   "poiIds": [1175006, 1221411, 1232550],
-#   "module": "xxx",        // e.g. hotProduct, customerRank, storeDetail, orderDetail, ...
-#   "dateRange": {"start": "2026-02-24", "end": "2026-02-24"},
-#   "pageNum": 1,
-#   "pageSize": 50
+#   "viewCode": "homepage_hotsale_goods_rank_table_view_new",
+#   "param": {
+#     "poiIds": [1232550, 1221411, 1175006],
+#     "channelIds": [],
+#     "dateType": "d",       // d=日, w=周, m=月
+#     "beginDate": "20260224",
+#     "endDate": "20260224",
+#     "page": 1,
+#     "pageSize": 15,
+#     "order": "",
+#     "isSelectAllPoi": false
+#   }
 # }
+#
+# 已验证的 viewCode:
+#   homepage_hotsale_goods_rank_table_view_new  — 热销商品排行
+#   customer_consume_rank_table_view_new        — 消费排行
+#   homepage_not_erp_poi_rank_table_view        — 门店排行
+#   homepage_date_trend_list_new                — 趋势分析
+#   homepage_trade_compare_table_view_new       — 行业对标 (仅周/月有数据)
+#   homepage_data_overview_view_not_erp         — 数据概览 (complexModule)
+#   homepage_channel_distribute_table_view_new  — 渠道分布 (channelDistributeList)
 GOLDEN_GENERIC_QUERY = "/goldengateway/empower/generic/table/query"
 GOLDEN_COMPLEX_QUERY = "/goldengateway/empower/complexModule/queryTable"
 GOLDEN_CHANNEL_DIST = "/goldengateway/empower/homepage/channelDistributeList"
@@ -78,6 +93,7 @@ class QNHClient:
     - Auto-retry on auth failures
     - JSON response parsing with error detection
     - Support for goldengateway data queries and neixin IM APIs
+    - goldengateway API 通过 Playwright 浏览器执行（需要 mtgsig 签名）
     """
 
     def __init__(
@@ -93,6 +109,8 @@ class QNHClient:
         self._last_request_time: float = 0
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENT)
         self._request_count = 0
+        # 浏览器客户端（lazy init），用于需要 mtgsig 签名的 goldengateway API
+        self._browser_client = None
 
     # ── Lifecycle ───────────────────────────────────────────────────────
 
@@ -107,6 +125,15 @@ class QNHClient:
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
+        # 注意：不关闭 browser_client，因为是单例，可能被其他 client 共用
+
+    async def _get_browser(self):
+        """获取浏览器客户端单例（lazy init）。"""
+        if self._browser_client is None:
+            from .browser_client import BrowserClient
+
+            self._browser_client = await BrowserClient.get_instance()
+        return self._browser_client
 
     async def _ensure_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
@@ -153,66 +180,102 @@ class QNHClient:
 
     async def golden_query(
         self,
-        module: str,
+        view_code: str,
         start_date: str | None = None,
         end_date: str | None = None,
+        date_type: str = "d",
         page: int = 1,
-        page_size: int = 50,
-        extra: dict[str, Any] | None = None,
+        page_size: int = 15,
+        extra_param: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """通用 goldengateway 表格查询。
+        """通用 goldengateway 表格查询 — 通过浏览器执行（需要 mtgsig 签名）。
 
         POST /goldengateway/empower/generic/table/query
 
-        NOTE: 参数格式为推断，需根据实际抓包验证。
-        module 可能的值: hotProduct, customerRank, storeDetail, orderDetail,
-                        reviewDetail, stockDetail, financeDetail, promotionDetail 等。
+        Args:
+            view_code: 视图代码，如 homepage_hotsale_goods_rank_table_view_new
+            start_date: 开始日期，格式 YYYYMMDD
+            end_date: 结束日期，格式 YYYYMMDD
+            date_type: 日期类型 d=日 w=周 m=月
+            page: 页码
+            page_size: 每页条数
+            extra_param: 额外参数（合并到 param 对象中）
         """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
+        from datetime import date as _date
+
+        today = _date.today().strftime("%Y%m%d")
+        param: dict[str, Any] = {
             "poiIds": self.poi_ids,
-            "module": module,
-            "pageNum": page,
+            "channelIds": [],
+            "dateType": date_type,
+            "beginDate": start_date or today,
+            "endDate": end_date or today,
+            "page": page,
             "pageSize": page_size,
+            "order": "",
+            "isSelectAllPoi": False,
         }
-        if start_date or end_date:
-            payload["dateRange"] = {
-                "start": start_date or end_date,
-                "end": end_date or start_date,
-            }
-        if extra:
-            payload.update(extra)
-        return await self.post(GOLDEN_GENERIC_QUERY, data=payload)
+        if extra_param:
+            param.update(extra_param)
+        payload = {"viewCode": view_code, "param": param}
+        browser = await self._get_browser()
+        return await browser.get_golden_data(GOLDEN_GENERIC_QUERY, payload)
 
     async def golden_complex_query(
         self,
-        module: str,
+        view_code: str = "homepage_data_overview_view_not_erp",
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_type: str = "d",
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """复杂模块查询。
+        """复杂模块查询 — 通过浏览器执行（需要 mtgsig 签名）。
 
         POST /goldengateway/empower/complexModule/queryTable
-        NOTE: 参数格式为推断，需根据实际抓包验证。
         """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "poiIds": self.poi_ids,
-            "module": module,
-        }
-        payload.update(kwargs)
-        return await self.post(GOLDEN_COMPLEX_QUERY, data=payload)
+        from datetime import date as _date
 
-    async def golden_channel_distribute(self) -> dict[str, Any]:
-        """渠道分布列表。
+        today = _date.today().strftime("%Y%m%d")
+        param: dict[str, Any] = {
+            "poiIds": self.poi_ids,
+            "channelIds": [],
+            "dateType": date_type,
+            "beginDate": start_date or today,
+            "endDate": end_date or today,
+        }
+        param.update(kwargs)
+        payload = {"viewCode": view_code, "param": param}
+        browser = await self._get_browser()
+        return await browser.get_golden_data(GOLDEN_COMPLEX_QUERY, payload)
+
+    async def golden_channel_distribute(
+        self,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        date_type: str = "d",
+    ) -> dict[str, Any]:
+        """渠道分布列表 — 通过浏览器执行（需要 mtgsig 签名）。
 
         POST /goldengateway/empower/homepage/channelDistributeList
-        NOTE: 参数格式为推断，需根据实际抓包验证。
         """
+        from datetime import date as _date
+
+        today = _date.today().strftime("%Y%m%d")
         payload = {
-            "tenantId": self.tenant_id,
-            "poiIds": self.poi_ids,
+            "viewCode": "homepage_channel_distribute_table_view_new",
+            "param": {
+                "poiIds": self.poi_ids,
+                "dateType": date_type,
+                "beginDate": start_date or today,
+                "endDate": end_date or today,
+                "order": "",
+                "pageSize": 100,
+                "page": 1,
+                "isSelectAllPoi": False,
+            },
         }
-        return await self.post(GOLDEN_CHANNEL_DIST, data=payload)
+        browser = await self._get_browser()
+        return await browser.get_golden_data(GOLDEN_CHANNEL_DIST, payload)
 
     # ── neixin IM API ───────────────────────────────────────────────────
 
@@ -222,8 +285,15 @@ class QNHClient:
         params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """GET request to neixin (api.neixin.cn)."""
-        return await self._request("GET", path, params=params, base_url=NEIXIN_BASE, **kwargs)
+        """GET request to neixin (api.neixin.cn)，403 时 fallback 到浏览器。"""
+        try:
+            return await self._request("GET", path, params=params, base_url=NEIXIN_BASE, **kwargs)
+        except AuthExpiredError as e:
+            if "403" in str(e):
+                logger.info("neixin GET %s 返回 403，fallback 到浏览器执行", path)
+                browser = await self._get_browser()
+                return await browser.execute_api(path, method="GET", base_url=NEIXIN_BASE)
+            raise
 
     async def neixin_post(
         self,
@@ -232,10 +302,19 @@ class QNHClient:
         params: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
-        """POST request to neixin (api.neixin.cn)."""
-        return await self._request(
-            "POST", path, json_data=data, params=params, base_url=NEIXIN_BASE, **kwargs
-        )
+        """POST request to neixin (api.neixin.cn)，403 时 fallback 到浏览器。"""
+        try:
+            return await self._request(
+                "POST", path, json_data=data, params=params, base_url=NEIXIN_BASE, **kwargs
+            )
+        except AuthExpiredError as e:
+            if "403" in str(e):
+                logger.info("neixin POST %s 返回 403，fallback 到浏览器执行", path)
+                browser = await self._get_browser()
+                return await browser.execute_api(
+                    path, method="POST", body=data, base_url=NEIXIN_BASE
+                )
+            raise
 
     async def neixin_chat_history(
         self,
@@ -292,11 +371,12 @@ class QNHClient:
         return resp.get("data", [])
 
     async def get_poi_tree(self) -> dict[str, Any]:
-        """Get store tree.
+        """Get store tree — 通过浏览器执行（goldengateway 需要 mtgsig）。
 
         API: POST /goldengateway/poi/queryPoiTree
         """
-        return await self.post(GOLDEN_POI_TREE, data={"tenantId": self.tenant_id})
+        browser = await self._get_browser()
+        return await browser.get_golden_data(GOLDEN_POI_TREE, {"tenantId": self.tenant_id})
 
     # ── Internal ────────────────────────────────────────────────────────
 

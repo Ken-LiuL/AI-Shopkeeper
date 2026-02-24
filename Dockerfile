@@ -17,6 +17,11 @@ COPY config/ config/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
 
+# 安装 Playwright Chromium 及其系统依赖（goldengateway API 需要 mtgsig 签名，必须通过浏览器执行）
+RUN playwright install chromium --with-deps
+
+ENV HEADLESS=true
+
 EXPOSE 8000
 
 # Render/Railway inject PORT env var; use 1 worker to fit 512MB RAM

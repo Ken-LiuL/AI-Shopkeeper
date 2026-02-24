@@ -27,7 +27,7 @@ class ProductSyncer(BaseSyncer):
     CATEGORY_API = "/api/v1/merchant/storeCategory/queryAll"
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_PRODUCT = "hotProduct"
+    VIEW_CODE = "homepage_hotsale_goods_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: fetch all products via goldengateway."""
@@ -40,7 +40,7 @@ class ProductSyncer(BaseSyncer):
                 # 使用 goldengateway 通用查询获取商品列表
                 # NOTE: module 和参数格式为推断，需抓包验证
                 resp = await self.client.golden_query(
-                    module=self.MODULE_PRODUCT,
+                    view_code=self.VIEW_CODE,
                     page=page,
                     page_size=page_size,
                 )
@@ -84,7 +84,7 @@ class ProductSyncer(BaseSyncer):
         try:
             while True:
                 resp = await self.client.golden_query(
-                    module=self.MODULE_PRODUCT,
+                    view_code=self.VIEW_CODE,
                     start_date=since.strftime("%Y-%m-%d"),
                     page=page,
                     page_size=page_size,

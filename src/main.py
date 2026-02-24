@@ -136,6 +136,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ── Shutdown ─────────────────────────────────────────────
     logger.info("Shutting down …")
 
+    # 关闭 Playwright 浏览器（如果已启动）
+    try:
+        from src.sync.browser_client import _instance as _browser_instance
+
+        if _browser_instance is not None:
+            await _browser_instance.close()
+            logger.info("Browser client closed ✓")
+    except Exception:
+        logger.debug("No browser client to close", exc_info=True)
+
     # Shutdown scheduler
     try:
         from src.scheduler import shutdown_scheduler

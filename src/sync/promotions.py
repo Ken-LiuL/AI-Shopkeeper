@@ -26,7 +26,7 @@ class PromotionSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_PROMOTION = "promotionDetail"
+    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到营销专用 viewCode
 
     async def full_sync(self) -> SyncResult:
         """全量同步: 最近180天的活动。"""
@@ -45,7 +45,7 @@ class PromotionSyncer(BaseSyncer):
         try:
             while True:
                 resp = await self.client.golden_query(
-                    module=self.MODULE_PROMOTION,
+                    view_code=self.VIEW_CODE,
                     start_date=start.strftime("%Y-%m-%d"),
                     end_date=end.strftime("%Y-%m-%d"),
                     page=page,

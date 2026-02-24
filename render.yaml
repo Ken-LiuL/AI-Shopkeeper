@@ -3,6 +3,7 @@ services:
     name: ai-store-manager
     runtime: docker
     dockerfilePath: ./Dockerfile
+    # Playwright 浏览器安装在 Dockerfile 中处理
     region: singapore
     plan: free
     healthCheckPath: /health

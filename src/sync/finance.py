@@ -26,7 +26,7 @@ class FinanceSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_FINANCE = "financeDetail"
+    VIEW_CODE = "homepage_data_overview_view_not_erp"  # 数据概览含财务指标
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -44,7 +44,7 @@ class FinanceSyncer(BaseSyncer):
         try:
             while True:
                 resp = await self.client.golden_query(
-                    module=self.MODULE_FINANCE,
+                    view_code=self.VIEW_CODE,
                     start_date=start.strftime("%Y-%m-%d"),
                     end_date=end.strftime("%Y-%m-%d"),
                     page=page,

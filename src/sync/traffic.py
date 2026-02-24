@@ -25,7 +25,7 @@ class TrafficSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=20)
 
     # 推断的 goldengateway module 名，需验证
-    MODULE_TRAFFIC = "trafficDetail"
+    VIEW_CODE = "homepage_date_trend_list_new"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 7 days of traffic data."""
@@ -56,7 +56,7 @@ class TrafficSyncer(BaseSyncer):
                         # 使用 goldengateway 通用查询获取商品流量
                         # NOTE: module 和参数格式为推断，需抓包验证
                         resp = await self.client.golden_query(
-                            module=self.MODULE_TRAFFIC,
+                            view_code=self.VIEW_CODE,
                             start_date=date_str,
                             end_date=date_str,
                             page=page,
