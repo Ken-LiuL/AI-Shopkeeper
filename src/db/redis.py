@@ -34,15 +34,19 @@ async def init_redis() -> aioredis.Redis:
         decode_responses=True,
         socket_connect_timeout=10,
     )
-    await _redis.ping()
-    logger.info("Redis connected (%s)", redis_url[:30] + "...")
+    try:
+        await _redis.ping()
+        logger.info("Redis connected (%s)", redis_url[:30] + "...")
+    except Exception as exc:
+        logger.warning(
+            "Redis unavailable (%s), running without cache: %s", redis_url[:30] + "...", exc
+        )
+        _redis = None
     return _redis
 
 
-def get_redis() -> aioredis.Redis:
-    """Return the current Redis client or raise if not initialised."""
-    if _redis is None:
-        raise RuntimeError("Redis not initialised. Call init_redis() first.")
+def get_redis() -> aioredis.Redis | None:
+    """Return the current Redis client or None if unavailable."""
     return _redis
 
 
@@ -63,6 +67,8 @@ async def close_redis() -> None:
 async def get_json(key: str) -> Any | None:
     """Get a key and parse it as JSON."""
     r = get_redis()
+    if r is None:
+        return None
     raw = await r.get(key)
     if raw is None:
         return None
@@ -72,6 +78,8 @@ async def get_json(key: str) -> Any | None:
 async def set_json(key: str, value: Any, ttl: int | None = None) -> None:
     """Serialize value as JSON and set with optional TTL (seconds)."""
     r = get_redis()
+    if r is None:
+        return
     payload = json.dumps(value, ensure_ascii=False, default=str)
     if ttl:
         await r.setex(key, ttl, payload)
@@ -82,4 +90,6 @@ async def set_json(key: str, value: Any, ttl: int | None = None) -> None:
 async def delete(key: str) -> None:
     """Delete a key."""
     r = get_redis()
+    if r is None:
+        return
     await r.delete(key)

@@ -12,6 +12,7 @@ FROM python:3.11-slim
 
 WORKDIR /app
 COPY --from=builder /usr/local /usr/local
+ARG CACHEBUST=1
 COPY src/ src/
 COPY config/ config/
 COPY migrations/ migrations/
