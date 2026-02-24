@@ -10,14 +10,8 @@ jobs:
     steps:
       - name: Trigger Render Deploy
         run: |
-          if [ -n "$RENDER_DEPLOY_HOOK_URL" ]; then
-            curl -s "$RENDER_DEPLOY_HOOK_URL"
-            echo "Render deploy triggered"
-          else
-            echo "RENDER_DEPLOY_HOOK_URL not set, skipping"
-          fi
-        env:
-          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+          curl -s "https://api.render.com/deploy/srv-d6ei369r0fns73cm03jg?key=3xeIfv2Q7oE"
+          echo "Render deploy triggered"
 
   deploy-frontend:
     runs-on: ubuntu-latest
