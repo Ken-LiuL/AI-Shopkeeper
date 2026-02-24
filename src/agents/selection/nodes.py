@@ -1,4 +1,9 @@
-"""Selection Agent 各节点实现"""
+"""Selection Agent 各节点实现
+
+融合数据:
+  - 退款明细 (qnh_refunds) — 退款率高的 SKU 标记风险
+  - 评价NLP (qnh_review_analysis) — 差评关键词作为选品负面信号
+"""
 
 from __future__ import annotations
 
@@ -32,13 +37,68 @@ from .state import SelectionState
 logger = logging.getLogger(__name__)
 
 
+async def _get_sku_refund_risk(pool) -> list[dict]:
+    """获取高退款率SKU列表作为选品负面信号。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT sku_id, sku_name, refund_reason,
+                   COUNT(*) as refund_count,
+                   SUM(refund_amount) as total_refund
+            FROM qnh_refunds
+            WHERE refund_time >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY sku_id, sku_name, refund_reason
+            HAVING COUNT(*) >= 2
+            ORDER BY refund_count DESC
+            LIMIT 30
+            """
+        )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to get refund risk data: {e}")
+        return []
+
+
+async def _get_negative_review_signals(pool) -> list[dict]:
+    """获取差评关键词和问题类别作为选品负面信号。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT r.extra::json->>'skuId' as sku_id,
+                   array_agg(DISTINCT a.summary) as issues,
+                   array_agg(DISTINCT kw) as keywords,
+                   COUNT(*) as negative_count
+            FROM qnh_review_analysis a
+            JOIN qnh_reviews r ON a.review_id = r.review_id,
+                 jsonb_array_elements_text(a.keywords::jsonb) AS kw
+            WHERE a.sentiment = 'negative'
+              AND r.review_time >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY r.extra::json->>'skuId'
+            HAVING COUNT(*) >= 2
+            ORDER BY negative_count DESC
+            LIMIT 20
+            """
+        )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to get negative review signals: {e}")
+        return []
+
+
 # =============================================================================
 # Phase 1: 数据采集（并行）
 # =============================================================================
 
 
 async def fetch_data(state: SelectionState) -> dict:
-    """采集所有原始数据（通过 Skills 层）"""
+    """采集所有原始数据（通过 Skills 层）
+
+    融合: 退款风险SKU + 差评关键词 作为选品负面信号。
+    """
     # NOTE: 实际实现中通过 ActionBook / Database Skills 获取数据
     # 这里预留接口，数据已由上层注入到 state 中
     now = datetime.now()
@@ -52,9 +112,25 @@ async def fetch_data(state: SelectionState) -> dict:
     else:
         season = "冬季"
 
+    # 获取退款和差评风险数据
+    pool = state.get("db_pool")
+    refund_risks = await _get_sku_refund_risk(pool)
+    negative_signals = await _get_negative_review_signals(pool)
+
+    risk_context = ""
+    if refund_risks:
+        risk_context += "\n高退款率SKU（选品应避免类似商品或标记风险）:\n" + json.dumps(
+            refund_risks, ensure_ascii=False, default=str
+        )
+    if negative_signals:
+        risk_context += "\n差评高频关键词（选品负面信号）:\n" + json.dumps(
+            negative_signals, ensure_ascii=False, default=str
+        )
+
     return {
         "current_date": now.strftime("%Y-%m-%d"),
         "current_season": season,
+        "refund_risk_data": risk_context,
         "errors": [],
     }
 
@@ -91,10 +167,11 @@ async def competitor_analysis_node(state: SelectionState) -> dict:
 
 
 async def inventory_analysis_node(state: SelectionState) -> dict:
-    """Inventory Sub-Agent: 库存分析"""
+    """Inventory Sub-Agent: 库存分析（融合退款+差评风险信号）"""
     try:
+        risk_data = state.get("refund_risk_data", "")
         prompt = inventory_analysis_prompt(
-            products=state.get("raw_our_products", "暂无数据"),
+            products=state.get("raw_our_products", "暂无数据") + risk_data,
             sales_data=state.get("raw_sales_data", "暂无数据"),
         )
         result = await call_tool(prompt, INVENTORY_ANALYSIS_TOOL, model=MODEL_PRO)

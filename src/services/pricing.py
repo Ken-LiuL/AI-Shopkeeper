@@ -39,13 +39,50 @@ class PricingSuggestion:
 
 
 class PricingService:
-    """动态定价服务"""
+    """动态定价服务
+
+    融合财务结算数据:
+      - 定价建议考虑真实平台扣费和配送费
+      - 毛利计算用实际结算数据（佣金率、配送费、活动分摊）
+    """
 
     MARGIN_FLOOR = 0.20  # 最低毛利率20%
     OVERPRICED_THRESHOLD = 0.15  # 高于竞品均价15%认为偏高
 
+    async def _get_platform_fee_rate(self, pool, channel: str = "meituan") -> dict:
+        """从结算数据计算实际平台费率。"""
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    AVG(CASE WHEN gross_income > 0 THEN platform_fee / gross_income ELSE 0 END) as avg_platform_rate,
+                    AVG(CASE WHEN gross_income > 0 THEN commission_fee / gross_income ELSE 0 END) as avg_commission_rate,
+                    AVG(CASE WHEN order_count > 0 THEN delivery_fee / order_count ELSE 0 END) as avg_delivery_per_order,
+                    AVG(CASE WHEN gross_income > 0 THEN promotion_fee / gross_income ELSE 0 END) as avg_promotion_rate
+                FROM qnh_settlements
+                WHERE channel = $1
+                  AND period_end >= CURRENT_DATE - INTERVAL '90 days'
+                """,
+                channel,
+            )
+            if row:
+                return {
+                    "platform_rate": float(row["avg_platform_rate"] or 0),
+                    "commission_rate": float(row["avg_commission_rate"] or 0),
+                    "delivery_per_order": float(row["avg_delivery_per_order"] or 0),
+                    "promotion_rate": float(row["avg_promotion_rate"] or 0),
+                }
+        except Exception as e:
+            logger.warning(f"Failed to get platform fee rates: {e}")
+        return {
+            "platform_rate": 0.05,
+            "commission_rate": 0.03,
+            "delivery_per_order": 5.0,
+            "promotion_rate": 0.02,
+        }
+
     async def analyze_pricing(self, product_id: str) -> PricingAnalysis:
-        """单品价格分析"""
+        """单品价格分析（融合实际结算费率）"""
         pool = pg.get_pool()
 
         product = await pool.fetchrow(
@@ -57,7 +94,14 @@ class PricingService:
 
         price = float(product["retail_price"] or 0)
         cost = float(product["cost_price"] or 0)
-        margin = (price - cost) / price if price > 0 else 0
+
+        # 使用实际结算费率计算真实毛利
+        fee_rates = await self._get_platform_fee_rate(pool)
+        total_fee_rate = (
+            fee_rates["platform_rate"] + fee_rates["commission_rate"] + fee_rates["promotion_rate"]
+        )
+        real_cost = cost + price * total_fee_rate + fee_rates["delivery_per_order"]
+        margin = (price - real_cost) / price if price > 0 else 0
 
         # 竞品价格
         comp_rows = await pool.fetch(

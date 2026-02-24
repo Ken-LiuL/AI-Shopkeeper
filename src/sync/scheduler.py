@@ -20,6 +20,13 @@ SYNC_SCHEDULE: dict[str, dict[str, str]] = {
     "traffic": {"incremental": "every_1h"},
     "reviews": {"incremental": "every_1h"},
     "competitors": {"full": "10:00"},
+    # ── 新增同步器 ──
+    "promotions": {"incremental": "every_6h"},
+    "customers": {"full": "03:00"},  # 每天凌晨3点全量
+    "refunds": {"incremental": "every_4h"},
+    "finance": {"full": "02:00"},  # 每天凌晨2点全量
+    "im_history": {"incremental": "every_30min"},
+    "channels": {"incremental": "every_12h"},
 }
 
 # Interval parsing

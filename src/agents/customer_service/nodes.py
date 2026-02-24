@@ -1,4 +1,9 @@
-"""CustomerService Agent 各节点实现"""
+"""CustomerService Agent 各节点实现
+
+融合数据:
+  - IM历史 (qnh_im_sessions/messages) — 检索类似问题作为few-shot examples
+  - 客户画像 (qnh_customers) — 高价值客户优先处理、语气更重视
+"""
 
 from __future__ import annotations
 
@@ -16,6 +21,58 @@ from ..tools import INTENT_TOOL, REPLY_TOOL
 from .state import CustomerServiceState
 
 logger = logging.getLogger(__name__)
+
+
+async def _search_im_history(pool, query: str, limit: int = 3) -> list[dict]:
+    """从IM历史中检索类似问题的对话。
+
+    TODO: 接入向量检索(pgvector)实现语义匹配。当前用关键词模糊匹配。
+    """
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT s.session_id, s.customer_name,
+                   array_agg(json_build_object('role', m.role, 'content', m.content)
+                             ORDER BY m.msg_time) as messages
+            FROM qnh_im_sessions s
+            JOIN qnh_im_messages m ON s.session_id = m.session_id
+            WHERE m.content ILIKE '%' || $1 || '%'
+              AND m.role = 'customer'
+            GROUP BY s.session_id, s.customer_name
+            ORDER BY s.started_at DESC
+            LIMIT $2
+            """,
+            query[:20],  # 取查询前20字符做模糊匹配
+            limit,
+        )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"IM history search failed: {e}")
+        return []
+
+
+async def _get_customer_profile(pool, phone_tail: str | None = None) -> dict | None:
+    """查询客户画像信息（消费排行、价值等级）。"""
+    if not pool or not phone_tail:
+        return None
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT customer_id, nickname, total_amount, order_count,
+                   repurchase_rate, tags
+            FROM qnh_customers
+            WHERE phone_tail = $1
+            ORDER BY total_amount DESC
+            LIMIT 1
+            """,
+            phone_tail,
+        )
+        return dict(row) if row else None
+    except Exception as e:
+        logger.warning(f"Customer profile lookup failed: {e}")
+        return None
 
 
 async def intent_recognition_node(state: CustomerServiceState) -> dict:
@@ -230,7 +287,12 @@ async def graphrag_node(state: CustomerServiceState) -> dict:
 
 
 async def reply_generation_node(state: CustomerServiceState) -> dict:
-    """Reply Sub-Agent: 生成回复（使用 Sonnet）"""
+    """Reply Sub-Agent: 生成回复（使用 Sonnet）
+
+    融合:
+      - IM历史中类似问题作为 few-shot examples
+      - 客户画像：高价值客户语气更重视
+    """
     # 如果有 FAQ 回复，直接返回
     faq = state.get("faq_reply")
     if faq:
@@ -246,12 +308,43 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
 
     try:
         enriched = state.get("enriched_results", [])
+        pool = state.get("db_pool")
+        user_message = state["user_message"]
+
+        # 检索IM历史中的类似问题
+        im_examples = await _search_im_history(pool, user_message)
+        im_context = ""
+        if im_examples:
+            im_context = "\n\n# 历史类似对话（参考回答风格和内容）:\n" + json.dumps(
+                im_examples, ensure_ascii=False, default=str
+            )
+
+        # 查询客户画像
+        phone_tail = state.get("customer_phone_tail")
+        customer = await _get_customer_profile(pool, phone_tail)
+        customer_context = ""
+        if customer:
+            amount = float(customer.get("total_amount", 0))
+            if amount >= 1000:
+                customer_context = (
+                    f"\n\n# 客户画像: 高价值客户（累计消费{amount:.0f}元，"
+                    f"下单{customer.get('order_count', 0)}次）。"
+                    f"请用更尊重、更重视的语气回复，优先处理。"
+                )
+            elif amount >= 300:
+                customer_context = f"\n\n# 客户画像: 回头客（累计消费{amount:.0f}元）。"
+
         prompt = reply_prompt(
-            user_message=state["user_message"],
+            user_message=user_message + im_context + customer_context,
             intent=json.dumps(state.get("intent", {}), ensure_ascii=False),
             retrieved_products_with_graph=json.dumps(enriched, ensure_ascii=False),
         )
         result = await call_tool(prompt, REPLY_TOOL, model=MODEL_SONNET)
+
+        # 高价值客户标记需要人工审核以确保服务质量
+        if customer and float(customer.get("total_amount", 0)) >= 2000:
+            result["vip_customer"] = True
+
         return {"reply": result}
     except Exception as e:
         logger.error(f"Reply generation failed: {e}")
