@@ -3,15 +3,15 @@ FROM python:3.11-slim AS builder
 
 WORKDIR /app
 COPY pyproject.toml .
-# Install without neo4j to keep image light for Railway
-RUN pip install --no-cache-dir --prefix=/install . \
-    && pip install --no-cache-dir --prefix=/install pgvector psycopg2-binary
+# Install with CPU-only PyTorch (avoid 5GB CUDA wheels)
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir . pgvector psycopg2-binary
 
 # ---- runtime stage ----
 FROM python:3.11-slim
 
 WORKDIR /app
-COPY --from=builder /install /usr/local
+COPY --from=builder /usr/local /usr/local
 COPY src/ src/
 COPY config/ config/
 COPY migrations/ migrations/
