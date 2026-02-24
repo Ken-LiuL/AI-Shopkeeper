@@ -1,4 +1,12 @@
-"""智能日报推送服务 — 每日22:00自动生成经营日报并推送给店主。"""
+"""智能日报推送服务 — 每日22:00自动生成经营日报并推送给店主。
+
+融合数据:
+  - 门店 KPI 概览 (qnh_store_metrics_raw) — 核心指标汇总+门店排行
+  - 热销商品排行 (qnh_products_raw) — Top 10 热销品
+  - 消费排行 (qnh_customers_raw) — 高价值客户 Top 10
+  - 渠道分布 (qnh_traffic_channels_raw) — 各渠道占比变化
+  - 趋势数据 (qnh_traffic_raw) — 趋势图数据
+"""
 
 from __future__ import annotations
 
@@ -9,6 +17,7 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.db import postgres as pg
+from src.services.raw_data import fetch_latest_raw
 from src.skills.notifier import NotifierSkill
 
 logger = logging.getLogger(__name__)
@@ -43,6 +52,13 @@ class DailyReport:
     todo_items: list[str] = field(default_factory=list)
     # 竞品动态
     competitor_changes: list[dict[str, Any]] = field(default_factory=list)
+    # 牵牛花数据 — 核心 KPI、热销商品、消费排行、渠道分布、趋势数据
+    store_kpi: dict[str, Any] = field(default_factory=dict)
+    store_ranking: list[dict[str, Any]] = field(default_factory=list)
+    hotsale_top10: list[dict[str, Any]] = field(default_factory=list)
+    customer_top10: list[dict[str, Any]] = field(default_factory=list)
+    channel_distribution: list[dict[str, Any]] = field(default_factory=list)
+    trend_data: list[dict[str, Any]] = field(default_factory=list)
 
 
 class DailyReportService:
@@ -141,6 +157,9 @@ class DailyReportService:
         report.alerts_pending = sum(1 for r in alert_rows if r["status"] == "pending")
         report.alert_details = [dict(r) for r in alert_rows[:5]]
 
+        # ── 牵牛花原始数据融合 ──
+        await self._enrich_from_raw_tables(pool, report)
+
         # ── 明日待办（AI生成） ──
         report.todo_items = await self._generate_todo(pool, report_date, report)
 
@@ -195,6 +214,49 @@ class DailyReportService:
                     f"  {i}. {p['name']}  库存{p.get('stock', 0)}  7日仅售{p.get('daily_sales', 0)}"
                 )
 
+        # ── 牵牛花核心 KPI ──
+        if report.store_kpi:
+            kpi = report.store_kpi
+            lines.append("")
+            lines.append("📊 核心 KPI（牵牛花）:")
+            for label, key in [
+                ("有效订单金额", "validOrderAmount"),
+                ("有效订单数", "validOrderCount"),
+                ("客单价", "customerPrice"),
+                ("配送费", "deliveryFee"),
+            ]:
+                val = kpi.get(key, kpi.get(label))
+                if val is not None:
+                    lines.append(f"  • {label}: {val}")
+
+        # ── 热销商品 Top 10 ──
+        if report.hotsale_top10:
+            lines.append("")
+            lines.append("🏆 热销商品 Top 10:")
+            for i, p in enumerate(report.hotsale_top10, 1):
+                name = p.get("productName", p.get("name", "未知"))
+                sales = p.get("salesAmount", p.get("saleAmount", ""))
+                qty = p.get("salesCount", p.get("saleCount", ""))
+                lines.append(f"  {i}. {name}  销额{sales}  销量{qty}")
+
+        # ── 消费排行 Top 10 ──
+        if report.customer_top10:
+            lines.append("")
+            lines.append("👑 高价值客户 Top 10:")
+            for i, c in enumerate(report.customer_top10[:5], 1):
+                name = c.get("customerName", c.get("nickname", "匿名"))
+                amount = c.get("consumeAmount", c.get("totalAmount", ""))
+                lines.append(f"  {i}. {name}  消费{amount}")
+
+        # ── 渠道分布 ──
+        if report.channel_distribution:
+            lines.append("")
+            lines.append("📡 渠道分布:")
+            for ch in report.channel_distribution:
+                name = ch.get("channelName", ch.get("channel", "未知"))
+                ratio = ch.get("orderRatio", ch.get("ratio", ""))
+                lines.append(f"  • {name}: {ratio}")
+
         lines.append("")
         lines.append(
             f"💬 客服: 咨询{report.cs_total}次  AI处理{report.cs_ai_ratio:.0%}  转人工{report.cs_human_transfer}"
@@ -216,6 +278,40 @@ class DailyReportService:
         return await notifier.send_text("\n".join(lines))
 
     # ── 私有方法 ──
+
+    async def _enrich_from_raw_tables(self, pool, report: DailyReport) -> None:
+        """从牵牛花 raw 表读取数据，填充日报的扩展字段。"""
+        # 1. 门店 KPI 概览（来自 qnh_store_metrics_raw）
+        metrics = await fetch_latest_raw(pool, "qnh_store_metrics_raw")
+        if metrics:
+            if isinstance(metrics, list):
+                # 多门店: 第一条当汇总，全部作为门店排行
+                report.store_kpi = metrics[0] if metrics else {}
+                report.store_ranking = metrics
+            else:
+                report.store_kpi = metrics
+
+        # 2. 热销商品 Top 10（来自 qnh_products_raw）
+        products = await fetch_latest_raw(pool, "qnh_products_raw")
+        if products:
+            items = products if isinstance(products, list) else [products]
+            report.hotsale_top10 = items[:10]
+
+        # 3. 消费排行 Top 10（来自 qnh_customers_raw）
+        customers = await fetch_latest_raw(pool, "qnh_customers_raw")
+        if customers:
+            items = customers if isinstance(customers, list) else [customers]
+            report.customer_top10 = items[:10]
+
+        # 4. 渠道分布（来自 qnh_traffic_channels_raw）
+        channels = await fetch_latest_raw(pool, "qnh_traffic_channels_raw")
+        if channels:
+            report.channel_distribution = channels if isinstance(channels, list) else [channels]
+
+        # 5. 趋势数据（来自 qnh_traffic_raw，可供前端画趋势图）
+        trend = await fetch_latest_raw(pool, "qnh_traffic_raw")
+        if trend:
+            report.trend_data = trend if isinstance(trend, list) else [trend]
 
     async def _get_day_stats(self, pool, d: date) -> dict:
         row = await pool.fetchrow(

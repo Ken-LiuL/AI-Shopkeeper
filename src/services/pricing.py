@@ -1,4 +1,10 @@
-"""动态定价建议服务 — 基于竞品价格和毛利分析生成调价建议。"""
+"""动态定价建议服务 — 基于竞品价格和毛利分析生成调价建议。
+
+融合数据:
+  - 结算数据 (qnh_settlements) — 实际平台扣费和配送费
+  - 渠道分布 (qnh_traffic_channels_raw) — 高流量渠道薄利多销策略
+  - 门店KPI (qnh_store_metrics_raw) — 客单价/支付客单价参考
+"""
 
 from __future__ import annotations
 
@@ -7,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.db import postgres as pg
+from src.services.raw_data import fetch_latest_raw
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +88,48 @@ class PricingService:
             "promotion_rate": 0.02,
         }
 
+    async def _get_channel_distribution(self, pool) -> dict:
+        """从 qnh_traffic_channels_raw 读取各渠道流量占比。
+
+        高流量渠道可采用薄利多销策略，低流量渠道维持正常利润。
+        """
+        data = await fetch_latest_raw(pool, "qnh_traffic_channels_raw")
+        if not data:
+            return {}
+        channels = data if isinstance(data, list) else [data]
+        result = {}
+        for ch in channels:
+            name = ch.get("channelName", ch.get("channel", ""))
+            ratio = ch.get("orderRatio", ch.get("ratio", 0))
+            if name:
+                try:
+                    result[name] = (
+                        float(str(ratio).replace("%", "")) / 100
+                        if "%" in str(ratio)
+                        else float(ratio)
+                    )
+                except (ValueError, TypeError):
+                    result[name] = 0
+        return result
+
+    async def _get_industry_avg_price(self, pool) -> float:
+        """从 qnh_store_metrics_raw 读取客单价作为行业参考。
+
+        定价时可参考当前客单价水平，避免定价偏离市场。
+        """
+        data = await fetch_latest_raw(pool, "qnh_store_metrics_raw")
+        if not data:
+            return 0
+        item = data[0] if isinstance(data, list) else data
+        for key in ("customerPrice", "payCustomerPrice", "客单价"):
+            val = item.get(key)
+            if val is not None:
+                try:
+                    return float(str(val).replace("¥", "").replace(",", ""))
+                except (ValueError, TypeError):
+                    continue
+        return 0
+
     async def analyze_pricing(self, product_id: str) -> PricingAnalysis:
         """单品价格分析（融合实际结算费率）"""
         pool = pg.get_pool()
@@ -119,11 +168,24 @@ class PricingService:
         # 价格弹性估算（基于历史调价记录）
         elasticity = await self._estimate_elasticity(pool, product_id)
 
-        # 推荐
+        # 新增: 渠道分布分析 — 高流量渠道适当降低毛利要求
+        channel_dist = await self._get_channel_distribution(pool)
+        # 新增: 行业客单价参考（可用于日志/未来扩展）
+        _industry_avg = await self._get_industry_avg_price(pool)
+
+        # 推荐（融合渠道和行业数据）
         if comp_prices and price > comp_avg * (1 + self.OVERPRICED_THRESHOLD):
             rec = "lower"
         elif margin < self.MARGIN_FLOOR:
-            rec = "raise"
+            # 如果在高流量渠道占比大，可以适当降低毛利要求
+            top_channel_ratio = max(channel_dist.values()) if channel_dist else 0
+            adjusted_floor = (
+                self.MARGIN_FLOOR * 0.8 if top_channel_ratio > 0.4 else self.MARGIN_FLOOR
+            )
+            if margin < adjusted_floor:
+                rec = "raise"
+            else:
+                rec = "hold"  # 高流量渠道薄利多销可接受
         else:
             # 检查销量趋势
             trend = await self._sales_trend(pool, product_id)

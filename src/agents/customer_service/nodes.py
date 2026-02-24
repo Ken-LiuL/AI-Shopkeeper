@@ -3,12 +3,16 @@
 融合数据:
   - IM历史 (qnh_im_sessions/messages) — 检索类似问题作为few-shot examples
   - 客户画像 (qnh_customers) — 高价值客户优先处理、语气更重视
+  - 待处理订单 (qnh_orders_raw) — 客服回复时带上订单状态上下文
+  - 热销商品 (qnh_products_raw) — 客服推荐时有数据支撑
 """
 
 from __future__ import annotations
 
 import json
 import logging
+
+from src.services.raw_data import fetch_latest_raw
 
 from ..llm import MODEL_FLASH, MODEL_SONNET, call_tool
 from ..prompts.customer_service import (
@@ -319,6 +323,31 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
                 im_examples, ensure_ascii=False, default=str
             )
 
+        # 新增: 获取待处理订单上下文（来自 qnh_orders_raw）
+        orders_data = await fetch_latest_raw(pool, "qnh_orders_raw")
+        order_context = ""
+        if orders_data:
+            # 提取待处理订单数等关键信息
+            if isinstance(orders_data, dict):
+                pending = orders_data.get("pendingCount", orders_data.get("待处理", 0))
+                if pending:
+                    order_context = f"\n\n# 当前待处理订单数: {pending}"
+            elif isinstance(orders_data, list):
+                order_context = f"\n\n# 当前待处理订单: {len(orders_data)} 条"
+
+        # 新增: 获取热销商品信息（来自 qnh_products_raw，客服推荐用）
+        hotsale_data = await fetch_latest_raw(pool, "qnh_products_raw")
+        hotsale_context = ""
+        if hotsale_data:
+            top_items = hotsale_data[:5] if isinstance(hotsale_data, list) else [hotsale_data]
+            names = [
+                item.get("productName", item.get("name", ""))
+                for item in top_items
+                if item.get("productName") or item.get("name")
+            ]
+            if names:
+                hotsale_context = f"\n\n# 当前热销商品（可推荐给客户）: {', '.join(names[:5])}"
+
         # 查询客户画像
         phone_tail = state.get("customer_phone_tail")
         customer = await _get_customer_profile(pool, phone_tail)
@@ -335,7 +364,11 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
                 customer_context = f"\n\n# 客户画像: 回头客（累计消费{amount:.0f}元）。"
 
         prompt = reply_prompt(
-            user_message=user_message + im_context + customer_context,
+            user_message=user_message
+            + im_context
+            + customer_context
+            + order_context
+            + hotsale_context,
             intent=json.dumps(state.get("intent", {}), ensure_ascii=False),
             retrieved_products_with_graph=json.dumps(enriched, ensure_ascii=False),
         )

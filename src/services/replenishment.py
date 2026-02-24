@@ -1,4 +1,9 @@
-"""智能补货建议服务 — 基于安全库存模型生成补货建议和采购单。"""
+"""智能补货建议服务 — 基于安全库存模型生成补货建议和采购单。
+
+融合数据:
+  - 库存数据 (qnh_inventory_raw) — 实时库存状态，低库存商品自动建议补货
+  - 热销商品 (qnh_products_raw) — 热销但库存低 → 紧急补货优先
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from src.db import postgres as pg
+from src.services.raw_data import fetch_latest_raw
 
 logger = logging.getLogger(__name__)
 
@@ -134,8 +140,50 @@ class ReplenishmentService:
             except Exception as e:
                 logger.warning(f"Failed to calculate safety stock for {p['product_id']}: {e}")
 
-        # 按紧急程度排序（库存/安全库存比例）
-        suggestions.sort(key=lambda x: x.current_stock / max(x.safety_stock, 1))
+        # 新增: 从 qnh_inventory_raw 补充实时库存数据
+        inventory_raw = await fetch_latest_raw(pool, "qnh_inventory_raw")
+        if inventory_raw:
+            raw_items = inventory_raw if isinstance(inventory_raw, list) else [inventory_raw]
+            # 检查 raw 中有缺货但本地 products 表没覆盖到的
+            existing_pids = {s.product_id for s in suggestions}
+            for item in raw_items:
+                stock = int(
+                    item.get("stock", item.get("inventory", item.get("availableStock", 0))) or 0
+                )
+                pid = item.get("productId", item.get("skuId", ""))
+                name = item.get("productName", item.get("skuName", ""))
+                if pid and pid not in existing_pids and stock <= 0:
+                    suggestions.append(
+                        ReplenishmentItem(
+                            product_id=pid,
+                            product_name=name,
+                            current_stock=stock,
+                            safety_stock=10,  # 默认安全库存
+                            suggested_qty=15,
+                            cost_price=0,
+                            estimated_cost=0,
+                            supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={name}",
+                        )
+                    )
+
+        # 新增: 热销+库存交叉 — 热销但库存低优先级提升
+        hotsale_raw = await fetch_latest_raw(pool, "qnh_products_raw")
+        hotsale_pids = set()
+        if hotsale_raw:
+            items = hotsale_raw if isinstance(hotsale_raw, list) else [hotsale_raw]
+            hotsale_pids = {
+                item.get("productId", item.get("skuId", ""))
+                for item in items[:20]
+                if item.get("productId") or item.get("skuId")
+            }
+
+        # 按紧急程度排序：热销且库存低的排最前面
+        def sort_key(x: ReplenishmentItem) -> tuple:
+            is_hotsale = x.product_id in hotsale_pids
+            ratio = x.current_stock / max(x.safety_stock, 1)
+            return (0 if is_hotsale else 1, ratio)
+
+        suggestions.sort(key=sort_key)
         return suggestions
 
     async def generate_purchase_order(self, items: list[dict]) -> PurchaseOrder:

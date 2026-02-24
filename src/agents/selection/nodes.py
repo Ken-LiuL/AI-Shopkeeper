@@ -3,6 +3,9 @@
 融合数据:
   - 退款明细 (qnh_refunds) — 退款率高的 SKU 标记风险
   - 评价NLP (qnh_review_analysis) — 差评关键词作为选品负面信号
+  - 热销商品排行 (qnh_products_raw) — 识别增长趋势商品，推荐加大库存
+  - 消费排行 (qnh_customers_raw) — 高复购客户偏好商品洞察
+  - 渠道分布 (qnh_traffic_channels_raw) — 不同渠道热销品差异分析
 """
 
 from __future__ import annotations
@@ -11,6 +14,8 @@ import json
 import logging
 from datetime import datetime
 from typing import Any
+
+from src.services.raw_data import fetch_latest_raw
 
 from ..llm import MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.selection import (
@@ -127,10 +132,53 @@ async def fetch_data(state: SelectionState) -> dict:
             negative_signals, ensure_ascii=False, default=str
         )
 
+    # 新增: 从 raw 表读取热销商品、消费排行、渠道分布
+    hotsale_data = await fetch_latest_raw(pool, "qnh_products_raw")
+    customer_rank_data = await fetch_latest_raw(pool, "qnh_customers_raw")
+    channel_data = await fetch_latest_raw(pool, "qnh_traffic_channels_raw")
+
+    hotsale_context = ""
+    if hotsale_data:
+        hotsale_context = (
+            "\n热销商品排行（来自 qnh_products_raw，识别增长趋势商品）:\n"
+            + json.dumps(
+                hotsale_data if isinstance(hotsale_data, list) else [hotsale_data],
+                ensure_ascii=False,
+                default=str,
+            )[:3000]
+        )  # 截断防止 prompt 过长
+
+    customer_context = ""
+    if customer_rank_data:
+        customer_context = (
+            "\n消费排行（来自 qnh_customers_raw，高复购客户偏好）:\n"
+            + json.dumps(
+                customer_rank_data
+                if isinstance(customer_rank_data, list)
+                else [customer_rank_data],
+                ensure_ascii=False,
+                default=str,
+            )[:3000]
+        )
+
+    channel_context = ""
+    if channel_data:
+        channel_context = (
+            "\n渠道分布（来自 qnh_traffic_channels_raw，不同渠道热销品差异）:\n"
+            + json.dumps(
+                channel_data if isinstance(channel_data, list) else [channel_data],
+                ensure_ascii=False,
+                default=str,
+            )[:2000]
+        )
+
     return {
         "current_date": now.strftime("%Y-%m-%d"),
         "current_season": season,
         "refund_risk_data": risk_context,
+        "hotsale_context": hotsale_context,
+        "customer_rank_context": customer_context,
+        "channel_context": channel_context,
         "errors": [],
     }
 
@@ -138,9 +186,15 @@ async def fetch_data(state: SelectionState) -> dict:
 async def market_analysis_node(state: SelectionState) -> dict:
     """Market Sub-Agent: 市场热点分析"""
     try:
+        # 融合热销排行和渠道数据到市场分析
+        extra_market_data = (
+            state.get("hotsale_context", "")
+            + state.get("customer_rank_context", "")
+            + state.get("channel_context", "")
+        )
         prompt = market_analysis_prompt(
             keywords_data=state.get("raw_keywords_data", "暂无数据"),
-            products_data=state.get("raw_products_data", "暂无数据"),
+            products_data=state.get("raw_products_data", "暂无数据") + extra_market_data,
             categories=", ".join(state.get("categories", ["医疗器械"])),
         )
         result = await call_tool(prompt, MARKET_ANALYSIS_TOOL, model=MODEL_PRO)
