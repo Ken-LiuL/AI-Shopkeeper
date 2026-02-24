@@ -1,4 +1,4 @@
-"""Inventory Syncer — real-time stock levels and stock flow."""
+"""Inventory Syncer — stock levels via goldengateway."""
 
 from __future__ import annotations
 
@@ -14,17 +14,17 @@ logger = logging.getLogger(__name__)
 
 
 class InventorySyncer(BaseSyncer):
-    """Sync inventory data from QNH.
+    """Sync inventory data from QNH via goldengateway.
 
-    Data source: #/stock/query-new, #/stock/flow
-    API: POST /qnh-gw3/api/stock/query (paginated)
+    API: POST /goldengateway/empower/generic/table/query (module=stockDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "inventory"
     full_sync_interval = timedelta(hours=6)
 
-    STOCK_QUERY_API = "/qnh-gw3/api/stock/query"
-    STOCK_FLOW_API = "/qnh-gw3/api/stock/flow/list"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_STOCK = "stockDetail"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: snapshot of all current stock levels."""
@@ -34,14 +34,13 @@ class InventorySyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": page_size,
-                }
-                resp = await self.client.post(self.STOCK_QUERY_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_STOCK,
+                    page=page,
+                    page_size=page_size,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
@@ -70,59 +69,37 @@ class InventorySyncer(BaseSyncer):
             )
 
     async def incremental_sync(self, since: datetime) -> SyncResult:
-        """Incremental: fetch stock flow since last sync, then update affected items."""
+        """Incremental: fetch stock changes since last sync."""
         total = 0
         page = 1
 
         try:
-            affected_skus: set[str] = set()
-
-            # First get flow records to identify changed items
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 100,
-                    "startTime": since.strftime("%Y-%m-%d %H:%M:%S"),
-                    "endTime": datetime.now(CST).strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                resp = await self.client.post(self.STOCK_FLOW_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_STOCK,
+                    start_date=since.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=100,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
 
-                for item in items:
-                    sku_id = str(item.get("skuId", item.get("goodsId", "")))
-                    if sku_id:
-                        affected_skus.add(sku_id)
+                await self._upsert_inventory(items)
+                total += len(items)
 
                 total_pages = data.get("totalPage", data.get("pages", 1))
                 if page >= total_pages:
                     break
                 page += 1
 
-            # Then fetch current stock for affected SKUs
-            if affected_skus:
-                for sku_batch in _chunks(list(affected_skus), 50):
-                    payload = {
-                        "tenantId": self.client.tenant_id,
-                        "skuIds": sku_batch,
-                        "pageNum": 1,
-                        "pageSize": len(sku_batch),
-                    }
-                    resp = await self.client.post(self.STOCK_QUERY_API, data=payload)
-                    items = resp.get("data", {}).get("list", [])
-                    await self._upsert_inventory(items)
-                    total += len(items)
-
             return SyncResult(
                 syncer_name=self.name,
                 mode=SyncMode.INCREMENTAL,
                 success=True,
                 records_synced=total,
-                details={"affected_skus": len(affected_skus)},
             )
         except Exception as e:
             return SyncResult(
@@ -191,8 +168,3 @@ def _safe_float(val: Any) -> float | None:
         return float(val)
     except (ValueError, TypeError):
         return None
-
-
-def _chunks(lst: list, n: int):
-    for i in range(0, len(lst), n):
-        yield lst[i : i + n]

@@ -1,4 +1,4 @@
-"""Traffic Syncer — impressions, clicks, conversion by product."""
+"""Traffic Syncer — channel distribution via goldengateway."""
 
 from __future__ import annotations
 
@@ -13,16 +13,19 @@ logger = logging.getLogger(__name__)
 
 
 class TrafficSyncer(BaseSyncer):
-    """Sync product traffic data from QNH.
+    """Sync product traffic data from QNH via goldengateway.
 
-    Data source: #/data → 商品流量分析
-    API: POST /qnh-gw3/api/data/traffic/product (date + channel)
+    APIs:
+      - POST /goldengateway/empower/homepage/channelDistributeList — 渠道分布
+      - POST /goldengateway/empower/generic/table/query (module=trafficDetail) — 商品流量
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "traffic"
     full_sync_interval = timedelta(hours=20)
 
-    TRAFFIC_API = "/qnh-gw3/api/data/traffic/product"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_TRAFFIC = "trafficDetail"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 7 days of traffic data."""
@@ -47,38 +50,34 @@ class TrafficSyncer(BaseSyncer):
             while current <= end_date:
                 date_str = current.strftime("%Y-%m-%d")
 
-                for channel in [None, "meituan", "eleme", "jddj"]:
-                    page = 1
-                    while True:
-                        payload = {
-                            "tenantId": self.client.tenant_id,
-                            "date": date_str,
-                            "dateType": "day",
-                            "pageNum": page,
-                            "pageSize": 100,
-                            "storeIds": self.client.poi_ids,
-                        }
-                        if channel:
-                            payload["channel"] = channel
+                page = 1
+                while True:
+                    try:
+                        # 使用 goldengateway 通用查询获取商品流量
+                        # NOTE: module 和参数格式为推断，需抓包验证
+                        resp = await self.client.golden_query(
+                            module=self.MODULE_TRAFFIC,
+                            start_date=date_str,
+                            end_date=date_str,
+                            page=page,
+                            page_size=100,
+                        )
+                        data = resp.get("data", {})
+                        items = data.get("list", data.get("rows", data.get("records", [])))
 
-                        try:
-                            resp = await self.client.post(self.TRAFFIC_API, data=payload)
-                            data = resp.get("data", {})
-                            items = data.get("list", data.get("records", []))
-
-                            if not items:
-                                break
-
-                            await self._upsert_traffic(current, channel, items)
-                            total += len(items)
-
-                            total_pages = data.get("totalPage", data.get("pages", 1))
-                            if page >= total_pages:
-                                break
-                            page += 1
-                        except Exception as e:
-                            self.logger.warning(f"Traffic {date_str} ch={channel} p={page}: {e}")
+                        if not items:
                             break
+
+                        await self._upsert_traffic(current, None, items)
+                        total += len(items)
+
+                        total_pages = data.get("totalPage", data.get("pages", 1))
+                        if page >= total_pages:
+                            break
+                        page += 1
+                    except Exception as e:
+                        self.logger.warning(f"Traffic {date_str} p={page}: {e}")
+                        break
 
                 current += timedelta(days=1)
 

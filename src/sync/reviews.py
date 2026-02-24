@@ -1,4 +1,4 @@
-"""Review Syncer — ratings, review content, replies."""
+"""Review Syncer — ratings, review content via goldengateway."""
 
 from __future__ import annotations
 
@@ -13,16 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class ReviewSyncer(BaseSyncer):
-    """Sync review data from QNH.
+    """Sync review data from QNH via goldengateway.
 
-    Data source: 评价 → 评价详情
-    API: POST /qnh-gw3/api/review/list (paginated, date filter)
+    API: POST /goldengateway/empower/generic/table/query (module=reviewDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "reviews"
     full_sync_interval = timedelta(hours=24)
 
-    REVIEW_LIST_API = "/qnh-gw3/api/review/list"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_REVIEW = "reviewDetail"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 90 days of reviews."""
@@ -40,17 +41,15 @@ class ReviewSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "startTime": start.strftime("%Y-%m-%d"),
-                    "endTime": end.strftime("%Y-%m-%d"),
-                    "storeIds": self.client.poi_ids,
-                }
-                resp = await self.client.post(self.REVIEW_LIST_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_REVIEW,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=50,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
@@ -99,7 +98,6 @@ class ReviewSyncer(BaseSyncer):
                 except Exception:
                     review_time = None
 
-            # Detect channel
             platform = str(item.get("platform", item.get("channel", ""))).lower()
             channel = "unknown"
             if "meituan" in platform or "美团" in platform:

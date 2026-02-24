@@ -1,6 +1,6 @@
-"""Customer Syncer — 客户/消费排行数据同步。
+"""Customer Syncer — 消费排行via goldengateway。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
+NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 class CustomerSyncer(BaseSyncer):
     """同步客户画像与消费排行数据。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/customer/ranking — 消费排行
-      - POST /qnh-gw3/api/customer/profile — 客户详情
+    API: POST /goldengateway/empower/generic/table/query (module=customerRank)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "customers"
     full_sync_interval = timedelta(hours=24)
 
-    RANKING_API = "/qnh-gw3/api/customer/ranking"
-    PROFILE_API = "/qnh-gw3/api/customer/profile"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_CUSTOMER = "customerRank"
 
     async def full_sync(self) -> SyncResult:
         return await self._sync_customers(SyncMode.FULL)
@@ -41,20 +40,19 @@ class CustomerSyncer(BaseSyncer):
 
         try:
             while True:
-                payload: dict[str, Any] = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "storeIds": self.client.poi_ids,
+                extra: dict[str, Any] = {
                     "sortBy": "totalAmount",
                     "sortOrder": "desc",
                 }
-                if since:
-                    payload["lastOrderAfter"] = since.strftime("%Y-%m-%d")
-
-                resp = await self.client.post(self.RANKING_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_CUSTOMER,
+                    start_date=since.strftime("%Y-%m-%d") if since else None,
+                    page=page,
+                    page_size=50,
+                    extra=extra,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break

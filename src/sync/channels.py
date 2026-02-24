@@ -1,6 +1,6 @@
-"""Channel Syncer — 渠道流量分布数据同步。
+"""Channel Syncer — 渠道流量分布via goldengateway。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
+NOTE: 参数格式为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .base import CST, BaseSyncer, SyncMode, SyncResult
+from .qnh_client import GOLDEN_CHANNEL_DIST
 
 logger = logging.getLogger(__name__)
 
@@ -18,14 +19,12 @@ logger = logging.getLogger(__name__)
 class ChannelSyncer(BaseSyncer):
     """同步渠道流量分布数据。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/traffic/channel — 渠道流量汇总
+    API: POST /goldengateway/empower/homepage/channelDistributeList
+    NOTE: 参数格式为推断，需根据实际抓包验证。
     """
 
     name = "channels"
     full_sync_interval = timedelta(hours=24)
-
-    CHANNEL_API = "/qnh-gw3/api/traffic/channel"
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -44,18 +43,23 @@ class ChannelSyncer(BaseSyncer):
             current = start
             while current <= end:
                 date_str = current.strftime("%Y-%m-%d")
+                # 使用 goldengateway 渠道分布接口
+                # NOTE: 参数格式为推断，需抓包验证
                 payload = {
                     "tenantId": self.client.tenant_id,
+                    "poiIds": self.client.poi_ids,
                     "date": date_str,
-                    "storeIds": self.client.poi_ids,
                 }
-                resp = await self.client.post(self.CHANNEL_API, data=payload)
-                data = resp.get("data", {})
-                channels = data.get("channels", data.get("list", []))
+                try:
+                    resp = await self.client.post(GOLDEN_CHANNEL_DIST, data=payload)
+                    data = resp.get("data", {})
+                    channels = data.get("channels", data.get("list", data.get("records", [])))
 
-                if channels:
-                    await self._upsert_channels(date_str, channels)
-                    total += len(channels)
+                    if channels:
+                        await self._upsert_channels(date_str, channels)
+                        total += len(channels)
+                except Exception as e:
+                    self.logger.warning(f"Channel data for {date_str}: {e}")
 
                 current += timedelta(days=1)
 

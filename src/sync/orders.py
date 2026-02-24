@@ -1,4 +1,4 @@
-"""Order Syncer — order list, amounts, status, item details."""
+"""Order Syncer — order data via goldengateway."""
 
 from __future__ import annotations
 
@@ -13,17 +13,17 @@ logger = logging.getLogger(__name__)
 
 
 class OrderSyncer(BaseSyncer):
-    """Sync order data from QNH.
+    """Sync order data from QNH via goldengateway.
 
-    Data source: #/order/list
-    API: POST /qnh-gw3/api/order/list (paginated, date-range filter)
+    API: POST /goldengateway/empower/generic/table/query (module=orderDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "orders"
     full_sync_interval = timedelta(hours=12)
 
-    ORDER_LIST_API = "/qnh-gw3/api/order/list"
-    ORDER_DETAIL_API = "/qnh-gw3/api/order/detail"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_ORDER = "orderDetail"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 30 days of orders."""
@@ -43,16 +43,15 @@ class OrderSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": page_size,
-                    "startTime": start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "endTime": end.strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                resp = await self.client.post(self.ORDER_LIST_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_ORDER,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=page_size,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
@@ -91,7 +90,6 @@ class OrderSyncer(BaseSyncer):
             if not order_id:
                 continue
 
-            # Detect channel from platform field
             channel = _detect_channel(item)
 
             items_json = (
@@ -182,7 +180,6 @@ def _parse_time(val: Any) -> Any:
     if isinstance(val, datetime):
         return val
     if isinstance(val, int | float):
-        # Epoch millis
         if val > 1e12:
             val = val / 1000
         return datetime.fromtimestamp(val, tz=CST)

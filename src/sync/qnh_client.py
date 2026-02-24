@@ -14,6 +14,7 @@ from .qnh_auth import QNHAuth
 logger = logging.getLogger(__name__)
 
 QNH_BASE = "https://qnh.meituan.com"
+NEIXIN_BASE = "https://api.neixin.cn"
 
 # Default csec security params required by QNH APIs
 CSEC_PARAMS = {
@@ -30,6 +31,42 @@ DEFAULT_POI_IDS = [1175006, 1221411, 1232550]
 MIN_REQUEST_INTERVAL = 0.5  # seconds between requests
 MAX_CONCURRENT = 3
 
+# ── goldengateway 通用查询接口 ──────────────────────────────────────
+# POST /goldengateway/empower/generic/table/query
+# 推断的请求格式 (需根据实际抓包验证):
+# {
+#   "tenantId": "1011766",
+#   "poiIds": [1175006, 1221411, 1232550],
+#   "module": "xxx",        // e.g. hotProduct, customerRank, storeDetail, orderDetail, ...
+#   "dateRange": {"start": "2026-02-24", "end": "2026-02-24"},
+#   "pageNum": 1,
+#   "pageSize": 50
+# }
+GOLDEN_GENERIC_QUERY = "/goldengateway/empower/generic/table/query"
+GOLDEN_COMPLEX_QUERY = "/goldengateway/empower/complexModule/queryTable"
+GOLDEN_CHANNEL_DIST = "/goldengateway/empower/homepage/channelDistributeList"
+GOLDEN_HOME_MODE = "/goldengateway/empower/homepage/getMode"
+GOLDEN_POI_TREE = "/goldengateway/poi/queryPoiTree"
+
+# 基础 API
+API_AUTH = "/api/v1/sac/account/auth"
+API_STORE_CATEGORY = "/api/v1/merchant/storeCategory/queryAll"
+API_POI_AGG = "/api/v1/common/poi/queryByTypeThenAggByType"
+API_TENANT_CHANNELS = "/api/v1/tenant/channels"
+API_CHANNEL_BATCH = "/api/v1/tenant/channel/batchQuery"
+API_TENANT_LEVEL = "/api/v1/tenant/aggTenantLevelConfig"
+API_TENANT_MODULES = "/api/v1/tenant/modules"
+API_POI_TASKS = "/api/v2/assistant/getPoiTasksWithTotal"
+
+# IM API (api.neixin.cn)
+NEIXIN_CHATLIST_APP = "/msg/api/chat/v3/chatlist/appid"
+NEIXIN_PUB_CHATLIST = "/msg/api/pub/v1/chatlist"
+NEIXIN_PUB_CHATLIST_INFO = "/msg/api/pub/v1/chatlist/info"
+NEIXIN_CHAT_HISTORY = "/msg/api/pub/v3/history/chat/range"
+NEIXIN_OFFLINE = "/msg/api/data/v1/offline"
+NEIXIN_CHAT_INFO = "/msg/api/chat/v3/chatlist/info"
+NEIXIN_READ_LIST = "/read/api/v2/list"
+
 
 class QNHClient:
     """HTTP client for QNH (牵牛花) APIs.
@@ -40,6 +77,7 @@ class QNHClient:
     - Rate limiting (min interval + max concurrency)
     - Auto-retry on auth failures
     - JSON response parsing with error detection
+    - Support for goldengateway data queries and neixin IM APIs
     """
 
     def __init__(
@@ -111,165 +149,154 @@ class QNHClient:
         """POST request with auth, csec params, and rate limiting."""
         return await self._request("POST", path, json_data=data, params=params, **kwargs)
 
+    # ── goldengateway 数据查询 ──────────────────────────────────────────
+
+    async def golden_query(
+        self,
+        module: str,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        page: int = 1,
+        page_size: int = 50,
+        extra: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """通用 goldengateway 表格查询。
+
+        POST /goldengateway/empower/generic/table/query
+
+        NOTE: 参数格式为推断，需根据实际抓包验证。
+        module 可能的值: hotProduct, customerRank, storeDetail, orderDetail,
+                        reviewDetail, stockDetail, financeDetail, promotionDetail 等。
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "poiIds": self.poi_ids,
+            "module": module,
+            "pageNum": page,
+            "pageSize": page_size,
+        }
+        if start_date or end_date:
+            payload["dateRange"] = {
+                "start": start_date or end_date,
+                "end": end_date or start_date,
+            }
+        if extra:
+            payload.update(extra)
+        return await self.post(GOLDEN_GENERIC_QUERY, data=payload)
+
+    async def golden_complex_query(
+        self,
+        module: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """复杂模块查询。
+
+        POST /goldengateway/empower/complexModule/queryTable
+        NOTE: 参数格式为推断，需根据实际抓包验证。
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "poiIds": self.poi_ids,
+            "module": module,
+        }
+        payload.update(kwargs)
+        return await self.post(GOLDEN_COMPLEX_QUERY, data=payload)
+
+    async def golden_channel_distribute(self) -> dict[str, Any]:
+        """渠道分布列表。
+
+        POST /goldengateway/empower/homepage/channelDistributeList
+        NOTE: 参数格式为推断，需根据实际抓包验证。
+        """
+        payload = {
+            "tenantId": self.tenant_id,
+            "poiIds": self.poi_ids,
+        }
+        return await self.post(GOLDEN_CHANNEL_DIST, data=payload)
+
+    # ── neixin IM API ───────────────────────────────────────────────────
+
+    async def neixin_get(
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """GET request to neixin (api.neixin.cn)."""
+        return await self._request("GET", path, params=params, base_url=NEIXIN_BASE, **kwargs)
+
+    async def neixin_post(
+        self,
+        path: str,
+        data: Any | None = None,
+        params: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """POST request to neixin (api.neixin.cn)."""
+        return await self._request(
+            "POST", path, json_data=data, params=params, base_url=NEIXIN_BASE, **kwargs
+        )
+
+    async def neixin_chat_history(
+        self,
+        chat_id: str,
+        start_time: int,
+        end_time: int,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        """获取聊天历史（按时间范围）。
+
+        POST api.neixin.cn/msg/api/pub/v3/history/chat/range
+        NOTE: 参数格式为推断，需根据实际抓包验证。
+        """
+        payload = {
+            "chatId": chat_id,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
+        payload.update(kwargs)
+        return await self.neixin_post(NEIXIN_CHAT_HISTORY, data=payload)
+
+    async def neixin_chatlist(self, **kwargs: Any) -> dict[str, Any]:
+        """获取公开会话列表。
+
+        POST api.neixin.cn/msg/api/pub/v1/chatlist
+        """
+        return await self.neixin_post(NEIXIN_PUB_CHATLIST, data=kwargs)
+
+    async def neixin_chatlist_info(self, chat_ids: list[str], **kwargs: Any) -> dict[str, Any]:
+        """获取会话详情。
+
+        POST api.neixin.cn/msg/api/pub/v1/chatlist/info
+        """
+        payload = {"chatIds": chat_ids}
+        payload.update(kwargs)
+        return await self.neixin_post(NEIXIN_PUB_CHATLIST_INFO, data=payload)
+
+    # ── Convenience methods ─────────────────────────────────────────────
+
     async def get_tenant_channels(self) -> list[dict[str, Any]]:
         """Get all channels for current tenant."""
-        return (await self.post("/api/v1/tenant/channels")).get("data", [])
+        return (await self.post(API_TENANT_CHANNELS)).get("data", [])
 
     async def get_poi_tasks(self) -> dict[str, Any]:
         """Get pending tasks for all POIs."""
-        return await self.post("/api/v2/assistant/getPoiTasksWithTotal", data=self.poi_ids)
+        return await self.post(API_POI_TASKS, data=self.poi_ids)
 
-    # ── Product APIs ────────────────────────────────────────────────────
+    async def get_store_categories(self) -> list[dict[str, Any]]:
+        """Get all product categories.
 
-    async def get_product_list(
-        self,
-        page: int = 1,
-        page_size: int = 50,
-        status: str | None = None,
-    ) -> dict[str, Any]:
-        """Get SPU product list (paginated).
-
-        API: POST /qnh-gw3/api/product/spu/list
+        API: POST /api/v1/merchant/storeCategory/queryAll
         """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "pageNum": page,
-            "pageSize": page_size,
-        }
-        if status:
-            payload["status"] = status
-        resp = await self.post("/qnh-gw3/api/product/spu/list", data=payload)
-        return resp.get("data", {})
+        resp = await self.post(API_STORE_CATEGORY, data={"tenantId": self.tenant_id})
+        return resp.get("data", [])
 
-    async def get_product_detail(self, spu_id: str) -> dict[str, Any]:
-        """Get SPU detail by ID.
+    async def get_poi_tree(self) -> dict[str, Any]:
+        """Get store tree.
 
-        API: POST /qnh-gw3/api/product/spu/detail
+        API: POST /goldengateway/poi/queryPoiTree
         """
-        resp = await self.post(
-            "/qnh-gw3/api/product/spu/detail",
-            data={"tenantId": self.tenant_id, "spuId": spu_id},
-        )
-        return resp.get("data", {})
-
-    # ── Order APIs ──────────────────────────────────────────────────────
-
-    async def get_order_list(
-        self,
-        page: int = 1,
-        page_size: int = 50,
-        start_date: str | None = None,
-        end_date: str | None = None,
-        status: str | None = None,
-    ) -> dict[str, Any]:
-        """Get order list (paginated).
-
-        API: POST /qnh-gw3/api/order/list
-        """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "pageNum": page,
-            "pageSize": page_size,
-            "storeIds": self.poi_ids,
-        }
-        if start_date:
-            payload["startDate"] = start_date
-        if end_date:
-            payload["endDate"] = end_date
-        if status:
-            payload["orderStatus"] = status
-        resp = await self.post("/qnh-gw3/api/order/list", data=payload)
-        return resp.get("data", {})
-
-    # ── Data / Analytics APIs ───────────────────────────────────────────
-
-    async def get_data_overview(
-        self,
-        date: str,
-        date_type: str = "day",
-        channel: str | None = None,
-    ) -> dict[str, Any]:
-        """Get business data overview for a date.
-
-        API: POST /qnh-gw3/api/data/home/overview
-        Returns: valid order amount/count, avg order value, gross profit, etc.
-        """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "date": date,
-            "dateType": date_type,
-            "storeIds": self.poi_ids,
-        }
-        if channel:
-            payload["channel"] = channel
-        resp = await self.post("/qnh-gw3/api/data/home/overview", data=payload)
-        return resp.get("data", {})
-
-    async def get_realtime_data(self) -> dict[str, Any]:
-        """Get realtime business data.
-
-        API: POST /qnh-gw3/api/data/realtime
-        Returns: today's live orders, revenue, etc.
-        """
-        resp = await self.post(
-            "/qnh-gw3/api/data/realtime",
-            data={"tenantId": self.tenant_id, "storeIds": self.poi_ids},
-        )
-        return resp.get("data", {})
-
-    async def get_data_trend(
-        self,
-        start_date: str,
-        end_date: str,
-        date_type: str = "day",
-        channel: str | None = None,
-    ) -> dict[str, Any]:
-        """Get data trend over a date range.
-
-        API: POST /qnh-gw3/api/data/home/trend
-        """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "startDate": start_date,
-            "endDate": end_date,
-            "dateType": date_type,
-            "storeIds": self.poi_ids,
-        }
-        if channel:
-            payload["channel"] = channel
-        resp = await self.post("/qnh-gw3/api/data/home/trend", data=payload)
-        return resp.get("data", {})
-
-    async def get_product_sales_ranking(
-        self,
-        date: str,
-        date_type: str = "day",
-        channel: str | None = None,
-        limit: int = 20,
-    ) -> list[dict[str, Any]]:
-        """Get product sales ranking from data overview.
-
-        Attempts /qnh-gw3/api/data/home/product-ranking or falls back
-        to extracting from overview data.
-        """
-        payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
-            "date": date,
-            "dateType": date_type,
-            "storeIds": self.poi_ids,
-            "pageSize": limit,
-        }
-        if channel:
-            payload["channel"] = channel
-
-        try:
-            resp = await self.post("/qnh-gw3/api/data/home/product-ranking", data=payload)
-            data = resp.get("data", {})
-            return data.get("list", data.get("records", []))
-        except Exception:
-            # Fallback: some tenants may not have this endpoint
-            logger.debug("product-ranking endpoint not available, using overview")
-            return []
+        return await self.post(GOLDEN_POI_TREE, data={"tenantId": self.tenant_id})
 
     # ── Internal ────────────────────────────────────────────────────────
 
@@ -280,6 +307,7 @@ class QNHClient:
         params: dict[str, Any] | None = None,
         json_data: Any | None = None,
         retry_on_auth: bool = True,
+        base_url: str | None = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Core request method with rate limiting and auth retry."""
@@ -296,7 +324,8 @@ class QNHClient:
             # Inject csec params
             merged_params = {**CSEC_PARAMS, **(params or {})}
 
-            url = f"{QNH_BASE}{path}" if path.startswith("/") else path
+            _base = base_url or QNH_BASE
+            url = f"{_base}{path}" if path.startswith("/") else path
 
             try:
                 if method == "GET":
@@ -318,6 +347,7 @@ class QNHClient:
                         params=params,
                         json_data=json_data,
                         retry_on_auth=False,
+                        base_url=base_url,
                         **kwargs,
                     )
                 raise

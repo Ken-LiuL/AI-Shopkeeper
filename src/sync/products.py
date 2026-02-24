@@ -15,36 +15,37 @@ class ProductSyncer(BaseSyncer):
     """Sync product master data from QNH.
 
     Data source: #/unifiedGoods/tenant/spu-list
-    API: POST /api/v1/tenant/spu/list (paginated)
-    Fallback: DOM extraction from SPU list page
+    APIs:
+      - POST /api/v1/merchant/storeCategory/queryAll — 商品分类
+      - POST /goldengateway/empower/generic/table/query (module=hotProduct) — 商品列表
+    NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
     """
 
     name = "products"
 
-    # ── API paths (discovered from network interception) ────────────────
+    # 分类接口 (已验证)
+    CATEGORY_API = "/api/v1/merchant/storeCategory/queryAll"
 
-    SPU_LIST_API = "/qnh-gw3/api/product/spu/list"
-    SPU_DETAIL_API = "/qnh-gw3/api/product/spu/detail"
-    STORE_GOODS_API = "/qnh-gw3/api/product/store-goods/list"
-    CHANNEL_GOODS_API = "/qnh-gw3/api/product/channel-goods/list"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_PRODUCT = "hotProduct"
 
     async def full_sync(self) -> SyncResult:
-        """Full sync: fetch all SPUs with pagination."""
+        """Full sync: fetch all products via goldengateway."""
         total = 0
         page = 1
         page_size = 50
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": page_size,
-                    "status": None,  # all statuses
-                }
-                resp = await self.client.post(self.SPU_LIST_API, data=payload)
+                # 使用 goldengateway 通用查询获取商品列表
+                # NOTE: module 和参数格式为推断，需抓包验证
+                resp = await self.client.golden_query(
+                    module=self.MODULE_PRODUCT,
+                    page=page,
+                    page_size=page_size,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
@@ -82,15 +83,14 @@ class ProductSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": page_size,
-                    "updateTimeStart": since.strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                resp = await self.client.post(self.SPU_LIST_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_PRODUCT,
+                    start_date=since.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=page_size,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break

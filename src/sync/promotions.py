@@ -1,6 +1,6 @@
-"""Promotion Syncer — 营销活动数据同步。
+"""Promotion Syncer — 营销活动数据via goldengateway。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
+NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 class PromotionSyncer(BaseSyncer):
     """同步营销活动数据（满减/折扣/秒杀/买赠/优惠券）。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/promotion/list — 活动列表
-      - POST /qnh-gw3/api/promotion/detail — 活动详情
+    API: POST /goldengateway/empower/generic/table/query (module=promotionDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "promotions"
     full_sync_interval = timedelta(hours=24)
 
-    LIST_API = "/qnh-gw3/api/promotion/list"
-    DETAIL_API = "/qnh-gw3/api/promotion/detail"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_PROMOTION = "promotionDetail"
 
     async def full_sync(self) -> SyncResult:
         """全量同步: 最近180天的活动。"""
@@ -45,33 +44,18 @@ class PromotionSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "startTime": start.strftime("%Y-%m-%d"),
-                    "endTime": end.strftime("%Y-%m-%d"),
-                    "storeIds": self.client.poi_ids,
-                }
-                resp = await self.client.post(self.LIST_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_PROMOTION,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=50,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
-
-                # 拉详情丰富数据
-                for item in items:
-                    promo_id = str(item.get("promotionId", item.get("id", "")))
-                    if promo_id:
-                        try:
-                            detail = await self.client.post(
-                                self.DETAIL_API,
-                                data={"tenantId": self.client.tenant_id, "promotionId": promo_id},
-                            )
-                            item.update(detail.get("data", {}))
-                        except Exception:
-                            pass  # 详情失败不阻塞
 
                 await self._upsert_promotions(items)
                 total += len(items)
@@ -99,11 +83,9 @@ class PromotionSyncer(BaseSyncer):
             start_time = self._parse_time(item.get("startTime"))
             end_time = self._parse_time(item.get("endTime"))
 
-            # 检测渠道
             platform = str(item.get("platform", item.get("channel", ""))).lower()
             channel = self._detect_channel(platform)
 
-            # 活动状态
             status = item.get("status", item.get("activityStatus", ""))
             if isinstance(status, int):
                 status = {0: "pending", 1: "active", 2: "ended", 3: "paused"}.get(

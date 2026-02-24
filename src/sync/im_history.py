@@ -1,7 +1,7 @@
-"""IM History Syncer — 客服IM会话与消息同步。
+"""IM History Syncer — 客服IM会话与消息同步via neixin API。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
-同步后可选向量化存入知识库供语义检索。
+使用 api.neixin.cn 的 IM 接口获取聊天历史。
+NOTE: 部分参数格式为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from .base import CST, BaseSyncer, SyncMode, SyncResult
+from .qnh_client import (
+    NEIXIN_CHAT_HISTORY,
+    NEIXIN_PUB_CHATLIST,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -19,16 +23,15 @@ logger = logging.getLogger(__name__)
 class IMHistorySyncer(BaseSyncer):
     """同步客服IM会话历史。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/im/session/list — 会话列表
-      - POST /qnh-gw3/api/im/history — 会话消息历史
+    APIs (api.neixin.cn):
+      - POST /msg/api/pub/v1/chatlist — 会话列表
+      - POST /msg/api/pub/v1/chatlist/info — 会话详情
+      - POST /msg/api/pub/v3/history/chat/range — 聊天历史（按时间范围）
+    NOTE: 参数格式为推断，需根据实际抓包验证。
     """
 
     name = "im_history"
     full_sync_interval = timedelta(hours=24)
-
-    SESSION_LIST_API = "/qnh-gw3/api/im/session/list"
-    HISTORY_API = "/qnh-gw3/api/im/history"
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -42,57 +45,50 @@ class IMHistorySyncer(BaseSyncer):
     async def _sync_range(self, start: datetime, end: datetime, mode: SyncMode) -> SyncResult:
         total_sessions = 0
         total_messages = 0
-        page = 1
 
         try:
-            while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "startTime": start.strftime("%Y-%m-%d"),
-                    "endTime": end.strftime("%Y-%m-%d"),
-                    "storeIds": self.client.poi_ids,
-                }
-                resp = await self.client.post(self.SESSION_LIST_API, data=payload)
-                data = resp.get("data", {})
-                sessions = data.get("list", data.get("records", []))
+            # 1. 获取会话列表 via neixin API
+            # NOTE: 参数格式为推断，需抓包验证
+            resp = await self.client.neixin_post(
+                NEIXIN_PUB_CHATLIST,
+                data={
+                    "startTime": int(start.timestamp() * 1000),
+                    "endTime": int(end.timestamp() * 1000),
+                },
+            )
+            data = resp.get("data", {})
+            sessions = data.get("list", data.get("chatlist", data.get("records", [])))
 
-                if not sessions:
-                    break
+            if not sessions:
+                return SyncResult(syncer_name=self.name, mode=mode, success=True, records_synced=0)
 
-                for session in sessions:
-                    session_id = str(session.get("sessionId", session.get("id", "")))
-                    if not session_id:
-                        continue
+            for session in sessions:
+                chat_id = str(
+                    session.get("chatId", session.get("sessionId", session.get("id", "")))
+                )
+                if not chat_id:
+                    continue
 
-                    await self._upsert_session(session)
-                    total_sessions += 1
+                await self._upsert_session(chat_id, session)
+                total_sessions += 1
 
-                    # 拉取消息列表
-                    try:
-                        msg_resp = await self.client.post(
-                            self.HISTORY_API,
-                            data={
-                                "tenantId": self.client.tenant_id,
-                                "sessionId": session_id,
-                            },
-                        )
-                        messages = msg_resp.get("data", {}).get(
-                            "messages", msg_resp.get("data", {}).get("list", [])
-                        )
-                        if messages:
-                            await self._upsert_messages(session_id, messages)
-                            total_messages += len(messages)
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Failed to fetch messages for session {session_id}: {e}"
-                        )
-
-                total_pages = data.get("totalPage", data.get("pages", 1))
-                if page >= total_pages:
-                    break
-                page += 1
+                # 2. 拉取聊天历史 via neixin chat/range API
+                try:
+                    msg_resp = await self.client.neixin_post(
+                        NEIXIN_CHAT_HISTORY,
+                        data={
+                            "chatId": chat_id,
+                            "startTime": int(start.timestamp() * 1000),
+                            "endTime": int(end.timestamp() * 1000),
+                        },
+                    )
+                    msg_data = msg_resp.get("data", {})
+                    messages = msg_data.get("messages", msg_data.get("list", []))
+                    if messages:
+                        await self._upsert_messages(chat_id, messages)
+                        total_messages += len(messages)
+                except Exception as e:
+                    self.logger.warning(f"Failed to fetch messages for chat {chat_id}: {e}")
 
             return SyncResult(
                 syncer_name=self.name,
@@ -110,11 +106,10 @@ class IMHistorySyncer(BaseSyncer):
                 error=str(e),
             )
 
-    async def _upsert_session(self, item: dict[str, Any]) -> None:
+    async def _upsert_session(self, chat_id: str, item: dict[str, Any]) -> None:
         if not self.pool:
             return
 
-        session_id = str(item.get("sessionId", item.get("id", "")))
         started_at = self._parse_time(item.get("startTime", item.get("createTime")))
         ended_at = self._parse_time(item.get("endTime"))
 
@@ -144,7 +139,7 @@ class IMHistorySyncer(BaseSyncer):
                 synced_at = NOW()
             """,
             self.client.tenant_id,
-            session_id,
+            chat_id,
             channel,
             str(item.get("customerId", "")) or None,
             item.get("customerName", item.get("userName", "")),

@@ -1,4 +1,4 @@
-"""Metrics Syncer — daily business metrics from data overview page."""
+"""Metrics Syncer — daily business metrics via goldengateway."""
 
 from __future__ import annotations
 
@@ -13,18 +13,18 @@ logger = logging.getLogger(__name__)
 
 
 class MetricsSyncer(BaseSyncer):
-    """Sync daily business metrics from QNH data overview.
+    """Sync daily business metrics from QNH via goldengateway.
 
     Data source: #/data/home/new
-    API: POST /qnh-gw3/api/data/overview (date + channel filter)
-    Metrics: valid order amount/count, avg order value, gross profit, etc.
+    API: POST /goldengateway/empower/generic/table/query (module=storeDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "metrics"
     full_sync_interval = timedelta(hours=20)
 
-    DATA_OVERVIEW_API = "/qnh-gw3/api/data/home/overview"
-    DATA_TREND_API = "/qnh-gw3/api/data/home/trend"
+    # 推断的 module 名，需验证
+    MODULE_STORE_DETAIL = "storeDetail"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 30 days of daily metrics."""
@@ -49,27 +49,28 @@ class MetricsSyncer(BaseSyncer):
             while current <= end_date:
                 date_str = current.strftime("%Y-%m-%d")
 
-                # Fetch for each channel + all channels
-                for channel in [None, "meituan", "eleme", "jddj"]:
-                    payload = {
-                        "tenantId": self.client.tenant_id,
-                        "date": date_str,
-                        "dateType": "day",
-                        "storeIds": self.client.poi_ids,
-                    }
-                    if channel:
-                        payload["channel"] = channel
-
-                    try:
-                        resp = await self.client.post(self.DATA_OVERVIEW_API, data=payload)
-                        data = resp.get("data", {})
-                        if data:
-                            await self._upsert_metrics(current, channel, data)
+                # 使用 goldengateway 通用查询接口查门店指标
+                # NOTE: module 和参数格式为推断，需抓包验证
+                try:
+                    resp = await self.client.golden_query(
+                        module=self.MODULE_STORE_DETAIL,
+                        start_date=date_str,
+                        end_date=date_str,
+                    )
+                    data = resp.get("data", {})
+                    # goldengateway 可能返回 table rows 或嵌套结构
+                    rows = data.get("list", data.get("rows", data.get("records", [])))
+                    if rows:
+                        for row in rows:
+                            channel = row.get("channel", row.get("channelName"))
+                            await self._upsert_metrics(current, channel, row)
                             total += 1
-                    except Exception as e:
-                        self.logger.warning(
-                            f"Failed to fetch metrics for {date_str} channel={channel}: {e}"
-                        )
+                    elif data:
+                        # 可能直接返回汇总数据
+                        await self._upsert_metrics(current, None, data)
+                        total += 1
+                except Exception as e:
+                    self.logger.warning(f"Failed to fetch metrics for {date_str}: {e}")
 
                 current += timedelta(days=1)
 

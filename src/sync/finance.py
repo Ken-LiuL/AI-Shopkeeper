@@ -1,6 +1,6 @@
-"""Finance Syncer — 财务结算数据同步。
+"""Finance Syncer — 财务结算via goldengateway。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
+NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 class FinanceSyncer(BaseSyncer):
     """同步财务结算数据（结算单 + 扣费明细）。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/finance/settlement — 结算单列表
-      - POST /qnh-gw3/api/finance/fees — 扣费明细
+    API: POST /goldengateway/empower/generic/table/query (module=financeDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "finance"
     full_sync_interval = timedelta(hours=24)
 
-    SETTLEMENT_API = "/qnh-gw3/api/finance/settlement"
-    FEES_API = "/qnh-gw3/api/finance/fees"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_FINANCE = "financeDetail"
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -44,33 +43,18 @@ class FinanceSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "startDate": start.strftime("%Y-%m-%d"),
-                    "endDate": end.strftime("%Y-%m-%d"),
-                    "storeIds": self.client.poi_ids,
-                }
-                resp = await self.client.post(self.SETTLEMENT_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_FINANCE,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=50,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
-
-                # 逐个拉扣费明细
-                for item in items:
-                    sid = str(item.get("settlementId", item.get("id", "")))
-                    if sid:
-                        try:
-                            fees_resp = await self.client.post(
-                                self.FEES_API,
-                                data={"tenantId": self.client.tenant_id, "settlementId": sid},
-                            )
-                            item["feeDetails"] = fees_resp.get("data", {})
-                        except Exception:
-                            pass
 
                 await self._upsert_settlements(items)
                 total += len(items)

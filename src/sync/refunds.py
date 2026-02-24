@@ -1,6 +1,6 @@
-"""Refund Syncer — 退款/售后明细同步。
+"""Refund Syncer — 退款/售后via goldengateway。
 
-NOTE: API 路径为推断，需验证实际牵牛花接口。
+NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
 """
 
 from __future__ import annotations
@@ -18,16 +18,15 @@ logger = logging.getLogger(__name__)
 class RefundSyncer(BaseSyncer):
     """同步退款/售后明细数据。
 
-    API (推断，需验证):
-      - POST /qnh-gw3/api/refund/list — 退款列表
-      - POST /qnh-gw3/api/refund/detail — 退款详情
+    API: POST /goldengateway/empower/generic/table/query (module=refundDetail)
+    NOTE: module 名称为推断，需根据实际抓包验证。
     """
 
     name = "refunds"
     full_sync_interval = timedelta(hours=24)
 
-    LIST_API = "/qnh-gw3/api/refund/list"
-    DETAIL_API = "/qnh-gw3/api/refund/detail"
+    # 推断的 goldengateway module 名，需验证
+    MODULE_REFUND = "refundDetail"
 
     async def full_sync(self) -> SyncResult:
         end = datetime.now(CST)
@@ -44,17 +43,15 @@ class RefundSyncer(BaseSyncer):
 
         try:
             while True:
-                payload = {
-                    "tenantId": self.client.tenant_id,
-                    "pageNum": page,
-                    "pageSize": 50,
-                    "startTime": start.strftime("%Y-%m-%d"),
-                    "endTime": end.strftime("%Y-%m-%d"),
-                    "storeIds": self.client.poi_ids,
-                }
-                resp = await self.client.post(self.LIST_API, data=payload)
+                resp = await self.client.golden_query(
+                    module=self.MODULE_REFUND,
+                    start_date=start.strftime("%Y-%m-%d"),
+                    end_date=end.strftime("%Y-%m-%d"),
+                    page=page,
+                    page_size=50,
+                )
                 data = resp.get("data", {})
-                items = data.get("list", data.get("records", []))
+                items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
                     break
