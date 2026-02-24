@@ -35,5 +35,9 @@ def register_error_handlers(app: FastAPI) -> None:
         logger.exception("Unhandled exception: %s", exc)
         return JSONResponse(
             status_code=500,
-            content={"success": False, "message": "Internal server error"},
+            content={
+                "success": False,
+                "message": "Internal server error",
+                "debug": f"{type(exc).__name__}: {exc}",
+            },
         )
