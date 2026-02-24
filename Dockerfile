@@ -17,8 +17,10 @@ COPY config/ config/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
 
-# 安装 Playwright Chromium 及其系统依赖（goldengateway API 需要 mtgsig 签名，必须通过浏览器执行）
-RUN playwright install chromium --with-deps
+# 安装 Chromium（nodriver 会自动找到系统 Chrome，用于 h5guard mtgsig 签名）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
 
 ENV HEADLESS=true
 

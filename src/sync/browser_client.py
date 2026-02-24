@@ -1,10 +1,12 @@
-"""Playwright 浏览器客户端 — 通过浏览器执行需要 mtgsig 签名的 API。
+"""nodriver 浏览器客户端 — 通过浏览器执行需要 mtgsig 签名的 API。
 
 为什么需要浏览器？
 goldengateway 等核心 API 需要 mtgsig 签名（由 h5guard.js 在浏览器端生成），
 纯 HTTP 请求无法携带该签名，服务端返回 403。
-通过 Playwright 启动 Chromium，加载 QNH 页面让 h5guard.js 初始化后，
+通过 nodriver 启动真实 Chrome，加载 QNH 页面让 h5guard.js 初始化后，
 在浏览器上下文中用 fetch 发请求，浏览器会自动注入 mtgsig 签名。
+
+注意：nodriver 的 evaluate 不支持 async/Promise，必须用 window 变量中转 + sleep 等待。
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +32,7 @@ _instance_lock = asyncio.Lock()
 
 
 class BrowserClient:
-    """Playwright 浏览器客户端，单例模式，多个 syncer 共用。
+    """nodriver 浏览器客户端，单例模式，多个 syncer 共用。
 
     通过浏览器上下文执行 fetch 请求，让 h5guard.js 自动注入 mtgsig 签名，
     绕过 goldengateway API 的 403 限制。
@@ -37,7 +40,6 @@ class BrowserClient:
 
     def __init__(self) -> None:
         self._browser = None
-        self._context = None
         self._page = None
         self._initialized = False
         self._init_lock = asyncio.Lock()
@@ -55,124 +57,47 @@ class BrowserClient:
     async def ensure_ready(self) -> None:
         """确保浏览器已启动并完成 h5guard 初始化。"""
         async with self._init_lock:
-            if self._initialized and self._page and not self._page.is_closed():
+            if self._initialized and self._page:
                 return
             await self._start_browser()
 
     async def _start_browser(self) -> None:
-        """启动浏览器。优先连接真实 Chrome（CDP），失败后 fallback 到 launch Chromium。
-
-        为什么优先 CDP？
-        美团 h5guard 能检测 Playwright 自带的 Chromium（即使 stealth 也拦），
-        但连接真实 Chrome 实例可以完美绕过。
-        """
+        """启动 nodriver 浏览器，加载 cookies，等待 h5guard 初始化。"""
         try:
-            from playwright.async_api import async_playwright
+            import nodriver
+            import nodriver.cdp.network
 
-            pw = await async_playwright().start()
-            self._pw = pw
-            self._stealth = None
-            self._cdp_mode = False
+            headless = os.environ.get("HEADLESS", "false").lower() == "true"
+            logger.info("启动 nodriver Chrome (headless=%s)...", headless)
 
-            # 方案 1: 连接已运行的 Chrome（通过 CDP）
-            cdp_url = os.environ.get("CHROME_CDP_URL", "")
-            if cdp_url:
-                try:
-                    logger.info("尝试连接 Chrome CDP: %s", cdp_url)
-                    self._browser = await pw.chromium.connect_over_cdp(cdp_url)
-                    self._context = (
-                        self._browser.contexts[0]
-                        if self._browser.contexts
-                        else await self._browser.new_context()
-                    )
-                    await self._load_cookies()
-                    self._page = (
-                        self._context.pages[0]
-                        if self._context.pages
-                        else await self._context.new_page()
-                    )
-                    self._cdp_mode = True
-                    logger.info("✅ 已连接到真实 Chrome (CDP)")
-                except Exception as e:
-                    logger.warning("CDP 连接失败: %s，fallback 到启动 Chromium", e)
-                    self._browser = None
-
-            # 方案 2: 启动独立 Chrome（带 remote-debugging-port）
-            if not self._browser:
-                chrome_path = self._find_chrome()
-                if chrome_path:
-                    try:
-                        logger.info("启动真实 Chrome: %s", chrome_path)
-                        import subprocess
-
-                        debug_port = int(os.environ.get("CHROME_DEBUG_PORT", "9222"))
-                        self._chrome_proc = subprocess.Popen(
-                            [
-                                chrome_path,
-                                f"--remote-debugging-port={debug_port}",
-                                "--no-first-run",
-                                "--no-default-browser-check",
-                                "--user-data-dir=/tmp/qnh-chrome-profile",
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                        )
-                        await asyncio.sleep(3)  # 等 Chrome 启动
-                        self._browser = await pw.chromium.connect_over_cdp(
-                            f"http://127.0.0.1:{debug_port}"
-                        )
-                        self._context = (
-                            self._browser.contexts[0]
-                            if self._browser.contexts
-                            else await self._browser.new_context()
-                        )
-                        # CDP 模式也需要加载 cookies
-                        await self._load_cookies()
-                        self._page = await self._context.new_page()
-                        self._cdp_mode = True
-                        logger.info("✅ 已启动并连接真实 Chrome (port %d)", debug_port)
-                    except Exception as e:
-                        logger.warning(
-                            "启动真实 Chrome 失败: %s，fallback 到 Playwright Chromium", e
-                        )
-                        self._browser = None
-
-            # 方案 3: Fallback — Playwright 自带 Chromium（可能被 h5guard 拦截）
-            if not self._browser:
-                logger.info("启动 Playwright Chromium (fallback)...")
-                headless = os.environ.get("HEADLESS", "true").lower() != "false"
-                self._browser = await pw.chromium.launch(
-                    headless=headless,
-                    args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-                )
-                try:
-                    from playwright_stealth import stealth_async
-
-                    self._stealth = stealth_async
-                except ImportError:
-                    logger.warning("playwright-stealth 未安装，headless 可能被 h5guard 检测")
-
-                self._context = await self._browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/131.0.0.0 Safari/537.36"
-                    ),
-                    viewport={"width": 1280, "height": 720},
-                )
-                await self._load_cookies()
-                self._page = await self._context.new_page()
-                if self._stealth:
-                    await self._stealth(self._page)
-
-            # 导航到 QNH 首页，让 h5guard.js 初始化
-            logger.info("导航到 QNH 首页，等待 h5guard.js 初始化...")
-            await self._page.goto(
-                f"{QNH_BASE}/home.html", wait_until="domcontentloaded", timeout=30000
+            self._browser = await nodriver.start(
+                headless=headless,
+                browser_args=[
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
             )
 
-            # 等待 h5guard.js 完全加载
-            await asyncio.sleep(8)
+            # 先导航到美团域名，然后设置 cookies
+            page = await self._browser.get("https://qnh.meituan.com")
+
+            # 加载 cookies
+            cookies_dict = self._load_cookies_dict()
+            for name, value in cookies_dict.items():
+                await page.send(
+                    nodriver.cdp.network.set_cookie(
+                        name=str(name),
+                        value=str(value),
+                        domain=".meituan.com",
+                        path="/",
+                    )
+                )
+            logger.info("已加载 %d 个 cookies", len(cookies_dict))
+
+            # 导航到 QNH 首页，等待 h5guard.js 初始化
+            logger.info("导航到 QNH 首页，等待 h5guard.js 初始化...")
+            self._page = await self._browser.get(f"{QNH_BASE}/home.html")
+            await self._page.sleep(10)
 
             self._initialized = True
             logger.info("浏览器客户端初始化完成 ✓")
@@ -183,26 +108,8 @@ class BrowserClient:
             raise
 
     @staticmethod
-    def _find_chrome() -> str | None:
-        """查找系统中的 Chrome 可执行文件。"""
-        import platform
-
-        candidates = []
-        if platform.system() == "Darwin":
-            candidates = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"]
-        elif platform.system() == "Linux":
-            candidates = [
-                "/usr/bin/google-chrome",
-                "/usr/bin/google-chrome-stable",
-                "/usr/bin/chromium-browser",
-            ]
-        for c in candidates:
-            if os.path.exists(c):
-                return c
-        return None
-
-    async def _load_cookies(self) -> None:
-        """从配置文件或环境变量加载 cookies 到浏览器上下文。"""
+    def _load_cookies_dict() -> dict[str, str]:
+        """从配置文件或环境变量加载 cookies 字典。"""
         cookies_dict: dict[str, str] = {}
 
         # 优先从配置文件加载
@@ -230,19 +137,7 @@ class BrowserClient:
                 "没有可用的 QNH cookies，请配置 config/qnh_cookies.json 或 QNH_COOKIES_JSON 环境变量"
             )
 
-        # 转换为 Playwright cookie 格式
-        playwright_cookies = []
-        for name, value in cookies_dict.items():
-            playwright_cookies.append(
-                {
-                    "name": str(name),
-                    "value": str(value),
-                    "domain": ".meituan.com",
-                    "path": "/",
-                }
-            )
-
-        await self._context.add_cookies(playwright_cookies)
+        return cookies_dict
 
     async def execute_api(
         self,
@@ -253,8 +148,10 @@ class BrowserClient:
     ) -> dict[str, Any]:
         """在浏览器上下文中执行 API 调用，自动带上 mtgsig 签名。
 
-        通过 page.evaluate() 在浏览器中发 fetch 请求，
-        h5guard.js 会自动拦截并注入 mtgsig 参数。
+        nodriver 的 evaluate 不支持 Promise，所以用 window 变量中转：
+        1. 发起 fetch，结果存到 window.__api_result_N
+        2. sleep 等待
+        3. 读取 window.__api_result_N
         """
         await self.ensure_ready()
 
@@ -265,71 +162,81 @@ class BrowserClient:
         separator = "&" if "?" in url else "?"
         full_url = f"{url}{separator}yodaReady=h5&csecplatform=4&csecversion=4.2.0"
 
-        body_js = json.dumps(body) if body else "undefined"
+        body_str = json.dumps(body) if body else "undefined"
+        key = f"__api_result_{int(time.time() * 1000)}"
+
+        js = f"""
+            window.{key} = 'pending';
+            fetch('{full_url}', {{
+                method: '{method}',
+                headers: {{'Content-Type': 'application/json'}},
+                credentials: 'include',
+                body: {body_str}
+            }}).then(function(r) {{ return r.json(); }})
+              .then(function(d) {{ window.{key} = JSON.stringify(d); }})
+              .catch(function(e) {{ window.{key} = JSON.stringify({{_error: true, message: e.message}}); }});
+        """
 
         try:
-            result = await self._page.evaluate(f"""
-                async () => {{
-                    try {{
-                        const resp = await fetch('{full_url}', {{
-                            method: '{method}',
-                            headers: {{'Content-Type': 'application/json'}},
-                            credentials: 'include',
-                            body: {body_js}
-                        }});
-                        if (!resp.ok) {{
-                            return {{
-                                _browser_error: true,
-                                status: resp.status,
-                                statusText: resp.statusText,
-                                body: await resp.text()
-                            }};
-                        }}
-                        return await resp.json();
-                    }} catch (e) {{
-                        return {{_browser_error: true, message: e.message}};
-                    }}
-                }}
-            """)
+            await self._page.evaluate(js)
+            await self._page.sleep(5)
+
+            result_str = await self._page.evaluate(f"window.{key}")
+            if result_str == "pending":
+                await self._page.sleep(5)
+                result_str = await self._page.evaluate(f"window.{key}")
 
             self._request_count += 1
 
-            # 检查浏览器端错误
-            if isinstance(result, dict) and result.get("_browser_error"):
-                status = result.get("status", 0)
-                if status in (401, 403):
-                    logger.warning("浏览器请求认证失败 (HTTP %s)，尝试刷新...", status)
+            if not result_str or result_str == "pending":
+                return {"_error": True, "message": "timeout"}
+
+            result = json.loads(result_str)
+
+            # 检查认证失败，尝试刷新后重试
+            if isinstance(result, dict) and result.get("_error"):
+                msg = result.get("message", "")
+                if "401" in msg or "403" in msg:
+                    logger.warning("API 认证失败，尝试刷新 cookies...")
                     await self._refresh()
-                    # 重试一次
-                    return await self._execute_once(full_url, method, body_js)
-                raise BrowserAPIError(f"浏览器请求失败: {result}")
+                    return await self._execute_once(full_url, method, body_str)
 
             return result
 
         except Exception as e:
-            if "browser_error" not in str(e):
-                logger.error("浏览器 API 调用异常: %s", e)
+            logger.error("浏览器 API 调用异常: %s", e)
             raise
 
-    async def _execute_once(self, full_url: str, method: str, body_js: str) -> dict[str, Any]:
+    async def _execute_once(self, full_url: str, method: str, body_str: str) -> dict[str, Any]:
         """单次执行（重试用）。"""
-        result = await self._page.evaluate(f"""
-            async () => {{
-                try {{
-                    const resp = await fetch('{full_url}', {{
-                        method: '{method}',
-                        headers: {{'Content-Type': 'application/json'}},
-                        credentials: 'include',
-                        body: {body_js}
-                    }});
-                    return await resp.json();
-                }} catch (e) {{
-                    return {{_browser_error: true, message: e.message}};
-                }}
-            }}
-        """)
+        key = f"__api_result_{int(time.time() * 1000)}"
+
+        js = f"""
+            window.{key} = 'pending';
+            fetch('{full_url}', {{
+                method: '{method}',
+                headers: {{'Content-Type': 'application/json'}},
+                credentials: 'include',
+                body: {body_str}
+            }}).then(function(r) {{ return r.json(); }})
+              .then(function(d) {{ window.{key} = JSON.stringify(d); }})
+              .catch(function(e) {{ window.{key} = JSON.stringify({{_error: true, message: e.message}}); }});
+        """
+
+        await self._page.evaluate(js)
+        await self._page.sleep(5)
+
+        result_str = await self._page.evaluate(f"window.{key}")
+        if result_str == "pending":
+            await self._page.sleep(5)
+            result_str = await self._page.evaluate(f"window.{key}")
+
         self._request_count += 1
-        return result
+
+        if not result_str or result_str == "pending":
+            return {"_error": True, "message": "timeout on retry"}
+
+        return json.loads(result_str)
 
     async def get_golden_data(
         self,
@@ -341,13 +248,22 @@ class BrowserClient:
 
     async def _refresh(self) -> None:
         """刷新浏览器状态：重新加载 cookies 并导航到首页。"""
+        import nodriver.cdp.network
+
         logger.info("刷新浏览器 cookies 和 h5guard 状态...")
         try:
-            await self._load_cookies()
-            await self._page.goto(
-                f"{QNH_BASE}/home.html", wait_until="domcontentloaded", timeout=30000
-            )
-            await asyncio.sleep(5)
+            cookies_dict = self._load_cookies_dict()
+            for name, value in cookies_dict.items():
+                await self._page.send(
+                    nodriver.cdp.network.set_cookie(
+                        name=str(name),
+                        value=str(value),
+                        domain=".meituan.com",
+                        path="/",
+                    )
+                )
+            self._page = await self._browser.get(f"{QNH_BASE}/home.html")
+            await self._page.sleep(8)
             logger.info("浏览器刷新完成 ✓")
         except Exception as e:
             logger.error("浏览器刷新失败: %s，尝试完全重启...", e)
@@ -364,35 +280,12 @@ class BrowserClient:
     async def _cleanup(self) -> None:
         """清理浏览器资源。"""
         self._initialized = False
-        # 关闭自己启动的 Chrome 进程
-        if hasattr(self, "_chrome_proc") and self._chrome_proc:
-            try:
-                self._chrome_proc.terminate()
-                self._chrome_proc = None
-            except Exception:
-                pass
-        try:
-            if self._page and not self._page.is_closed():
-                await self._page.close()
-        except Exception:
-            pass
-        try:
-            if self._context:
-                await self._context.close()
-        except Exception:
-            pass
+        self._page = None
         try:
             if self._browser:
-                await self._browser.close()
+                self._browser.stop()
         except Exception:
             pass
-        try:
-            if hasattr(self, "_pw") and self._pw:
-                await self._pw.stop()
-        except Exception:
-            pass
-        self._page = None
-        self._context = None
         self._browser = None
 
     @property

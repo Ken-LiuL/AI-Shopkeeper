@@ -27,6 +27,7 @@ from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
 from src.api.selection import router as selection_router
 from src.api.sync import router as sync_router
+from src.api.sync_receiver import router as sync_receiver_router
 from src.api.system import router as system_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
@@ -82,7 +83,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             from src.scheduler import init_scheduler, start_scheduler
 
             init_scheduler()
-            _init_sync_scheduler()
+            # Sync jobs removed — data is now pushed by local sync daemon via /api/sync/ingest
+            # _init_sync_scheduler()
             start_scheduler()
             logger.info("Scheduler started")
         except Exception:
@@ -567,6 +569,7 @@ app.include_router(listing_router)
 app.include_router(products_router)
 app.include_router(dashboard_router)
 app.include_router(sync_router)
+app.include_router(sync_receiver_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
@@ -576,6 +579,7 @@ app.include_router(competitors_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
 app.include_router(analytics_router)
+app.include_router(sync_receiver_router)
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)

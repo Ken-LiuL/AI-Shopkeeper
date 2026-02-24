@@ -1,0 +1,139 @@
+"""数据同步接收 API — 接收本地 daemon 推送的 QNH 数据。
+
+架构: 本地 daemon (nodriver) → POST /api/sync/ingest → Render 后端 → DB
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from datetime import UTC, datetime
+from typing import Any
+
+from fastapi import APIRouter, Header, HTTPException
+from pydantic import BaseModel
+
+from .deps import get_pool
+
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/sync", tags=["sync"])
+
+SYNC_API_KEY = os.environ.get("SYNC_API_KEY", "")
+
+# source → DB 表映射
+SOURCE_TABLE_MAP = {
+    "metrics": "qnh_store_metrics",
+    "products": "qnh_products",
+    "orders": "qnh_orders",
+    "inventory": "qnh_inventory",
+    "reviews": "qnh_reviews",
+    "traffic": "qnh_traffic",
+    "promotions": "qnh_promotions",
+    "customers": "qnh_customers",
+    "refunds": "qnh_refunds",
+    "finance": "qnh_settlements",
+    "im_history": "qnh_im_messages",
+    "channels": "qnh_traffic_channels",
+}
+
+
+class IngestRequest(BaseModel):
+    source: str
+    data: list[dict[str, Any]]
+    synced_at: str | None = None
+    api_key: str | None = None
+
+
+class IngestResponse(BaseModel):
+    ok: bool
+    records: int
+    source: str
+    message: str = ""
+
+
+def _verify_key(api_key: str | None, header_key: str | None) -> None:
+    """验证 API key。"""
+    if not SYNC_API_KEY:
+        return  # 未配置则跳过
+    key = header_key or api_key
+    if key != SYNC_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid sync API key")
+
+
+@router.post("/ingest", response_model=IngestResponse)
+async def ingest_data(
+    req: IngestRequest,
+    x_sync_key: str | None = Header(None),
+) -> IngestResponse:
+    """接收并存储同步数据。
+
+    本地 daemon 抓取 QNH 数据后 POST 到这里，后端直接写入对应 DB 表。
+    """
+    _verify_key(req.api_key, x_sync_key)
+
+    if req.source not in SOURCE_TABLE_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {req.source}")
+
+    if not req.data:
+        return IngestResponse(ok=True, records=0, source=req.source, message="empty data")
+
+    table = SOURCE_TABLE_MAP[req.source]
+    pool = await get_pool()
+    synced_at = req.synced_at or datetime.now(UTC).isoformat()
+
+    try:
+        count = await _insert_records(pool, table, req.source, req.data, synced_at)
+        logger.info("Ingested %d records into %s", count, table)
+        return IngestResponse(ok=True, records=count, source=req.source)
+    except Exception as e:
+        logger.error("Ingest failed for %s: %s", req.source, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+async def _insert_records(
+    pool: Any,
+    table: str,
+    source: str,
+    data: list[dict[str, Any]],
+    synced_at: str,
+) -> int:
+    """将数据插入对应表。使用 JSONB 存储原始数据 + 结构化字段。"""
+    import json
+
+    count = 0
+    async with pool.acquire() as conn:
+        for row in data:
+            # 通用存储：raw_data JSONB 列 + synced_at
+            # 每个表结构不同，用 upsert 或 insert
+            await conn.execute(
+                f"""
+                INSERT INTO {table}_raw (source, raw_data, synced_at)
+                VALUES ($1, $2::jsonb, $3)
+                """,
+                source,
+                json.dumps(row, ensure_ascii=False),
+                synced_at,
+            )
+            count += 1
+
+    return count
+
+
+@router.get("/status")
+async def sync_status() -> dict[str, Any]:
+    """同步状态：最近同步时间和记录数。"""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        results = {}
+        for source, table in SOURCE_TABLE_MAP.items():
+            try:
+                row = await conn.fetchrow(
+                    f"SELECT COUNT(*) as cnt, MAX(synced_at) as last_sync FROM {table}_raw"
+                )
+                results[source] = {
+                    "count": row["cnt"] if row else 0,
+                    "last_sync": str(row["last_sync"]) if row and row["last_sync"] else None,
+                }
+            except Exception:
+                results[source] = {"count": 0, "last_sync": None, "error": "table not found"}
+        return {"sources": results}
