@@ -29,16 +29,20 @@ async def init_pool() -> asyncpg.Pool:
             f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
         )
     cfg = get_settings().system.database.get("postgres", {})
-    import ssl as _ssl
-    ssl_ctx = _ssl.create_default_context()
-    ssl_ctx.check_hostname = False
-    ssl_ctx.verify_mode = _ssl.CERT_NONE
+    # Use SSL for external Render PG URLs, skip for internal
+    ssl_param = None
+    if dsn and ".render.com" in dsn:
+        import ssl as _ssl
+        ssl_ctx = _ssl.create_default_context()
+        ssl_ctx.check_hostname = False
+        ssl_ctx.verify_mode = _ssl.CERT_NONE
+        ssl_param = ssl_ctx
     _pool = await asyncpg.create_pool(
         dsn=dsn,
         min_size=cfg.get("min_connections", 2),
         max_size=cfg.get("max_connections", 5),
         timeout=10,
-        ssl=ssl_ctx,
+        **({"ssl": ssl_param} if ssl_param else {}),
     )
     logger.info("PostgreSQL pool initialised (min=%s, max=%s)", cfg.get("min_connections", 5), cfg.get("max_connections", 20))
     return _pool
