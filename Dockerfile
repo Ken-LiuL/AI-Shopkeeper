@@ -17,12 +17,8 @@ COPY config/ config/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
 
-# 安装 Chromium（nodriver 会自动找到系统 Chrome，用于 h5guard mtgsig 签名）
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV HEADLESS=true
+# Chromium NOT needed on server — sync runs locally via nodriver daemon
+# Server only serves API + agents
 
 EXPOSE 8000
 
