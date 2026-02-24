@@ -20,15 +20,20 @@ async def init_pool() -> asyncpg.Pool:
     if _pool is not None:
         return _pool
 
-    cfg = get_settings().system.database["postgres"]
-    dsn = (
-        f"postgresql://{cfg['user']}:{cfg['password']}"
-        f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
-    )
+    import os
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        cfg = get_settings().system.database["postgres"]
+        dsn = (
+            f"postgresql://{cfg['user']}:{cfg['password']}"
+            f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
+        )
+    cfg = get_settings().system.database.get("postgres", {})
     _pool = await asyncpg.create_pool(
         dsn=dsn,
-        min_size=cfg.get("min_connections", 5),
-        max_size=cfg.get("max_connections", 20),
+        min_size=cfg.get("min_connections", 2),
+        max_size=cfg.get("max_connections", 5),
+        timeout=10,
     )
     logger.info("PostgreSQL pool initialised (min=%s, max=%s)", cfg.get("min_connections", 5), cfg.get("max_connections", 20))
     return _pool

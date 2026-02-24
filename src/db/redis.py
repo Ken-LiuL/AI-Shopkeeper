@@ -21,14 +21,20 @@ async def init_redis() -> aioredis.Redis:
     if _redis is not None:
         return _redis
 
-    cfg = get_settings().system.database["redis"]
+    import os
+    redis_url = os.environ.get("REDIS_URL")
+    if not redis_url:
+        cfg = get_settings().system.database["redis"]
+        redis_url = cfg["url"]
+    cfg = get_settings().system.database.get("redis", {})
     _redis = aioredis.from_url(
-        cfg["url"],
-        max_connections=cfg.get("max_connections", 10),
+        redis_url,
+        max_connections=cfg.get("max_connections", 5),
         decode_responses=True,
+        socket_connect_timeout=10,
     )
     await _redis.ping()
-    logger.info("Redis connected (%s)", cfg["url"])
+    logger.info("Redis connected (%s)", redis_url[:30] + "...")
     return _redis
 
 
