@@ -121,7 +121,7 @@ async def delete_product(product_id: str) -> APIResponse[dict]:
     """Soft-delete a product."""
     pool = pg.get_pool()
     row = await pool.fetchrow(
-        "UPDATE products SET status = 'deleted', updated_at = NOW() WHERE product_id = $1 RETURNING *",
+        "UPDATE products SET status = 'delisted', updated_at = NOW() WHERE product_id = $1 RETURNING *",
         product_id,
     )
     if not row:
@@ -196,7 +196,7 @@ async def list_categories() -> APIResponse[list[dict]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT category, COUNT(*)::int AS product_count
-           FROM products WHERE status != 'deleted' AND category IS NOT NULL
+           FROM products WHERE status != 'delisted' AND category IS NOT NULL
            GROUP BY category ORDER BY product_count DESC"""
     )
     return APIResponse(data=[dict(r) for r in rows])

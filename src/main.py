@@ -151,6 +151,31 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("Shutdown complete ✓")
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split SQL text into individual statements, respecting $$ blocks and strings."""
+    statements: list[str] = []
+    current: list[str] = []
+    in_dollar = False
+    lines = sql.split("\n")
+    for line in lines:
+        # Track $$ delimiters (used in PL/pgSQL function bodies)
+        count = line.count("$$")
+        if count % 2 == 1:
+            in_dollar = not in_dollar
+        current.append(line)
+        # Only split on ; at end of line when not inside $$ block
+        stripped = line.rstrip()
+        if stripped.endswith(";") and not in_dollar:
+            statements.append("\n".join(current))
+            current = []
+    # Leftover (shouldn't happen in well-formed SQL)
+    if current:
+        remaining = "\n".join(current).strip()
+        if remaining:
+            statements.append(remaining)
+    return statements
+
+
 async def _run_migrations(pool: Any) -> None:
     """Auto-run SQL migration files in order."""
     import os
@@ -176,12 +201,25 @@ async def _run_migrations(pool: Any) -> None:
         if fname in applied:
             continue
         fpath = migrations_dir / fname
-        sql = fpath.read_text()
+        raw_sql = fpath.read_text()
         logger.info("Applying migration: %s", fname)
         try:
             async with pool.acquire() as conn:
-                await conn.execute(sql)
-                await conn.execute("INSERT INTO _migrations (filename) VALUES ($1)", fname)
+                # Strip BEGIN/COMMIT — asyncpg manages transactions itself.
+                import re as _re
+
+                cleaned = _re.sub(r"(?mi)^\s*(BEGIN|COMMIT)\s*;\s*$", "", raw_sql)
+
+                # Split into individual statements on semicolons.
+                # Handle $$ function bodies by not splitting inside them.
+                statements = _split_sql_statements(cleaned)
+
+                async with conn.transaction():
+                    for stmt in statements:
+                        stmt = stmt.strip()
+                        if stmt:
+                            await conn.execute(stmt)
+                    await conn.execute("INSERT INTO _migrations (filename) VALUES ($1)", fname)
             logger.info("Migration applied: %s ✓", fname)
         except Exception as e:
             logger.error("Migration %s failed: %s", fname, e)
