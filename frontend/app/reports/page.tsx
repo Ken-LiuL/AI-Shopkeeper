@@ -55,11 +55,11 @@ export default function ReportsPage() {
         {/* KPI Cards */}
         {report && (
           <div className="grid grid-cols-4 gap-4">
-            <StatsCard label="销售额" value={`¥${(report.revenue ?? report.total_revenue ?? 0).toLocaleString()}`} icon="💰" />
-            <StatsCard label="订单数" value={report.order_count ?? 0} icon="📋" />
-            <StatsCard label="客单价" value={`¥${(report.avg_order_value ?? report.avg_order_value ?? 0).toLocaleString()}`} icon="🛒" />
+            <StatsCard title="销售额" value={`¥${(report.revenue ?? report.total_revenue ?? 0).toLocaleString()}`} icon="💰" />
+            <StatsCard title="订单数" value={report.order_count ?? 0} icon="📋" />
+            <StatsCard title="客单价" value={`¥${(report.avg_order_value ?? report.avg_order_value ?? 0).toLocaleString()}`} icon="🛒" />
             <StatsCard
-              label={period === 'daily' ? '环比昨日' : '退款率'}
+              title={period === 'daily' ? '环比昨日' : '退款率'}
               value={period === 'daily' ? `${report.revenue_vs_yesterday > 0 ? '+' : ''}${report.revenue_vs_yesterday?.toFixed(1) ?? 0}%` : `${((report.refund_rate ?? 0) * 100).toFixed(1)}%`}
               icon={period === 'daily' ? '📊' : '↩️'}
             />
@@ -71,7 +71,7 @@ export default function ReportsPage() {
           <Card>
             <div className="p-4">
               <h3 className="text-white font-medium mb-4">销售趋势 (近30天)</h3>
-              <LineChart data={trend.map(t => ({ name: t.date?.slice(5), value: Number(t.revenue) }))} />
+              <LineChart data={trend.map(t => ({ name: t.date?.slice(5), value: Number(t.revenue) }))} xKey="name" yKey="value" />
             </div>
           </Card>
         )}

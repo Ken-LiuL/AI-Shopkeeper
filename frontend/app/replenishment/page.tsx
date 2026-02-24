@@ -105,9 +105,9 @@ export default function ReplenishmentPage() {
       <Header title="补货管理" />
       <div className="p-6 space-y-4">
         <div className="grid grid-cols-3 gap-4">
-          <StatsCard label="需补货商品" value={suggestions.length} icon="📦" />
-          <StatsCard label="已选中" value={selected.size} icon="✅" />
-          <StatsCard label="预估总成本" value={`¥${totalCost.toLocaleString()}`} icon="💰" />
+          <StatsCard title="需补货商品" value={suggestions.length} icon="📦" />
+          <StatsCard title="已选中" value={selected.size} icon="✅" />
+          <StatsCard title="预估总成本" value={`¥${totalCost.toLocaleString()}`} icon="💰" />
         </div>
 
         <Card>

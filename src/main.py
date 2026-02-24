@@ -47,9 +47,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
 
+    import os
+    # Determine vector store backend
+    vector_store_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
+
     # Init database connections
     await pg_db.init_pool()
-    await neo4j_db.init_driver()
+    if vector_store_backend == "neo4j":
+        await neo4j_db.init_driver()
     await redis_db.init_redis()
 
     # Prometheus metrics endpoint (if enabled)
@@ -77,14 +82,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Init and register skills for customer service agent
     try:
         from src.skills.embedding import EmbeddingSkill
-        from src.skills.neo4j_skill import Neo4jSkill
         from src.skills.reranker import RerankerSkill
         from src.agents.customer_service.skills_registry import register_skills
 
-        neo4j_skill = Neo4jSkill(driver=neo4j_db.get_driver())
         embedding_skill = EmbeddingSkill()
         reranker_skill = RerankerSkill()
-        register_skills(neo4j=neo4j_skill, embedding=embedding_skill, reranker=reranker_skill)
+
+        if vector_store_backend == "neo4j":
+            from src.skills.neo4j_skill import Neo4jSkill
+            vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
+            logger.info("Using Neo4j as vector store backend")
+        else:
+            from src.skills.pgvector_skill import PgVectorSkill
+            vector_skill = PgVectorSkill(pool=pg_db.get_pool())
+            logger.info("Using PostgreSQL pgvector as vector store backend")
+
+        register_skills(vector_store=vector_skill, embedding=embedding_skill, reranker=reranker_skill)
         logger.info("Customer service skills registered ✓")
     except Exception:
         logger.warning("Failed to register customer service skills", exc_info=True)
@@ -104,7 +117,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         pass
     
     await redis_db.close_redis()
-    await neo4j_db.close_driver()
+    if vector_store_backend == "neo4j":
+        await neo4j_db.close_driver()
     await pg_db.close_pool()
     logger.info("Shutdown complete ✓")
 
@@ -144,12 +158,14 @@ async def readiness_check() -> dict[str, str | bool]:
     except Exception:
         checks["postgres"] = False
 
-    # Neo4j
-    try:
-        await neo4j_db.query("RETURN 1 AS n")
-        checks["neo4j"] = True
-    except Exception:
-        checks["neo4j"] = False
+    # Neo4j (only check if using neo4j backend)
+    import os as _os
+    if _os.environ.get("VECTOR_STORE", "postgres").lower() == "neo4j":
+        try:
+            await neo4j_db.query("RETURN 1 AS n")
+            checks["neo4j"] = True
+        except Exception:
+            checks["neo4j"] = False
 
     # Redis
     try:

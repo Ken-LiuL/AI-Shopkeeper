@@ -198,12 +198,21 @@ def create_skills(mode: str = "mock") -> SkillsContainer:
         reranker = MockRerankerSkill()
     elif mode == "production":
         # Production mode — caller should set up connections before using
+        import os
+        vector_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
         database = DatabaseSkill(pool=None)  # pool injected later
-        try:
-            from .neo4j_skill import Neo4jSkill
-            neo4j = Neo4jSkill(driver=None)  # driver injected later
-        except Exception:
-            neo4j = MockNeo4jSkill()
+        if vector_backend == "neo4j":
+            try:
+                from .neo4j_skill import Neo4jSkill
+                neo4j = Neo4jSkill(driver=None)  # driver injected later
+            except Exception:
+                neo4j = MockNeo4jSkill()
+        else:
+            try:
+                from .pgvector_skill import PgVectorSkill
+                neo4j = PgVectorSkill(pool=None)  # pool injected later
+            except Exception:
+                neo4j = MockNeo4jSkill()
         try:
             from .embedding import EmbeddingSkill
             embedding = EmbeddingSkill()

@@ -103,9 +103,9 @@ export default function PricingPage() {
       <Header title="定价管理" />
       <div className="p-6 space-y-4">
         <div className="grid grid-cols-3 gap-4">
-          <StatsCard label="调价建议" value={suggestions.length} icon="💲" />
-          <StatsCard label="建议降价" value={suggestions.filter(s => s.suggested_price < s.current_price).length} icon="📉" />
-          <StatsCard label="建议涨价" value={suggestions.filter(s => s.suggested_price > s.current_price).length} icon="📈" />
+          <StatsCard title="调价建议" value={suggestions.length} icon="💲" />
+          <StatsCard title="建议降价" value={suggestions.filter(s => s.suggested_price < s.current_price).length} icon="📉" />
+          <StatsCard title="建议涨价" value={suggestions.filter(s => s.suggested_price > s.current_price).length} icon="📈" />
         </div>
 
         <Card>
