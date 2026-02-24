@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: ai-store-manager
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    region: singapore
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: VECTOR_STORE
+        value: postgres
+      - key: OPENROUTER_API_KEY
+        value: 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
+      - key: OPENROUTER_BASE_URL
+        value: https://openrouter.ai/api/v1
+      - key: OPENROUTER_MODEL
+        value: anthropic/claude-sonnet-4
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-store-db
+          property: connectionURI
+      - key: REDIS_URL
+        fromService:
+          name: ai-store-redis
+          type: redis
+          property: connectionURI
+  - type: redis
+    name: ai-store-redis
+    plan: free
+    region: singapore
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+databases:
+  - name: ai-store-db
+    plan: free
+    region: singapore

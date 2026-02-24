@@ -19,5 +19,5 @@ COPY scripts/ scripts/
 
 EXPOSE 8000
 
-# Railway injects PORT env var
-CMD uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 2
+# Render/Railway inject PORT env var; use 1 worker to fit 512MB RAM
+CMD uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1

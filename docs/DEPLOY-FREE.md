@@ -1,9 +1,9 @@
-# 免费部署指南：Railway + Vercel
+# 免费部署指南：Render + Vercel
 
 ## 架构
 
 ```
-用户 → Vercel (Next.js 前端) → Railway (FastAPI 后端)
+用户 → Vercel (Next.js 前端) → Render (FastAPI 后端)
                                   ├── PostgreSQL (pgvector)
                                   └── Redis
 ```
@@ -12,84 +12,71 @@
 
 | 服务 | 方案 | 费用 |
 |------|------|------|
-| Railway | Trial/Hobby | 免费 $5/月额度 |
+| Render | Free | 免费 |
 | Vercel | Hobby | 免费 |
 
 ---
 
-## 一、后端部署到 Railway
+## 一、后端部署到 Render
 
-### 1. 创建项目
+### 方式 A：Blueprint 一键部署（推荐）
 
-1. 登录 [railway.app](https://railway.app)
-2. New Project → Deploy from GitHub repo
-3. 选择 `ai-store-manager` 仓库（根目录即后端）
+1. 登录 [render.com](https://render.com)（支持 GitHub 登录）
+2. **New** → **Blueprint**
+3. 连接 GitHub，选择 `AI-Shopkeeper` 仓库
+4. Render 自动读取 `render.yaml`，创建：
+   - Web Service（FastAPI 后端）
+   - PostgreSQL 数据库
+   - Redis 缓存
+5. 点击 **Apply** 等待部署完成
 
-### 2. 添加数据库插件
+### 方式 B：手动创建
 
-在 Railway 项目中：
-- **+ New** → **Database** → **PostgreSQL** （自动注入 `DATABASE_URL`, `PGHOST` 等）
-- **+ New** → **Database** → **Redis** （自动注入 `REDIS_URL`）
+1. **New** → **Web Service** → 连接 GitHub repo
+2. **Runtime**: Docker
+3. **Region**: Singapore
+4. **Plan**: Free
+5. 添加环境变量：
+   ```
+   VECTOR_STORE=postgres
+   OPENROUTER_API_KEY=<your-key>
+   OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+   OPENROUTER_MODEL=anthropic/claude-sonnet-4
+   ```
+6. 单独创建 PostgreSQL 和 Redis，将连接 URL 填入 `DATABASE_URL` 和 `REDIS_URL`
 
-### 3. 设置环境变量
+### 获取后端 URL
 
-在 Railway Dashboard → 后端服务 → **Variables** 中添加：
-
-```
-VECTOR_STORE=postgres
-OPENROUTER_API_KEY=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
-NEO4J_URI=
-NEO4J_USER=
-NEO4J_PASSWORD=
-PROMETHEUS_ENABLED=false
-```
-
-> PostgreSQL 和 Redis 的连接信息由插件自动注入，**无需手动设置**。
-
-### 4. 确认部署
-
-- Railway 会自动检测 `Dockerfile` 并构建
-- 健康检查路径已配置为 `/health`
-- 部署成功后，在 Settings → Networking → **Generate Domain** 获取公开 URL
+部署完成后，Render 会分配类似 `https://ai-store-manager-xxxx.onrender.com` 的 URL。
 
 ---
 
 ## 二、前端部署到 Vercel
 
-### 1. 导入项目
-
 1. 登录 [vercel.com](https://vercel.com)
-2. **Add New** → **Project** → 导入 GitHub 仓库
-3. **Root Directory** 设为 `frontend`
-4. Framework 自动检测为 Next.js
-
-### 2. 设置环境变量
-
-在 Vercel → Project Settings → **Environment Variables** 中添加：
-
-```
-NEXT_PUBLIC_API_URL=https://你的railway后端域名
-```
-
-例如：`https://ai-store-manager-production.up.railway.app`
-
-### 3. 部署
-
-点击 Deploy，完成。
+2. **New Project** → 选择 GitHub repo → Root Directory 设为 `frontend`
+3. 添加环境变量：
+   ```
+   NEXT_PUBLIC_API_URL=https://ai-store-manager-xxxx.onrender.com
+   ```
+4. 部署
 
 ---
 
-## 三、部署后验证
+## 三、GitHub Actions 自动部署（可选）
 
-1. 访问 Railway 后端：`https://你的域名/health` → 应返回 `{"status":"ok"}`
-2. 访问 Vercel 前端：打开首页，检查数据加载
+1. 在 Render Dashboard → Web Service → **Settings** → **Deploy Hook** 复制 URL
+2. 在 GitHub repo → **Settings** → **Secrets** 添加：
+   - `RENDER_DEPLOY_HOOK_URL`: Render deploy hook URL
+   - `VERCEL_TOKEN` / `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID`: Vercel 相关
+
+Push 到 main 分支会自动触发部署。
 
 ---
 
-## 四、注意事项
+## 注意事项
 
-- **Railway 免费额度**：$5/月，含 500 小时执行时间。休眠不计费。超出需升级。
-- **PostgreSQL pgvector**：首次部署后需手动执行 `CREATE EXTENSION vector;`（可通过 Railway 的 psql 连接）
-- **Neo4j 已移除**：代码中 Neo4j 初始化会 graceful fallback，不影响运行
-- **CORS**：后端已配置 `allow_origins=["*"]`，生产环境建议改为 Vercel 域名
-- **前端 API 代理**：`vercel.json` 中的 rewrites 可选用，也可直接通过 `NEXT_PUBLIC_API_URL` 跨域访问
+- Render 免费层 512MB RAM，已配置单 worker
+- 免费层服务 15 分钟无请求会休眠，首次请求需 ~30s 冷启动
+- PostgreSQL 免费层 90 天后过期，需手动续期
+- Redis 免费层 25MB 内存限制
