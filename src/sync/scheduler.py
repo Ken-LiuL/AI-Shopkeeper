@@ -13,12 +13,13 @@ logger = logging.getLogger(__name__)
 
 # Schedule config: when to run each syncer
 SYNC_SCHEDULE: dict[str, dict[str, str]] = {
-    "products": {"full": "06:00", "incremental": "every_4h"},
-    "orders": {"incremental": "every_30min"},
-    "metrics": {"full": "23:30"},
-    "inventory": {"incremental": "every_1h"},
-    "traffic": {"full": "23:00"},
-    "reviews": {"incremental": "every_4h"},
+    "products": {"full": "06:00", "incremental": "every_30min"},
+    "orders": {"incremental": "every_15min"},
+    "metrics": {"incremental": "every_1h"},
+    "inventory": {"incremental": "every_30min"},
+    "traffic": {"incremental": "every_1h"},
+    "reviews": {"incremental": "every_1h"},
+    "competitors": {"full": "10:00"},
 }
 
 # Interval parsing

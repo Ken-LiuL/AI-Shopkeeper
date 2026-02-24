@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -53,6 +53,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # Init database connections
     await pg_db.init_pool()
+
+    # Auto-run migrations
+    await _run_migrations(pg_db.get_pool())
+
     if vector_store_backend == "neo4j":
         await neo4j_db.init_driver()
     await redis_db.init_redis()
@@ -74,10 +78,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         try:
             from src.scheduler import init_scheduler, start_scheduler
             init_scheduler()
+            _init_sync_scheduler()
             start_scheduler()
             logger.info("Scheduler started")
         except Exception:
             logger.warning("Failed to start scheduler", exc_info=True)
+
+        # Check if DB is empty → trigger full sync in background
+        try:
+            import asyncio as _asyncio
+            pool = pg_db.get_pool()
+            count = await pool.fetchval(
+                "SELECT COUNT(*) FROM qnh_products"
+            )
+            if count == 0:
+                logger.info("Empty database detected, launching full sync in background…")
+                _asyncio.create_task(_initial_full_sync(pool))
+            else:
+                logger.info("Database has %d products, skipping initial full sync", count)
+        except Exception:
+            logger.warning("Failed to check DB for initial sync", exc_info=True)
 
     # Init and register skills for customer service agent
     try:
@@ -121,6 +141,242 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         await neo4j_db.close_driver()
     await pg_db.close_pool()
     logger.info("Shutdown complete ✓")
+
+
+async def _run_migrations(pool: Any) -> None:
+    """Auto-run SQL migration files in order."""
+    import os
+    from pathlib import Path
+
+    migrations_dir = Path(__file__).resolve().parent.parent / "migrations" / "postgres"
+    if not migrations_dir.exists():
+        logger.warning("Migrations directory not found: %s", migrations_dir)
+        return
+
+    # Ensure migration tracking table exists
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS _migrations (
+                filename TEXT PRIMARY KEY,
+                applied_at TIMESTAMPTZ DEFAULT now()
+            )
+        """)
+        applied = {r["filename"] for r in await conn.fetch("SELECT filename FROM _migrations")}
+
+    sql_files = sorted(f for f in os.listdir(migrations_dir) if f.endswith(".sql"))
+    for fname in sql_files:
+        if fname in applied:
+            continue
+        fpath = migrations_dir / fname
+        sql = fpath.read_text()
+        logger.info("Applying migration: %s", fname)
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(sql)
+                await conn.execute(
+                    "INSERT INTO _migrations (filename) VALUES ($1)", fname
+                )
+            logger.info("Migration applied: %s ✓", fname)
+        except Exception as e:
+            logger.error("Migration %s failed: %s", fname, e)
+            # Don't block startup on migration failure
+            break
+
+
+async def _initial_full_sync(pool: Any) -> None:
+    """Run full sync for all syncers on first deployment, then build vector index."""
+    try:
+        from src.sync import (
+            QNHClient, QNHAuth,
+            ProductSyncer, OrderSyncer, InventorySyncer,
+            ReviewSyncer, TrafficSyncer, MetricsSyncer,
+        )
+
+        auth = QNHAuth()
+        async with QNHClient(auth=auth) as client:
+            syncers = [
+                ProductSyncer(client, pool),
+                OrderSyncer(client, pool),
+                InventorySyncer(client, pool),
+                ReviewSyncer(client, pool),
+                TrafficSyncer(client, pool),
+                MetricsSyncer(client, pool),
+            ]
+
+            for syncer in syncers:
+                logger.info("Initial full sync: %s …", syncer.name)
+                try:
+                    result = await syncer.full_sync()
+                    logger.info("Initial sync %s: %s", syncer.name, result.summary)
+                except Exception as e:
+                    logger.error("Initial sync %s failed: %s", syncer.name, e)
+
+        # Build vector index after sync
+        await _build_vector_index(pool)
+        logger.info("Initial full sync complete ✓")
+
+    except Exception as e:
+        logger.error("Initial full sync failed: %s", e, exc_info=True)
+
+
+async def _build_vector_index(pool: Any) -> None:
+    """Build pgvector embeddings for all products in kg_products."""
+    try:
+        from src.skills.embedding import EmbeddingSkill
+
+        embedding_skill = EmbeddingSkill()
+
+        # Read all products from qnh_products
+        rows = await pool.fetch(
+            "SELECT spu_id, name, category, brand, spec FROM qnh_products"
+        )
+        if not rows:
+            logger.info("No products to embed")
+            return
+
+        logger.info("Building vector index for %d products…", len(rows))
+
+        batch_texts = []
+        batch_rows = []
+
+        for row in rows:
+            text = " ".join(filter(None, [
+                row["name"] or "",
+                row.get("category") or "",
+                row.get("brand") or "",
+                row.get("spec") or "",
+            ]))
+            batch_texts.append(text)
+            batch_rows.append(row)
+
+        # Embed in batches
+        BATCH_SIZE = 32
+        for i in range(0, len(batch_texts), BATCH_SIZE):
+            chunk_texts = batch_texts[i:i + BATCH_SIZE]
+            chunk_rows = batch_rows[i:i + BATCH_SIZE]
+            embeddings = embedding_skill.embed_batch(chunk_texts, batch_size=BATCH_SIZE)
+
+            for row, emb in zip(chunk_rows, embeddings):
+                emb_str = "[" + ",".join(str(x) for x in emb) + "]"
+                await pool.execute(
+                    """
+                    INSERT INTO kg_products (product_id, name, description, embedding, updated_at)
+                    VALUES ($1, $2, $3, $4::vector, now())
+                    ON CONFLICT (product_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        description = EXCLUDED.description,
+                        embedding = EXCLUDED.embedding,
+                        updated_at = now()
+                    """,
+                    row["spu_id"],
+                    row["name"] or "",
+                    " ".join(filter(None, [
+                        row.get("category") or "",
+                        row.get("brand") or "",
+                        row.get("spec") or "",
+                    ])),
+                    emb_str,
+                )
+
+            logger.info("Embedded products %d–%d / %d", i + 1, min(i + BATCH_SIZE, len(batch_texts)), len(batch_texts))
+
+        logger.info("Vector index built for %d products ✓", len(rows))
+
+    except Exception as e:
+        logger.error("Failed to build vector index: %s", e, exc_info=True)
+
+
+def _init_sync_scheduler() -> None:
+    """Add QNH data sync jobs to the APScheduler."""
+    from apscheduler.triggers.cron import CronTrigger
+    from src.scheduler import get_scheduler
+
+    scheduler = get_scheduler()
+
+    # Products + Inventory: every 30 min
+    scheduler.add_job(
+        _run_incremental_sync, args=["products"],
+        trigger=CronTrigger.from_crontab("*/30 * * * *"),
+        id="sync_products", replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_incremental_sync, args=["inventory"],
+        trigger=CronTrigger.from_crontab("*/30 * * * *"),
+        id="sync_inventory", replace_existing=True,
+    )
+
+    # Orders: every 15 min
+    scheduler.add_job(
+        _run_incremental_sync, args=["orders"],
+        trigger=CronTrigger.from_crontab("*/15 * * * *"),
+        id="sync_orders", replace_existing=True,
+    )
+
+    # Reviews: every 1 hour
+    scheduler.add_job(
+        _run_incremental_sync, args=["reviews"],
+        trigger=CronTrigger.from_crontab("0 * * * *"),
+        id="sync_reviews", replace_existing=True,
+    )
+
+    # Traffic + Metrics: every 1 hour
+    scheduler.add_job(
+        _run_incremental_sync, args=["traffic"],
+        trigger=CronTrigger.from_crontab("5 * * * *"),
+        id="sync_traffic", replace_existing=True,
+    )
+    scheduler.add_job(
+        _run_incremental_sync, args=["metrics"],
+        trigger=CronTrigger.from_crontab("10 * * * *"),
+        id="sync_metrics", replace_existing=True,
+    )
+
+    # Competitors: daily at 10:00
+    scheduler.add_job(
+        _run_incremental_sync, args=["competitors"],
+        trigger=CronTrigger.from_crontab("0 10 * * *"),
+        id="sync_competitors", replace_existing=True,
+    )
+
+    logger.info("QNH sync scheduler jobs registered ✓")
+
+
+async def _run_incremental_sync(syncer_name: str) -> None:
+    """Run a single syncer's smart sync (incremental or full based on state)."""
+    try:
+        from src.sync import (
+            QNHClient, QNHAuth,
+            ProductSyncer, OrderSyncer, InventorySyncer,
+            ReviewSyncer, TrafficSyncer, MetricsSyncer,
+        )
+        from src.sync.competitors import CompetitorSyncer
+        from src.db import postgres as pg
+
+        pool = pg.get_pool()
+        auth = QNHAuth()
+
+        syncer_map = {
+            "products": ProductSyncer,
+            "orders": OrderSyncer,
+            "inventory": InventorySyncer,
+            "reviews": ReviewSyncer,
+            "traffic": TrafficSyncer,
+            "metrics": MetricsSyncer,
+            "competitors": CompetitorSyncer,
+        }
+
+        cls = syncer_map.get(syncer_name)
+        if not cls:
+            logger.warning("Unknown syncer: %s", syncer_name)
+            return
+
+        async with QNHClient(auth=auth) as client:
+            syncer = cls(client, pool)
+            result = await syncer.sync()
+            logger.info("Scheduled sync %s: %s", syncer_name, result.summary)
+
+    except Exception as e:
+        logger.error("Scheduled sync %s failed: %s", syncer_name, e, exc_info=True)
 
 
 app = FastAPI(

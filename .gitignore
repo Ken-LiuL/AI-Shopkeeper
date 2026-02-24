@@ -12,3 +12,6 @@ build/
 .coverage
 node_modules/
 .next/
+
+# QNH cookies (sensitive)
+config/qnh_cookies.json

@@ -1,4 +1,4 @@
-"""QNH Authentication — login, slider CAPTCHA, SMS, session persistence."""
+"""QNH Authentication — cookie-based auth from config file or environment variable."""
 
 from __future__ import annotations
 
@@ -14,23 +14,25 @@ import aiohttp
 
 logger = logging.getLogger(__name__)
 
+# Cookie config file path (relative to project root)
+COOKIE_CONFIG_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "qnh_cookies.json"
+
 # Session file for persistence across restarts
 SESSION_FILE = Path(os.environ.get(
     "QNH_SESSION_FILE",
     os.path.expanduser("~/.qnh_session.json"),
 ))
 
-# CDP endpoint for slider CAPTCHA
-CDP_ENDPOINT = os.environ.get("QNH_CDP_ENDPOINT", "http://127.0.0.1:9222")
-
 QNH_BASE = "https://qnh.meituan.com"
 
 
 class QNHAuth:
-    """Manages QNH authentication lifecycle.
+    """Manages QNH authentication via pre-configured cookies.
 
-    Flow: account/password → Yoda slider CAPTCHA → optional SMS → session cookie.
-    Session is persisted to file and reused until expired.
+    Cookie loading priority:
+    1. config/qnh_cookies.json (local file, for development)
+    2. QNH_COOKIES_JSON environment variable (for Render/production)
+    3. Fallback to session file (~/.qnh_session.json)
     """
 
     def __init__(
@@ -54,24 +56,39 @@ class QNHAuth:
             if self._is_session_valid():
                 return self._cookies
 
-            # Try loading from file
+            # 1. Try loading from config file
+            cookies = self._load_from_config_file()
+            if cookies:
+                self._cookies = cookies
+                self._session_expires = time.time() + 7200  # 2 hours
+                if await self._check_session():
+                    logger.info("Loaded cookies from config file (%s)", COOKIE_CONFIG_FILE)
+                    return self._cookies
+                else:
+                    logger.warning("Config file cookies failed session check, but using them anyway")
+                    # Still use them — the check endpoint might not be reliable
+                    return self._cookies
+
+            # 2. Try loading from environment variable
+            cookies = self._load_from_env()
+            if cookies:
+                self._cookies = cookies
+                self._session_expires = time.time() + 7200
+                logger.info("Loaded cookies from QNH_COOKIES_JSON env var")
+                return self._cookies
+
+            # 3. Try loading from session file
             if self._load_session_file():
                 if await self._check_session():
                     logger.info("Restored session from file")
                     return self._cookies
 
-            # Try loading from browser CDP (if browser is open with active session)
-            if await self._load_from_browser():
-                if await self._check_session():
-                    logger.info("Restored session from browser CDP")
-                    self._save_session_file()
-                    return self._cookies
-
-            # Full login required
-            logger.info("No valid session, performing login...")
-            await self._login()
-            self._save_session_file()
-            return self._cookies
+            # No valid cookies found
+            raise RuntimeError(
+                "No QNH cookies available. Either:\n"
+                "  1. Create config/qnh_cookies.json with cookie values, or\n"
+                "  2. Set QNH_COOKIES_JSON environment variable with JSON cookie dict"
+            )
 
     async def invalidate(self) -> None:
         """Force session invalidation."""
@@ -79,6 +96,37 @@ class QNHAuth:
         self._session_expires = 0
         if SESSION_FILE.exists():
             SESSION_FILE.unlink()
+
+    # ── Cookie loading methods ──────────────────────────────────────────
+
+    def _load_from_config_file(self) -> dict[str, str]:
+        """Load cookies from config/qnh_cookies.json."""
+        try:
+            if not COOKIE_CONFIG_FILE.exists():
+                return {}
+            data = json.loads(COOKIE_CONFIG_FILE.read_text())
+            if isinstance(data, dict) and data:
+                logger.debug("Found %d cookies in config file", len(data))
+                return {str(k): str(v) for k, v in data.items()}
+            return {}
+        except Exception as e:
+            logger.warning("Failed to load config file cookies: %s", e)
+            return {}
+
+    def _load_from_env(self) -> dict[str, str]:
+        """Load cookies from QNH_COOKIES_JSON environment variable."""
+        env_val = os.environ.get("QNH_COOKIES_JSON", "").strip()
+        if not env_val:
+            return {}
+        try:
+            data = json.loads(env_val)
+            if isinstance(data, dict) and data:
+                logger.debug("Found %d cookies in QNH_COOKIES_JSON env", len(data))
+                return {str(k): str(v) for k, v in data.items()}
+            return {}
+        except Exception as e:
+            logger.warning("Failed to parse QNH_COOKIES_JSON: %s", e)
+            return {}
 
     # ── Session validation ──────────────────────────────────────────────
 
@@ -100,13 +148,12 @@ class QNHAuth:
                 ) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        # If we get a valid response, session is good
                         if data.get("code") == 0 or data.get("data"):
-                            self._session_expires = time.time() + 3600
+                            self._session_expires = time.time() + 7200
                             return True
             return False
         except Exception as e:
-            logger.debug(f"Session check failed: {e}")
+            logger.debug("Session check failed: %s", e)
             return False
 
     # ── Session persistence ─────────────────────────────────────────────
@@ -123,7 +170,7 @@ class QNHAuth:
             self._session_expires = data["expires"]
             return bool(self._cookies)
         except Exception as e:
-            logger.debug(f"Failed to load session file: {e}")
+            logger.debug("Failed to load session file: %s", e)
             return False
 
     def _save_session_file(self) -> None:
@@ -137,207 +184,4 @@ class QNHAuth:
             }))
             SESSION_FILE.chmod(0o600)
         except Exception as e:
-            logger.warning(f"Failed to save session file: {e}")
-
-    # ── Browser CDP session extraction ──────────────────────────────────
-
-    async def _load_from_browser(self) -> bool:
-        """Extract cookies from an open Chrome browser via CDP."""
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{CDP_ENDPOINT}/json", timeout=aiohttp.ClientTimeout(total=3)
-                ) as resp:
-                    targets = await resp.json()
-
-            qnh_target = next(
-                (t for t in targets if "qnh.meituan" in t.get("url", "")), None
-            )
-            if not qnh_target:
-                return False
-
-            # Use CDP to get cookies
-            import websockets  # type: ignore[import-untyped]
-
-            ws_url = qnh_target["webSocketDebuggerUrl"]
-            async with websockets.connect(ws_url) as ws:
-                await ws.send(json.dumps({
-                    "id": 1,
-                    "method": "Network.getCookies",
-                    "params": {"urls": [QNH_BASE]},
-                }))
-                result = json.loads(await ws.recv())
-                cookies = result.get("result", {}).get("cookies", [])
-                if cookies:
-                    self._cookies = {c["name"]: c["value"] for c in cookies}
-                    self._session_expires = time.time() + 3600
-                    return True
-            return False
-        except Exception as e:
-            logger.debug(f"CDP cookie extraction failed: {e}")
-            return False
-
-    # ── Login flow ──────────────────────────────────────────────────────
-
-    async def _login(self) -> None:
-        """Full login flow: credentials → slider → SMS → session.
-
-        This is a complex flow that may require human interaction for SMS codes.
-        For production, we primarily rely on CDP session extraction from an
-        already-logged-in browser, with this as a fallback.
-        """
-        if not self.username or not self.password:
-            raise RuntimeError(
-                "QNH credentials not configured. Set QNH_USERNAME and QNH_PASSWORD "
-                "env vars, or ensure a browser with active QNH session is running."
-            )
-
-        logger.info(f"Attempting QNH login for {self.username}...")
-
-        # Step 1: Initial login request
-        async with aiohttp.ClientSession() as session:
-            # Get CSRF / initial cookies
-            async with session.get(
-                f"{QNH_BASE}/home.html",
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                initial_cookies = {k: v.value for k, v in resp.cookies.items()}
-
-            # Step 2: Submit credentials
-            login_payload = {
-                "login": self.username,
-                "password": self.password,
-                "loginType": 0,
-            }
-            async with session.post(
-                "https://epassport.meituan.com/api/account/login",
-                json=login_payload,
-                params={"yodaReady": "h5", "csecplatform": "4", "csecversion": "4.2.0"},
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                login_result = await resp.json()
-
-            if login_result.get("code") == 0:
-                # Direct success (rare without CAPTCHA)
-                self._cookies = {k: v.value for k, v in session.cookie_jar.filter_cookies(QNH_BASE).items()}
-                self._session_expires = time.time() + 7200
-                logger.info("Login succeeded without CAPTCHA")
-                return
-
-            # Step 3: Handle slider CAPTCHA via CDP
-            if login_result.get("code") in (1001, 1002):  # CAPTCHA required
-                logger.info("Slider CAPTCHA required, attempting CDP solve...")
-                solved = await self._solve_slider_captcha()
-                if not solved:
-                    raise RuntimeError("Failed to solve slider CAPTCHA")
-
-            # Step 4: Handle SMS verification if needed
-            if login_result.get("code") == 2001:  # SMS required
-                raise RuntimeError(
-                    "SMS verification required. Please login manually in the browser "
-                    "and the system will pick up the session automatically."
-                )
-
-        raise RuntimeError(f"Login failed: {login_result}")
-
-    async def _solve_slider_captcha(self) -> bool:
-        """Solve Yoda slider CAPTCHA via CDP mouse events.
-
-        Follows the approach in /tmp/qnh-slider.mjs:
-        1. Find slider bar and target box via DOM query
-        2. Simulate mouse drag from bar to target
-        """
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    f"{CDP_ENDPOINT}/json", timeout=aiohttp.ClientTimeout(total=3)
-                ) as resp:
-                    targets = await resp.json()
-
-            qnh_target = next(
-                (t for t in targets if "qnh.meituan" in t.get("url", "") or
-                 "epassport" in t.get("url", "")),
-                None,
-            )
-            if not qnh_target:
-                logger.warning("No QNH/epassport page found for slider CAPTCHA")
-                return False
-
-            import websockets
-
-            ws_url = qnh_target["webSocketDebuggerUrl"]
-            async with websockets.connect(ws_url) as ws:
-                _id = 0
-
-                async def send_cdp(method: str, params: dict[str, Any] = {}) -> Any:
-                    nonlocal _id
-                    _id += 1
-                    await ws.send(json.dumps({"id": _id, "method": method, "params": params}))
-                    while True:
-                        msg = json.loads(await ws.recv())
-                        if msg.get("id") == _id:
-                            return msg.get("result", {})
-
-                # Get slider coordinates
-                result = await send_cdp("Runtime.evaluate", {
-                    "expression": """
-                    (function(){
-                        var bar = document.getElementById('yodaMoveingBar') ||
-                                  document.querySelector('[class*=moveingBar]');
-                        var box = document.getElementById('yodaBoxWrapper') ||
-                                  document.querySelector('[class*=box-wrapper]');
-                        if(bar && box) {
-                            var br = bar.getBoundingClientRect();
-                            var bxr = box.getBoundingClientRect();
-                            return JSON.stringify({
-                                sx: br.x + br.width/2,
-                                sy: br.y + br.height/2,
-                                ex: bxr.x + bxr.width - 15
-                            });
-                        }
-                        return JSON.stringify({error: 'slider not found'});
-                    })()
-                    """
-                })
-
-                coords = json.loads(result.get("result", {}).get("value", "{}"))
-                if "error" in coords:
-                    logger.warning(f"Slider CAPTCHA: {coords['error']}")
-                    return False
-
-                sx, sy, ex = coords["sx"], coords["sy"], coords["ex"]
-
-                # Simulate drag
-                await send_cdp("Input.dispatchMouseEvent", {
-                    "type": "mousePressed", "x": sx, "y": sy,
-                    "button": "left", "clickCount": 1,
-                })
-
-                # Move in steps with slight randomness
-                import random
-                steps = 20
-                for i in range(1, steps + 1):
-                    progress = i / steps
-                    # Ease-out curve
-                    eased = 1 - (1 - progress) ** 3
-                    cx = sx + (ex - sx) * eased
-                    cy = sy + random.uniform(-2, 2)
-                    await send_cdp("Input.dispatchMouseEvent", {
-                        "type": "mouseMoved", "x": cx, "y": cy,
-                        "button": "left",
-                    })
-                    await asyncio.sleep(random.uniform(0.01, 0.03))
-
-                await send_cdp("Input.dispatchMouseEvent", {
-                    "type": "mouseReleased", "x": ex, "y": sy,
-                    "button": "left", "clickCount": 1,
-                })
-
-                await asyncio.sleep(2)  # Wait for verification
-
-                # Check if login succeeded after CAPTCHA
-                return True
-
-        except Exception as e:
-            logger.error(f"Slider CAPTCHA solve failed: {e}")
-            return False
+            logger.warning("Failed to save session file: %s", e)
