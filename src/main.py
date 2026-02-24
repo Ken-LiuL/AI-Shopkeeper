@@ -75,8 +75,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.warning("Failed to start Prometheus metrics server", exc_info=True)
 
     # Init scheduler (if not in test mode)
-    import os
-
     if os.environ.get("TESTING") != "1":
         try:
             from src.scheduler import init_scheduler, start_scheduler
