@@ -22,7 +22,10 @@
 |------|------|------|
 | `/api/v1/sac/account/auth` | POST | 账号认证/登录状态检查 |
 | `/api/v1/isLogined` | GET | 登录状态检查 |
-| `/api/v1/merchant/storeCategory/queryAll` | GET | 商品分类列表 |
+| `/api/v1/merchant/storeCategory/queryAll` | POST | 商品分类列表 |
+| `/api/v1/merchant/spu/page` | POST | **SPU 分页列表（全量商品）** ⚠️ TODO: 需抓包验证 |
+| `/api/v1/merchant/spu/detail` | GET | **SPU 详情（含描述、规格、多图）** ⚠️ TODO: 需抓包验证 |
+| `/api/v1/merchant/sku/listBySpuId` | GET | **SKU 列表（按 SPU）** ⚠️ TODO: 需抓包验证 |
 | `/api/v1/common/poi/queryByTypeThenAggByType` | POST | 门店按类型聚合查询 |
 | `/api/v1/tenant/channels` | GET | 渠道列表 |
 | `/api/v1/tenant/channel/batchQuery` | POST | 批量查渠道 |
@@ -32,6 +35,29 @@
 | `/api/v1/sac/auth/appMenuList` | GET | 菜单权限列表 |
 | `/api/v1/notice/detail` | GET | 通知详情 |
 | `/api/v2/assistant/getPoiTasksWithTotal` | GET | 待办任务（含总数） |
+
+### 2b. 商品管理 API（推断，待验证）
+
+> ⚠️ 以下接口基于 QNH 商品管理页面 `#/unifiedGoods/tenant/spu-list` 推断，
+> 需要在浏览器中抓包验证。路径模式参考已知的 `/api/v1/merchant/storeCategory/queryAll`。
+
+**推断依据：**
+- 页面路径含 `unifiedGoods/tenant/spu-list`，对应 SPU 列表
+- 已知 `/api/v1/merchant/` 前缀用于商品管理
+- 常见的 REST 模式：page/detail/listByXxx
+
+**可能的接口：**
+| 路径（推断） | 方法 | 用途 | 状态 |
+|------|------|------|------|
+| `/api/v1/merchant/spu/page` | POST | SPU 分页列表 | TODO: 抓包验证 |
+| `/api/v1/merchant/spu/detail` | GET | SPU 详情 | TODO: 抓包验证 |
+| `/api/v1/merchant/spu/list` | POST | SPU 列表（不分页） | TODO: 抓包验证 |
+| `/api/v1/merchant/sku/listBySpuId` | GET | SKU 列表 | TODO: 抓包验证 |
+| `/api/v1/merchant/sku/detail` | GET | SKU 详情 | TODO: 抓包验证 |
+
+**备选方案（已验证可用）：**
+- 热销商品排行 `homepage_hotsale_goods_rank_table_view_new` — goldengateway，含部分商品数据
+- 商品分类 `/api/v1/merchant/storeCategory/queryAll` — 已验证，可获取分类树
 
 ### 3. /common/ — 通用服务网关
 > ✅ Cookie 认证即可访问。

@@ -1,7 +1,14 @@
-"""Product Syncer — SPU/SKU list, prices, categories, status."""
+"""Product Syncer — SPU/SKU list, prices, categories, status.
+
+Sync strategy:
+  1. Try /api/v1/merchant/spu/page (full product management API) — TODO: needs verification
+  2. Fallback to goldengateway hot-sale ranking if SPU API unavailable
+  3. Always sync categories via /api/v1/merchant/storeCategory/queryAll
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from typing import Any
@@ -16,107 +23,134 @@ class ProductSyncer(BaseSyncer):
 
     Data source: #/unifiedGoods/tenant/spu-list
     APIs:
-      - POST /api/v1/merchant/storeCategory/queryAll — 商品分类
-      - POST /goldengateway/empower/generic/table/query (module=hotProduct) — 商品列表
-    NOTE: goldengateway module 名称为推断，需根据实际抓包验证。
+      - POST /api/v1/merchant/spu/page — SPU 分页列表 (TODO: 待验证)
+      - GET  /api/v1/merchant/spu/detail — SPU 详情 (TODO: 待验证)
+      - POST /api/v1/merchant/storeCategory/queryAll — 商品分类 (已验证)
+      - POST /goldengateway/.../query (hotsale) — 热销排行 (fallback)
     """
 
     name = "products"
 
-    # 分类接口 (已验证)
-    CATEGORY_API = "/api/v1/merchant/storeCategory/queryAll"
-
-    # 推断的 goldengateway module 名，需验证
+    # goldengateway fallback
     VIEW_CODE = "homepage_hotsale_goods_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
-        """Full sync: fetch all products via goldengateway."""
+        """Full sync: try SPU API first, fallback to goldengateway."""
         total = 0
-        page = 1
-        page_size = 50
 
         try:
-            while True:
-                # 使用 goldengateway 通用查询获取商品列表
-                # NOTE: module 和参数格式为推断，需抓包验证
-                resp = await self.client.golden_query(
-                    view_code=self.VIEW_CODE,
-                    page=page,
-                    page_size=page_size,
-                )
-                data = resp.get("data", {})
-                items = data.get("list", data.get("rows", data.get("records", [])))
-
-                if not items:
-                    break
-
-                await self._upsert_products(items)
-                total += len(items)
-
-                total_pages = data.get("totalPage", data.get("pages", 1))
-                self.logger.info(f"Products page {page}/{total_pages}, got {len(items)} items")
-
-                if page >= total_pages:
-                    break
-                page += 1
-
-            return SyncResult(
-                syncer_name=self.name,
-                mode=SyncMode.FULL,
-                success=True,
-                records_synced=total,
-            )
+            # Strategy 1: Try SPU page API (cookie auth, no mtgsig needed)
+            total = await self._sync_via_spu_api()
         except Exception as e:
-            return SyncResult(
-                syncer_name=self.name,
-                mode=SyncMode.FULL,
-                success=False,
-                records_synced=total,
-                error=str(e),
-            )
+            logger.warning(f"SPU API unavailable ({e}), falling back to goldengateway")
+            total = 0
+
+        if total == 0:
+            # Strategy 2: Fallback to goldengateway hot-sale ranking
+            try:
+                total = await self._sync_via_golden()
+            except Exception as e:
+                return SyncResult(
+                    syncer_name=self.name,
+                    mode=SyncMode.FULL,
+                    success=False,
+                    records_synced=0,
+                    error=str(e),
+                )
+
+        return SyncResult(
+            syncer_name=self.name,
+            mode=SyncMode.FULL,
+            success=True,
+            records_synced=total,
+        )
 
     async def incremental_sync(self, since: datetime) -> SyncResult:
-        """Incremental: fetch products updated since last sync."""
+        """Incremental sync delegates to full_sync (product APIs rarely support date filters)."""
+        return await self.full_sync()
+
+    # ── SPU API sync (preferred) ────────────────────────────────────────
+
+    async def _sync_via_spu_api(self) -> int:
+        """Sync via /api/v1/merchant/spu/page + detail."""
         total = 0
         page = 1
         page_size = 50
 
-        try:
-            while True:
-                resp = await self.client.golden_query(
-                    view_code=self.VIEW_CODE,
-                    start_date=since.strftime("%Y-%m-%d"),
-                    page=page,
-                    page_size=page_size,
-                )
-                data = resp.get("data", {})
+        while True:
+            resp = await self.client.get_spu_page(page=page, page_size=page_size)
+            data = resp.get("data", {})
+
+            # Handle both list and paginated response formats
+            if isinstance(data, list):
+                items = data
+                has_more = False
+            else:
                 items = data.get("list", data.get("rows", data.get("records", [])))
-
-                if not items:
-                    break
-
-                await self._upsert_products(items)
-                total += len(items)
-
                 total_pages = data.get("totalPage", data.get("pages", 1))
-                if page >= total_pages:
-                    break
-                page += 1
+                has_more = page < total_pages
 
-            return SyncResult(
-                syncer_name=self.name,
-                mode=SyncMode.INCREMENTAL,
-                success=True,
-                records_synced=total,
+            if not items:
+                break
+
+            # Try to fetch detail for each SPU (for images/description)
+            enriched_items = []
+            for item in items:
+                spu_id = str(item.get("spuId", item.get("id", "")))
+                if spu_id:
+                    try:
+                        detail = await self.client.get_spu_detail(spu_id)
+                        detail_data = detail.get("data", {})
+                        if detail_data:
+                            # Merge detail into item
+                            item.update(detail_data)
+                    except Exception as e:
+                        logger.debug(f"SPU detail failed for {spu_id}: {e}")
+                enriched_items.append(item)
+
+            await self._upsert_products(enriched_items)
+            total += len(enriched_items)
+            self.logger.info(f"Products SPU API page {page}, got {len(items)} items")
+
+            if not has_more:
+                break
+            page += 1
+
+        return total
+
+    # ── Goldengateway fallback ──────────────────────────────────────────
+
+    async def _sync_via_golden(self) -> int:
+        """Sync via goldengateway hot-sale ranking (partial data)."""
+        total = 0
+        page = 1
+        page_size = 50
+
+        while True:
+            resp = await self.client.golden_query(
+                view_code=self.VIEW_CODE,
+                page=page,
+                page_size=page_size,
             )
-        except Exception as e:
-            return SyncResult(
-                syncer_name=self.name,
-                mode=SyncMode.INCREMENTAL,
-                success=False,
-                records_synced=total,
-                error=str(e),
-            )
+            data = resp.get("data", {})
+            items = data.get("list", data.get("rows", data.get("records", [])))
+
+            if not items:
+                break
+
+            await self._upsert_products(items)
+            total += len(items)
+
+            total_pages = data.get("totalPage", data.get("pages", 1))
+            self.logger.info(f"Products golden page {page}/{total_pages}, got {len(items)} items")
+
+            if page >= total_pages:
+                break
+            page += 1
+
+        return total
+
+    # ── Upsert ──────────────────────────────────────────────────────────
 
     async def _upsert_products(self, items: list[dict[str, Any]]) -> None:
         """Upsert product records into qnh_products."""
@@ -128,6 +162,50 @@ class ProductSyncer(BaseSyncer):
             sku_id = str(item.get("skuId", ""))
             if not spu_id:
                 continue
+
+            # Extract image URLs
+            main_image = item.get("imageUrl", item.get("picUrl", item.get("mainImage", "")))
+
+            # Collect all image URLs into extra
+            image_list = item.get("imageUrls", item.get("images", item.get("picUrls", [])))
+            description = item.get("description", item.get("desc", item.get("detail", "")))
+
+            extra_data = {
+                k: v
+                for k, v in item.items()
+                if k
+                not in {
+                    "spuId",
+                    "id",
+                    "skuId",
+                    "name",
+                    "spuName",
+                    "barcode",
+                    "upc",
+                    "categoryName",
+                    "category",
+                    "brandName",
+                    "brand",
+                    "spec",
+                    "specification",
+                    "unit",
+                    "costPrice",
+                    "retailPrice",
+                    "price",
+                    "channelPrice",
+                    "status",
+                    "spuStatus",
+                    "channelStatus",
+                    "imageUrl",
+                    "picUrl",
+                    "mainImage",
+                }
+            }
+            # Ensure images and description are in extra for knowledge base
+            if image_list:
+                extra_data["imageUrls"] = image_list
+            if description:
+                extra_data["description"] = description
 
             await self.pool.execute(
                 """
@@ -166,46 +244,13 @@ class ProductSyncer(BaseSyncer):
                 _json_or_none(item.get("channelPrice")),
                 item.get("status", item.get("spuStatus", "")),
                 _json_or_none(item.get("channelStatus")),
-                item.get("imageUrl", item.get("picUrl", "")),
-                _json_or_none(
-                    {
-                        k: v
-                        for k, v in item.items()
-                        if k
-                        not in {
-                            "spuId",
-                            "id",
-                            "skuId",
-                            "name",
-                            "spuName",
-                            "barcode",
-                            "upc",
-                            "categoryName",
-                            "category",
-                            "brandName",
-                            "brand",
-                            "spec",
-                            "specification",
-                            "unit",
-                            "costPrice",
-                            "retailPrice",
-                            "price",
-                            "channelPrice",
-                            "status",
-                            "spuStatus",
-                            "channelStatus",
-                            "imageUrl",
-                            "picUrl",
-                        }
-                    }
-                ),
+                main_image,
+                _json_or_none(extra_data),
             )
 
 
 def _json_or_none(val: Any) -> Any:
     """Convert dict/list to JSON string for JSONB column, or None."""
-    import json
-
     if val is None:
         return None
     if isinstance(val, dict | list):

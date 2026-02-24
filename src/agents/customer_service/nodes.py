@@ -173,50 +173,79 @@ async def faq_reply_node(state: CustomerServiceState) -> dict:
 
 
 async def hybrid_search_node(state: CustomerServiceState) -> dict:
-    """Hybrid Search: 向量 + 关键词混合检索（EmbeddingSkill + Neo4jSkill）。"""
-    from .skills_registry import get_embedding, get_neo4j
+    """Hybrid Search: 向量 + 关键词混合检索（EmbeddingSkill + Neo4jSkill）+ 商品知识库。"""
+    from .skills_registry import get_embedding, get_neo4j, get_product_knowledge
 
     neo4j = get_neo4j()
     embedding_skill = get_embedding()
+    product_knowledge = get_product_knowledge()
     intent_data = state.get("intent", {})
     entities = intent_data.get("extracted_entities", {})
     query = state.get("user_message", "")
 
-    # Graceful fallback: skills 未注入时走 placeholder
-    if not neo4j or not embedding_skill:
-        logger.warning("Skills not registered, returning empty search_results")
-        return {"search_results": state.get("search_results", [])}
+    search_results: list[dict] = []
 
-    try:
-        # 提取关键词
-        keywords: list[str] = []
-        if isinstance(entities, dict):
-            for v in entities.values():
-                if isinstance(v, list):
-                    keywords.extend(str(i) for i in v)
-                elif v:
-                    keywords.append(str(v))
-        if not keywords:
-            keywords = [w for w in query.split() if len(w) > 1]
+    # 1. 商品知识库检索（优先级最高，数据最全）
+    if product_knowledge:
+        try:
+            pk_results = await product_knowledge.search_product(query, limit=5)
+            if pk_results:
+                for r in pk_results:
+                    search_results.append(
+                        {
+                            "id": r["spu_id"],
+                            "name": r["name"],
+                            "description": (
+                                f"分类: {r['category']} | 品牌: {r['brand']} | "
+                                f"规格: {r['spec']} | 价格: {r['price']}\n"
+                                f"{r['description']}\n{r['image_text']}"
+                            ).strip(),
+                            "score": r["score"],
+                            "source": "product_knowledge",
+                        }
+                    )
+                logger.info(
+                    f"Product knowledge returned {len(pk_results)} results for: {query[:50]}"
+                )
+        except Exception as e:
+            logger.warning(f"Product knowledge search failed: {e}")
 
-        # 向量编码
-        query_vec = embedding_skill.embed(query)
+    # 2. Neo4j/PgVector 知识图谱检索（补充）
+    if neo4j and embedding_skill:
+        try:
+            keywords: list[str] = []
+            if isinstance(entities, dict):
+                for v in entities.values():
+                    if isinstance(v, list):
+                        keywords.extend(str(i) for i in v)
+                    elif v:
+                        keywords.append(str(v))
+            if not keywords:
+                keywords = [w for w in query.split() if len(w) > 1]
 
-        # 混合检索（内部已做 RRF 合并）
-        results = await neo4j.hybrid_search(
-            query=query,
-            query_embedding=query_vec,
-            keywords=keywords,
-            limit=20,
-        )
+            query_vec = embedding_skill.embed(query)
+            results = await neo4j.hybrid_search(
+                query=query,
+                query_embedding=query_vec,
+                keywords=keywords,
+                limit=20,
+            )
+            kg_results = [r.model_dump() for r in results]
+            # Deduplicate by id
+            existing_ids = {r["id"] for r in search_results}
+            for r in kg_results:
+                if r.get("id") not in existing_ids:
+                    r["source"] = "knowledge_graph"
+                    search_results.append(r)
+            logger.info(f"KG search returned {len(kg_results)} results for: {query[:50]}")
+        except Exception as e:
+            logger.error(f"KG hybrid search failed: {e}")
 
-        search_results = [r.model_dump() for r in results]
-        logger.info(f"Hybrid search returned {len(search_results)} results for: {query[:50]}")
-        return {"search_results": search_results}
+    if not search_results:
+        logger.warning("No search results from any source")
 
-    except Exception as e:
-        logger.error(f"Hybrid search failed: {e}")
-        return {"search_results": [], "errors": [f"hybrid_search: {e}"]}
+    logger.info(f"Total search results: {len(search_results)} for: {query[:50]}")
+    return {"search_results": search_results}
 
 
 async def reranker_node(state: CustomerServiceState) -> dict:

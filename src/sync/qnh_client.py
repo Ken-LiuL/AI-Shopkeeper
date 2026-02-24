@@ -73,6 +73,12 @@ API_TENANT_LEVEL = "/api/v1/tenant/aggTenantLevelConfig"
 API_TENANT_MODULES = "/api/v1/tenant/modules"
 API_POI_TASKS = "/api/v2/assistant/getPoiTasksWithTotal"
 
+# 商品管理 API（推断，待抓包验证）
+# TODO: 在 #/unifiedGoods/tenant/spu-list 页面抓包确认实际路径
+API_SPU_PAGE = "/api/v1/merchant/spu/page"
+API_SPU_DETAIL = "/api/v1/merchant/spu/detail"
+API_SKU_LIST_BY_SPU = "/api/v1/merchant/sku/listBySpuId"
+
 # IM API (api.neixin.cn)
 NEIXIN_CHATLIST_APP = "/msg/api/chat/v3/chatlist/appid"
 NEIXIN_PUB_CHATLIST = "/msg/api/pub/v1/chatlist"
@@ -368,6 +374,46 @@ class QNHClient:
         API: POST /api/v1/merchant/storeCategory/queryAll
         """
         resp = await self.post(API_STORE_CATEGORY, data={"tenantId": self.tenant_id})
+        return resp.get("data", [])
+
+    async def get_spu_page(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+        category_id: str | None = None,
+        status: str | None = None,
+    ) -> dict[str, Any]:
+        """获取 SPU 分页列表。
+
+        API: POST /api/v1/merchant/spu/page
+        TODO: 需抓包验证实际请求/响应格式。
+        """
+        payload: dict[str, Any] = {
+            "tenantId": self.tenant_id,
+            "page": page,
+            "pageSize": page_size,
+        }
+        if category_id:
+            payload["categoryId"] = category_id
+        if status:
+            payload["status"] = status
+        return await self.post(API_SPU_PAGE, data=payload)
+
+    async def get_spu_detail(self, spu_id: str) -> dict[str, Any]:
+        """获取 SPU 详情（含描述、规格、多图）。
+
+        API: GET /api/v1/merchant/spu/detail?spuId=xxx
+        TODO: 需抓包验证。
+        """
+        return await self.get(API_SPU_DETAIL, params={"spuId": spu_id})
+
+    async def get_sku_list_by_spu(self, spu_id: str) -> list[dict[str, Any]]:
+        """获取 SPU 下的 SKU 列表。
+
+        API: GET /api/v1/merchant/sku/listBySpuId?spuId=xxx
+        TODO: 需抓包验证。
+        """
+        resp = await self.get(API_SKU_LIST_BY_SPU, params={"spuId": spu_id})
         return resp.get("data", [])
 
     async def get_poi_tree(self) -> dict[str, Any]:

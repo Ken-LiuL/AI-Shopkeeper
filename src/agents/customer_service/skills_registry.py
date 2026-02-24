@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 _vector_store: Any | None = None  # Neo4jSkill | PgVectorSkill
 _embedding_skill: EmbeddingSkill | None = None
 _reranker_skill: RerankerSkill | None = None
+_product_knowledge: Any | None = None  # ProductKnowledgeSkill
 
 
 def register_skills(
@@ -22,6 +23,7 @@ def register_skills(
     reranker: RerankerSkill | None = None,
     *,
     vector_store: Any | None = None,
+    product_knowledge: Any | None = None,
 ) -> None:
     """注册 skill 实例（在 app lifespan startup 中调用）。
 
@@ -31,7 +33,7 @@ def register_skills(
         embedding: EmbeddingSkill 实例。
         reranker: RerankerSkill 实例。
     """
-    global _vector_store, _embedding_skill, _reranker_skill
+    global _vector_store, _embedding_skill, _reranker_skill, _product_knowledge
     # vector_store 优先，fallback 到 neo4j 参数（向后兼容）
     if vector_store is not None:
         _vector_store = vector_store
@@ -41,6 +43,8 @@ def register_skills(
         _embedding_skill = embedding
     if reranker is not None:
         _reranker_skill = reranker
+    if product_knowledge is not None:
+        _product_knowledge = product_knowledge
 
 
 def get_neo4j() -> Any | None:
@@ -54,3 +58,8 @@ def get_embedding() -> EmbeddingSkill | None:
 
 def get_reranker() -> RerankerSkill | None:
     return _reranker_skill
+
+
+def get_product_knowledge() -> Any | None:
+    """返回 ProductKnowledgeSkill 实例。"""
+    return _product_knowledge
