@@ -97,14 +97,15 @@ async def _insert_records(
     data: list[dict[str, Any]],
     synced_at: str,
 ) -> int:
-    """将数据插入对应表。使用 JSONB 存储原始数据 + 结构化字段。"""
+    """将数据插入对应表。products 走结构化 upsert，其他走 raw JSONB。"""
     import json
+
+    if source == "products":
+        return await _upsert_products(pool, data)
 
     count = 0
     async with pool.acquire() as conn:
         for row in data:
-            # 通用存储：raw_data JSONB 列 + synced_at
-            # 每个表结构不同，用 upsert 或 insert
             await conn.execute(
                 f"""
                 INSERT INTO {table}_raw (source, raw_data, synced_at)
@@ -113,6 +114,80 @@ async def _insert_records(
                 source,
                 json.dumps(row, ensure_ascii=False),
                 synced_at,
+            )
+            count += 1
+
+    return count
+
+
+async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
+    """结构化 upsert 商品数据到 qnh_products。"""
+    import json
+
+    count = 0
+    async with pool.acquire() as conn:
+        for p in data:
+            spu_id = str(p.get("spuId", p.get("spu_id", "")))
+            if not spu_id:
+                continue
+
+            name = p.get("spuName") or p.get("name") or ""
+            brand = ""
+            if isinstance(p.get("brand"), dict):
+                brand = p["brand"].get("brandName", "")
+            elif isinstance(p.get("brand"), str):
+                brand = p["brand"]
+
+            pic_urls = p.get("picUrlList", p.get("pic_urls", []))
+            if isinstance(pic_urls, str):
+                try:
+                    pic_urls = json.loads(pic_urls)
+                except Exception:
+                    pic_urls = []
+            image_url = pic_urls[0] if pic_urls else p.get("image_url", "")
+
+            skus = p.get("skus", [])
+            if isinstance(skus, str):
+                try:
+                    skus = json.loads(skus)
+                except Exception:
+                    skus = []
+
+            weight_type = p.get("weightTypeDesc", p.get("weight_type", ""))
+
+            retail_price = p.get("retail_price")
+            spec = p.get("spec", "")
+            if not retail_price and skus and isinstance(skus, list):
+                first_sku = skus[0] if skus else {}
+                spec = spec or first_sku.get("specName", "")
+                suggest = first_sku.get("suggestPrice", {})
+                if isinstance(suggest, dict):
+                    tp = suggest.get("tenantSuggestPrice", {})
+                    if isinstance(tp, dict) and tp.get("unifiedSuggestPrice"):
+                        try:
+                            retail_price = float(tp["unifiedSuggestPrice"])
+                        except (ValueError, TypeError):
+                            pass
+
+            status = p.get("status", "")
+            if not status:
+                status = "在售" if p.get("onlineStatus") == 1 else "停售"
+
+            await conn.execute(
+                """
+                INSERT INTO qnh_products (spu_id, name, brand, spec, retail_price,
+                    image_url, status, pic_urls, skus, weight_type, synced_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, NOW())
+                ON CONFLICT (spu_id) DO UPDATE SET
+                    name = EXCLUDED.name, brand = EXCLUDED.brand, spec = EXCLUDED.spec,
+                    retail_price = EXCLUDED.retail_price, image_url = EXCLUDED.image_url,
+                    status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
+                    skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type, synced_at = NOW()
+                """,
+                spu_id, name, brand, spec, retail_price, image_url, status,
+                json.dumps(pic_urls, ensure_ascii=False),
+                json.dumps(skus, ensure_ascii=False),
+                weight_type,
             )
             count += 1
 
