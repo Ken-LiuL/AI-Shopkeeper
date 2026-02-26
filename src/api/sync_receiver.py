@@ -173,18 +173,20 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
             if not status:
                 status = "在售" if p.get("onlineStatus") == 1 else "停售"
 
+            sku_id = str(p.get("skuId", p.get("sku_id", "")))
+
             await conn.execute(
                 """
-                INSERT INTO qnh_products (spu_id, name, brand, spec, retail_price,
+                INSERT INTO qnh_products (spu_id, sku_id, name, brand, spec, retail_price,
                     image_url, status, pic_urls, skus, weight_type, synced_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, NOW())
-                ON CONFLICT (spu_id) DO UPDATE SET
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, NOW())
+                ON CONFLICT (spu_id, sku_id) DO UPDATE SET
                     name = EXCLUDED.name, brand = EXCLUDED.brand, spec = EXCLUDED.spec,
                     retail_price = EXCLUDED.retail_price, image_url = EXCLUDED.image_url,
                     status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
                     skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type, synced_at = NOW()
                 """,
-                spu_id, name, brand, spec, retail_price, image_url, status,
+                spu_id, sku_id, name, brand, spec, retail_price, image_url, status,
                 json.dumps(pic_urls, ensure_ascii=False),
                 json.dumps(skus, ensure_ascii=False),
                 weight_type,
