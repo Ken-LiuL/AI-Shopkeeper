@@ -1,17 +1,118 @@
-"""Knowledge graph search API routes."""
+"""Knowledge graph search API routes + Product knowledge base API."""
 
 from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, BackgroundTasks, Query
 
 from src.db import neo4j as neo4j_db
+from src.db import postgres as pg
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)
+
+
+# ── Product Knowledge Base (pgvector-based) ─────────────────────────
+
+
+@router.get("/v1/search", response_model=APIResponse[list[dict]])
+async def search_product_knowledge_v1(
+    q: str = Query(..., min_length=1, description="搜索关键词"),
+    limit: int = Query(5, ge=1, le=50),
+    hybrid: bool = Query(True, description="是否使用混合检索"),
+) -> APIResponse[list[dict]]:
+    """GET /api/knowledge/v1/search — 语义搜索商品知识库。"""
+    from src.agents.customer_service.skills_registry import get_product_knowledge
+
+    pk = get_product_knowledge()
+    if not pk:
+        return APIResponse(success=False, data=[], message="Product knowledge not initialized")
+    results = await pk.search_product(query=q, limit=limit, hybrid=hybrid)
+    return APIResponse(data=results)
+
+
+@router.post("/v1/build", response_model=APIResponse[dict])
+async def build_knowledge_v1(
+    background_tasks: BackgroundTasks,
+    batch_size: int = Query(10, ge=1, le=100),
+    extract_images: bool = Query(True),
+    max_images: int = Query(3, ge=0, le=10),
+    sync: bool = Query(False, description="同步执行（阻塞，适合调试）"),
+) -> APIResponse[dict]:
+    """POST /api/knowledge/v1/build — 触发知识库构建。
+
+    默认异步执行，设 sync=true 可同步等待结果。
+    """
+    from src.agents.customer_service.skills_registry import get_product_knowledge
+
+    pk = get_product_knowledge()
+    if not pk:
+        return APIResponse(success=False, data={}, message="Product knowledge not initialized")
+
+    if sync:
+        result = await pk.build_knowledge_base(
+            batch_size=batch_size,
+            extract_images=extract_images,
+            max_images_per_product=max_images,
+        )
+        return APIResponse(data=result)
+    else:
+        background_tasks.add_task(
+            pk.build_knowledge_base,
+            batch_size=batch_size,
+            extract_images=extract_images,
+            max_images_per_product=max_images,
+        )
+        return APIResponse(data={"status": "building", "message": "知识库构建已在后台启动"})
+
+
+@router.get("/v1/stats", response_model=APIResponse[dict])
+async def knowledge_stats_v1() -> APIResponse[dict]:
+    """GET /api/knowledge/v1/stats — 商品同步 + 知识库统计。"""
+    pool = pg.get_pool()
+
+    stats: dict = {}
+    try:
+        stats["source_products"] = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+        stats["source_with_images"] = await pool.fetchval(
+            "SELECT COUNT(*) FROM qnh_products WHERE image_url IS NOT NULL AND image_url != ''"
+        )
+    except Exception:
+        stats["source_products"] = 0
+        stats["source_with_images"] = 0
+
+    try:
+        stats["knowledge_total"] = await pool.fetchval("SELECT COUNT(*) FROM product_knowledge")
+        stats["with_embedding"] = await pool.fetchval(
+            "SELECT COUNT(*) FROM product_knowledge WHERE embedding IS NOT NULL"
+        )
+        stats["with_image_text"] = await pool.fetchval(
+            "SELECT COUNT(*) FROM product_knowledge WHERE image_text != '' AND image_text IS NOT NULL"
+        )
+    except Exception:
+        stats["knowledge_total"] = 0
+        stats["with_embedding"] = 0
+        stats["with_image_text"] = 0
+
+    try:
+        sync_row = await pool.fetchrow("SELECT * FROM sync_state WHERE syncer_name = 'products'")
+        if sync_row:
+            stats["last_sync"] = {
+                "status": sync_row["last_sync_status"],
+                "records": sync_row["records_synced"],
+                "duration_ms": sync_row["last_sync_duration_ms"],
+                "last_full": str(sync_row["last_full_sync"])
+                if sync_row["last_full_sync"]
+                else None,
+                "error": sync_row["last_sync_error"],
+            }
+    except Exception:
+        pass
+
+    return APIResponse(data=stats)
 
 
 @router.get("/products", response_model=APIResponse[list[dict]])

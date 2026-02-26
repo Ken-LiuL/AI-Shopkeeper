@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 from typing import Any
 
 import aiohttp
@@ -26,8 +27,8 @@ from .embedding import EmbeddingSkill
 logger = logging.getLogger(__name__)
 
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-OPENROUTER_KEY = "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"
-VISION_MODEL = "anthropic/claude-sonnet-4"
+OPENROUTER_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+VISION_MODEL = os.environ.get("VISION_MODEL", "anthropic/claude-sonnet-4")
 
 
 class ProductKnowledgeSkill:
@@ -286,22 +287,46 @@ class ProductKnowledgeSkill:
 
         # Build image content for vision API
         image_contents: list[dict[str, Any]] = []
+        max_image_size = 5 * 1024 * 1024  # 5MB per image
         async with aiohttp.ClientSession() as session:
             for url in image_urls:
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                        if resp.status == 200:
-                            data = await resp.read()
-                            ct = resp.content_type or "image/jpeg"
-                            b64 = base64.b64encode(data).decode()
-                            image_contents.append(
-                                {
-                                    "type": "image_url",
-                                    "image_url": {"url": f"data:{ct};base64,{b64}"},
-                                }
-                            )
-                except Exception as e:
-                    logger.debug(f"Image download failed {url}: {e}")
+                for attempt in range(2):  # 1 retry
+                    try:
+                        async with session.get(
+                            url, timeout=aiohttp.ClientTimeout(total=20)
+                        ) as resp:
+                            if resp.status == 200:
+                                data = await resp.read()
+                                if len(data) > max_image_size:
+                                    logger.debug(
+                                        f"Image too large ({len(data)} bytes), skipping: {url}"
+                                    )
+                                    break
+                                if len(data) < 100:
+                                    logger.debug(
+                                        f"Image too small ({len(data)} bytes), skipping: {url}"
+                                    )
+                                    break
+                                ct = resp.content_type or "image/jpeg"
+                                b64 = base64.b64encode(data).decode()
+                                image_contents.append(
+                                    {
+                                        "type": "image_url",
+                                        "image_url": {"url": f"data:{ct};base64,{b64}"},
+                                    }
+                                )
+                                break  # success
+                            elif resp.status in (404, 403):
+                                logger.debug(f"Image {resp.status}: {url}")
+                                break  # don't retry
+                    except TimeoutError:
+                        if attempt == 0:
+                            logger.debug(f"Image download timeout, retrying: {url}")
+                        else:
+                            logger.debug(f"Image download timeout after retry: {url}")
+                    except Exception as e:
+                        logger.debug(f"Image download failed {url}: {e}")
+                        break  # don't retry on unknown errors
 
         if not image_contents:
             return ""

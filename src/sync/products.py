@@ -35,18 +35,26 @@ class ProductSyncer(BaseSyncer):
     VIEW_CODE = "homepage_hotsale_goods_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
-        """Full sync: try SPU API first, fallback to goldengateway."""
+        """Full sync: try SPU API → browser capture → goldengateway fallback."""
         total = 0
 
+        # Strategy 1: Try SPU page API (cookie auth, no mtgsig needed)
         try:
-            # Strategy 1: Try SPU page API (cookie auth, no mtgsig needed)
             total = await self._sync_via_spu_api()
         except Exception as e:
-            logger.warning(f"SPU API unavailable ({e}), falling back to goldengateway")
+            logger.warning(f"SPU API unavailable ({e}), trying next strategy")
             total = 0
 
+        # Strategy 2: Browser-based capture from product management page
         if total == 0:
-            # Strategy 2: Fallback to goldengateway hot-sale ranking
+            try:
+                total = await self._sync_via_browser_capture()
+            except Exception as e:
+                logger.warning(f"Browser capture unavailable ({e}), trying goldengateway")
+                total = 0
+
+        # Strategy 3: Fallback to goldengateway hot-sale ranking (partial data)
+        if total == 0:
             try:
                 total = await self._sync_via_golden()
             except Exception as e:
@@ -117,6 +125,137 @@ class ProductSyncer(BaseSyncer):
             page += 1
 
         return total
+
+    # ── Browser-based capture ───────────────────────────────────────────
+
+    async def _sync_via_browser_capture(self) -> int:
+        """Sync by navigating to product management page and intercepting API calls.
+
+        Strategy: Navigate to #/unifiedGoods/tenant/spu-list in the browser,
+        which triggers the actual SPU list API call with proper mtgsig signature.
+        Intercept the response to get full product data.
+        """
+        from .browser_client import BrowserClient
+
+        browser = await BrowserClient.get_instance()
+        await browser.ensure_ready()
+
+        if not browser._page:
+            raise RuntimeError("Browser page not available")
+
+        page = browser._page
+        total = 0
+
+        # Navigate to product management page to discover actual API
+        logger.info("Navigating to product management page to capture API calls...")
+
+        # Intercept network responses to capture the product list API
+        capture_js = """
+        window.__captured_products = [];
+        window.__original_fetch = window.__original_fetch || window.fetch;
+        window.fetch = function() {
+            var args = arguments;
+            return window.__original_fetch.apply(this, args).then(function(response) {
+                var url = (typeof args[0] === 'string') ? args[0] : (args[0].url || '');
+                // Capture any product/spu/goods related API responses
+                if (url.indexOf('/spu/') !== -1 || url.indexOf('/goods/') !== -1 ||
+                    url.indexOf('/product/') !== -1 || url.indexOf('unifiedGoods') !== -1) {
+                    var cloned = response.clone();
+                    cloned.json().then(function(data) {
+                        window.__captured_products.push({url: url, data: data});
+                    }).catch(function() {});
+                }
+                return response;
+            });
+        };
+        """
+        await page.evaluate(capture_js)
+
+        # Navigate to SPU list page
+        await page.evaluate("window.location.hash = '#/unifiedGoods/tenant/spu-list';")
+        await page.sleep(8)  # Wait for page load and API calls
+
+        # Check captured data
+        captured_str = await page.evaluate("JSON.stringify(window.__captured_products)")
+        if captured_str and captured_str != "[]":
+            import json as _json
+
+            captured = _json.loads(captured_str)
+            logger.info(f"Captured {len(captured)} product API calls from browser")
+
+            for entry in captured:
+                url = entry.get("url", "")
+                data = entry.get("data", {})
+                logger.info(f"Captured API: {url[:100]}")
+
+                # Extract product items from various response formats
+                items = self._extract_items_from_response(data)
+                if items:
+                    await self._upsert_products(items)
+                    total += len(items)
+                    logger.info(f"Extracted {len(items)} products from {url[:80]}")
+
+        # Also try direct SPU page API via browser (with proper signatures)
+        if total == 0:
+            logger.info("No captured data, trying direct SPU API via browser...")
+            page_num = 1
+            page_size = 50
+            while True:
+                payload = {
+                    "tenantId": self.client.tenant_id,
+                    "page": page_num,
+                    "pageSize": page_size,
+                }
+                try:
+                    resp = await browser.execute_api(
+                        "/api/v1/merchant/spu/page", method="POST", body=payload
+                    )
+                    if resp.get("_error") or resp.get("code", 0) != 0:
+                        logger.warning(f"Browser SPU API error: {resp}")
+                        break
+
+                    items = self._extract_items_from_response(resp)
+                    if not items:
+                        break
+
+                    await self._upsert_products(items)
+                    total += len(items)
+                    logger.info(f"Browser SPU API page {page_num}, got {len(items)} items")
+
+                    # Check pagination
+                    data = resp.get("data", {})
+                    if isinstance(data, dict):
+                        total_pages = data.get("totalPage", data.get("pages", 1))
+                        if page_num >= total_pages:
+                            break
+                    page_num += 1
+                except Exception as e:
+                    logger.warning(f"Browser SPU API page {page_num} failed: {e}")
+                    break
+
+        # Restore original fetch
+        await page.evaluate("if (window.__original_fetch) window.fetch = window.__original_fetch;")
+
+        if total == 0:
+            raise RuntimeError("Browser capture found no products")
+
+        return total
+
+    @staticmethod
+    def _extract_items_from_response(data: dict) -> list[dict]:
+        """Extract product items from various API response formats."""
+        if not isinstance(data, dict):
+            return []
+
+        inner = data.get("data", data)
+        if isinstance(inner, list):
+            return inner
+        if isinstance(inner, dict):
+            for key in ("list", "rows", "records", "items", "spuList", "productList"):
+                items = inner.get(key)
+                if isinstance(items, list) and items:
+                    return items
+        return []
 
     # ── Goldengateway fallback ──────────────────────────────────────────
 

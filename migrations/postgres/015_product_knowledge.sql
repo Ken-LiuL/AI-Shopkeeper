@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS product_knowledge (
     description     TEXT DEFAULT '',       -- from product detail
     image_text      TEXT DEFAULT '',       -- OCR/vision extracted text from images
     combined_text   TEXT NOT NULL,         -- merged text for display
-    embedding       vector(1024),          -- BGE-large-zh-v1.5
+    embedding       vector(512),           -- BGE-small-zh-v1.5
     image_urls      TEXT[] DEFAULT '{}',   -- all image URLs
     price           NUMERIC(10, 2),
     status          TEXT DEFAULT '',

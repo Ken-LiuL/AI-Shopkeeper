@@ -125,10 +125,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             vector_skill = PgVectorSkill(pool=pg_db.get_pool())
             logger.info("Using PostgreSQL pgvector as vector store backend")
 
-        register_skills(
-            vector_store=vector_skill, embedding=embedding_skill, reranker=reranker_skill
+        # Init product knowledge skill
+        from src.skills.product_knowledge import ProductKnowledgeSkill
+
+        product_knowledge_skill = ProductKnowledgeSkill(
+            pool=pg_db.get_pool(), embedding=embedding_skill
         )
-        logger.info("Customer service skills registered ✓")
+
+        register_skills(
+            vector_store=vector_skill,
+            embedding=embedding_skill,
+            reranker=reranker_skill,
+            product_knowledge=product_knowledge_skill,
+        )
+        logger.info("Customer service skills registered (with product knowledge) ✓")
     except Exception:
         logger.warning("Failed to register customer service skills", exc_info=True)
 

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 
 from src.db import postgres as pg
+
+logger = logging.getLogger(__name__)
 
 from .deps import gen_id
 from .errors import NotFoundError
@@ -281,4 +285,76 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
             SalesRecord(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"])
             for r in rows
         ]
+    )
+
+
+# ── Product Knowledge Base endpoints ────────────────────────────────
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str
+    limit: int = 5
+    hybrid: bool = True
+
+
+class KnowledgeBuildRequest(BaseModel):
+    batch_size: int = 10
+    extract_images: bool = True
+    max_images_per_product: int = 3
+
+
+@router.post("/knowledge/search", response_model=APIResponse[list[dict]])
+async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[list[dict]]:
+    """语义搜索商品知识库（向量 + 全文混合检索）。"""
+    from src.agents.customer_service.skills_registry import get_product_knowledge
+
+    pk = get_product_knowledge()
+    if not pk:
+        return APIResponse(
+            success=False, data=[], message="Product knowledge skill not initialized"
+        )
+
+    results = await pk.search_product(query=body.query, limit=body.limit, hybrid=body.hybrid)
+    return APIResponse(data=results)
+
+
+@router.post("/knowledge/build", response_model=APIResponse[dict])
+async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> APIResponse[dict]:
+    """触发商品知识库构建（从 qnh_products 同步 → embedding → pgvector）。"""
+    from src.agents.customer_service.skills_registry import get_product_knowledge
+
+    pk = get_product_knowledge()
+    if not pk:
+        return APIResponse(
+            success=False, data={}, message="Product knowledge skill not initialized"
+        )
+
+    body = body or KnowledgeBuildRequest()
+    result = await pk.build_knowledge_base(
+        batch_size=body.batch_size,
+        extract_images=body.extract_images,
+        max_images_per_product=body.max_images_per_product,
+    )
+    return APIResponse(data=result)
+
+
+@router.get("/knowledge/stats", response_model=APIResponse[dict])
+async def knowledge_stats() -> APIResponse[dict]:
+    """商品知识库统计信息。"""
+    pool = pg.get_pool()
+    total = await pool.fetchval("SELECT COUNT(*) FROM product_knowledge")
+    with_embedding = await pool.fetchval(
+        "SELECT COUNT(*) FROM product_knowledge WHERE embedding IS NOT NULL"
+    )
+    with_image_text = await pool.fetchval(
+        "SELECT COUNT(*) FROM product_knowledge WHERE image_text != '' AND image_text IS NOT NULL"
+    )
+    source_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+    return APIResponse(
+        data={
+            "knowledge_total": total,
+            "with_embedding": with_embedding,
+            "with_image_text": with_image_text,
+            "source_products": source_products,
+        }
     )

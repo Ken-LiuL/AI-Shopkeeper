@@ -27,7 +27,7 @@ CREATE VECTOR INDEX product_embedding_index IF NOT EXISTS
 FOR (p:Product) ON (p.embedding)
 OPTIONS {
     indexConfig: {
-        `vector.dimensions`: 1024,
+        `vector.dimensions`: 512,
         `vector.similarity_function`: 'cosine'
     }
 };
@@ -36,7 +36,7 @@ CREATE VECTOR INDEX faq_embedding_index IF NOT EXISTS
 FOR (f:FAQ) ON (f.question_embedding)
 OPTIONS {
     indexConfig: {
-        `vector.dimensions`: 1024,
+        `vector.dimensions`: 512,
         `vector.similarity_function`: 'cosine'
     }
 };
