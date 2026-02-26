@@ -1,7 +1,7 @@
 """Product Syncer — SPU/SKU list, prices, categories, status.
 
 Sync strategy:
-  1. Try /api/v1/merchant/spu/page (full product management API) — TODO: needs verification
+  1. Try /qnh-gw3/api/product/tenant/page-query (via browser, h5guard signed)
   2. Fallback to goldengateway hot-sale ranking if SPU API unavailable
   3. Always sync categories via /api/v1/merchant/storeCategory/queryAll
 """
@@ -23,8 +23,8 @@ class ProductSyncer(BaseSyncer):
 
     Data source: #/unifiedGoods/tenant/spu-list
     APIs:
-      - POST /api/v1/merchant/spu/page — SPU 分页列表 (TODO: 待验证)
-      - GET  /api/v1/merchant/spu/detail — SPU 详情 (TODO: 待验证)
+      - POST /qnh-gw3/api/product/tenant/page-query — SPU 分页列表 (已验证, h5guard)
+      - POST /qnh-gw3/api/product/tenant/detail — SPU 详情 (h5guard)
       - POST /api/v1/merchant/storeCategory/queryAll — 商品分类 (已验证)
       - POST /goldengateway/.../query (hotsale) — 热销排行 (fallback)
     """
@@ -80,13 +80,25 @@ class ProductSyncer(BaseSyncer):
     # ── SPU API sync (preferred) ────────────────────────────────────────
 
     async def _sync_via_spu_api(self) -> int:
-        """Sync via /api/v1/merchant/spu/page + detail."""
+        """Sync via /qnh-gw3/api/product/tenant/page-query (browser, h5guard signed).
+
+        Response format:
+          {code: 0, data: {list: [{tenantId, spuId, spuName, picUrlList, skus, brand, weightType, ...}], total, ...}}
+        """
         total = 0
         page = 1
-        page_size = 50
+        page_size = 20
 
         while True:
             resp = await self.client.get_spu_page(page=page, page_size=page_size)
+
+            # Check for errors
+            if isinstance(resp, dict) and resp.get("_error"):
+                raise RuntimeError(f"SPU API error: {resp.get('message', resp)}")
+            code = resp.get("code")
+            if code is not None and code != 0:
+                raise RuntimeError(f"SPU API code {code}: {resp.get('msg', '')}")
+
             data = resp.get("data", {})
 
             # Handle both list and paginated response formats
@@ -95,22 +107,22 @@ class ProductSyncer(BaseSyncer):
                 has_more = False
             else:
                 items = data.get("list", data.get("rows", data.get("records", [])))
-                total_pages = data.get("totalPage", data.get("pages", 1))
-                has_more = page < total_pages
+                total_count = data.get("total", data.get("totalCount", 0))
+                has_more = page * page_size < total_count
 
             if not items:
                 break
 
-            # Try to fetch detail for each SPU (for images/description)
+            # Optionally enrich with detail (skip if list already has enough data)
             enriched_items = []
             for item in items:
                 spu_id = str(item.get("spuId", item.get("id", "")))
-                if spu_id:
+                # Only fetch detail if we need more data (e.g., description missing)
+                if spu_id and not item.get("description") and not item.get("detail"):
                     try:
                         detail = await self.client.get_spu_detail(spu_id)
                         detail_data = detail.get("data", {})
-                        if detail_data:
-                            # Merge detail into item
+                        if detail_data and isinstance(detail_data, dict):
                             item.update(detail_data)
                     except Exception as e:
                         logger.debug(f"SPU detail failed for {spu_id}: {e}")
@@ -118,7 +130,9 @@ class ProductSyncer(BaseSyncer):
 
             await self._upsert_products(enriched_items)
             total += len(enriched_items)
-            self.logger.info(f"Products SPU API page {page}, got {len(items)} items")
+            self.logger.info(
+                f"Products SPU API page {page}, got {len(items)} items (total so far: {total})"
+            )
 
             if not has_more:
                 break
@@ -199,16 +213,16 @@ class ProductSyncer(BaseSyncer):
         if total == 0:
             logger.info("No captured data, trying direct SPU API via browser...")
             page_num = 1
-            page_size = 50
+            page_size = 20
             while True:
                 payload = {
-                    "tenantId": self.client.tenant_id,
                     "page": page_num,
                     "pageSize": page_size,
+                    "current": page_num,
                 }
                 try:
                     resp = await browser.execute_api(
-                        "/api/v1/merchant/spu/page", method="POST", body=payload
+                        "/qnh-gw3/api/product/tenant/page-query", method="POST", body=payload
                     )
                     if resp.get("_error") or resp.get("code", 0) != 0:
                         logger.warning(f"Browser SPU API error: {resp}")
@@ -302,11 +316,18 @@ class ProductSyncer(BaseSyncer):
             if not spu_id:
                 continue
 
-            # Extract image URLs
-            main_image = item.get("imageUrl", item.get("picUrl", item.get("mainImage", "")))
+            # Extract image URLs (new API uses picUrlList)
+            pic_url_list = item.get("picUrlList", [])
+            main_image = (
+                pic_url_list[0]
+                if pic_url_list
+                else item.get("imageUrl", item.get("picUrl", item.get("mainImage", "")))
+            )
 
             # Collect all image URLs into extra
-            image_list = item.get("imageUrls", item.get("images", item.get("picUrls", [])))
+            image_list = pic_url_list or item.get(
+                "imageUrls", item.get("images", item.get("picUrls", []))
+            )
             description = item.get("description", item.get("desc", item.get("detail", "")))
 
             extra_data = {
@@ -338,13 +359,23 @@ class ProductSyncer(BaseSyncer):
                     "imageUrl",
                     "picUrl",
                     "mainImage",
+                    "picUrlList",
+                    "tenantId",
+                    "weightType",
                 }
             }
-            # Ensure images and description are in extra for knowledge base
+            # Ensure images, description, and SKU data are in extra for knowledge base
             if image_list:
                 extra_data["imageUrls"] = image_list
             if description:
                 extra_data["description"] = description
+            # Preserve embedded SKU data from new API
+            skus = item.get("skus", [])
+            if skus:
+                extra_data["skus"] = skus
+            weight_type = item.get("weightType")
+            if weight_type:
+                extra_data["weightType"] = weight_type
 
             await self.pool.execute(
                 """

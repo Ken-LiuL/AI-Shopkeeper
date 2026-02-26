@@ -73,11 +73,12 @@ API_TENANT_LEVEL = "/api/v1/tenant/aggTenantLevelConfig"
 API_TENANT_MODULES = "/api/v1/tenant/modules"
 API_POI_TASKS = "/api/v2/assistant/getPoiTasksWithTotal"
 
-# 商品管理 API（推断，待抓包验证）
-# TODO: 在 #/unifiedGoods/tenant/spu-list 页面抓包确认实际路径
-API_SPU_PAGE = "/api/v1/merchant/spu/page"
-API_SPU_DETAIL = "/api/v1/merchant/spu/detail"
-API_SKU_LIST_BY_SPU = "/api/v1/merchant/sku/listBySpuId"
+# 商品管理 API (qnh-gw3, 2026-02-27 抓包验证)
+# ⚠️ qnh-gw3 路径需要 h5guard 签名，必须通过 browser_client 执行
+API_SPU_PAGE = "/qnh-gw3/api/product/tenant/page-query"
+API_SPU_DETAIL = "/qnh-gw3/api/product/tenant/detail"
+API_STORE_SPU_PAGE = "/qnh-gw3/api/product/store/page-query-spu"
+API_SKU_PAGE = "/qnh-gw3/api/product/tenant/page-query-sku"
 
 # IM API (api.neixin.cn)
 NEIXIN_CHATLIST_APP = "/msg/api/chat/v3/chatlist/appid"
@@ -383,38 +384,44 @@ class QNHClient:
         category_id: str | None = None,
         status: str | None = None,
     ) -> dict[str, Any]:
-        """获取 SPU 分页列表。
+        """获取 SPU 分页列表 — 通过浏览器执行（qnh-gw3 需要 h5guard 签名）。
 
-        API: POST /api/v1/merchant/spu/page
-        TODO: 需抓包验证实际请求/响应格式。
+        API: POST /qnh-gw3/api/product/tenant/page-query
+        返回: {code, data: {list: [{tenantId, spuId, spuName, picUrlList, skus, brand, weightType, ...}], total, ...}}
         """
         payload: dict[str, Any] = {
-            "tenantId": self.tenant_id,
             "page": page,
             "pageSize": page_size,
+            "current": page,
         }
         if category_id:
             payload["categoryId"] = category_id
         if status:
             payload["status"] = status
-        return await self.post(API_SPU_PAGE, data=payload)
+        browser = await self._get_browser()
+        return await browser.execute_api(API_SPU_PAGE, method="POST", body=payload)
 
     async def get_spu_detail(self, spu_id: str) -> dict[str, Any]:
-        """获取 SPU 详情（含描述、规格、多图）。
+        """获取 SPU 详情 — 通过浏览器执行（qnh-gw3 需要 h5guard 签名）。
 
-        API: GET /api/v1/merchant/spu/detail?spuId=xxx
-        TODO: 需抓包验证。
+        API: POST /qnh-gw3/api/product/tenant/detail
         """
-        return await self.get(API_SPU_DETAIL, params={"spuId": spu_id})
+        payload: dict[str, Any] = {"spuId": spu_id}
+        browser = await self._get_browser()
+        return await browser.execute_api(API_SPU_DETAIL, method="POST", body=payload)
 
-    async def get_sku_list_by_spu(self, spu_id: str) -> list[dict[str, Any]]:
-        """获取 SPU 下的 SKU 列表。
+    async def get_sku_page(
+        self,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """获取 SKU 分页列表 — 通过浏览器执行（qnh-gw3 需要 h5guard 签名）。
 
-        API: GET /api/v1/merchant/sku/listBySpuId?spuId=xxx
-        TODO: 需抓包验证。
+        API: POST /qnh-gw3/api/product/tenant/page-query-sku
         """
-        resp = await self.get(API_SKU_LIST_BY_SPU, params={"spuId": spu_id})
-        return resp.get("data", [])
+        payload: dict[str, Any] = {"page": page, "pageSize": page_size, "current": page}
+        browser = await self._get_browser()
+        return await browser.execute_api(API_SKU_PAGE, method="POST", body=payload)
 
     async def get_poi_tree(self) -> dict[str, Any]:
         """Get store tree — 通过浏览器执行（goldengateway 需要 mtgsig）。

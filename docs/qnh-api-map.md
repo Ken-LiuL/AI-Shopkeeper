@@ -36,24 +36,20 @@
 | `/api/v1/notice/detail` | GET | 通知详情 |
 | `/api/v2/assistant/getPoiTasksWithTotal` | GET | 待办任务（含总数） |
 
-### 2b. 商品管理 API（推断，待验证）
+### 2b. 商品管理 API (qnh-gw3, 已验证)
 
-> ⚠️ 以下接口基于 QNH 商品管理页面 `#/unifiedGoods/tenant/spu-list` 推断，
-> 需要在浏览器中抓包验证。路径模式参考已知的 `/api/v1/merchant/storeCategory/queryAll`。
+> ⚠️ qnh-gw3 路径需要 h5guard 签名，直接 HTTP 返回 403，必须通过浏览器 fetch 执行。
+> 2026-02-27 抓包验证。
 
-**推断依据：**
-- 页面路径含 `unifiedGoods/tenant/spu-list`，对应 SPU 列表
-- 已知 `/api/v1/merchant/` 前缀用于商品管理
-- 常见的 REST 模式：page/detail/listByXxx
-
-**可能的接口：**
-| 路径（推断） | 方法 | 用途 | 状态 |
+| 路径 | 方法 | 用途 | 状态 |
 |------|------|------|------|
-| `/api/v1/merchant/spu/page` | POST | SPU 分页列表 | TODO: 抓包验证 |
-| `/api/v1/merchant/spu/detail` | GET | SPU 详情 | TODO: 抓包验证 |
-| `/api/v1/merchant/spu/list` | POST | SPU 列表（不分页） | TODO: 抓包验证 |
-| `/api/v1/merchant/sku/listBySpuId` | GET | SKU 列表 | TODO: 抓包验证 |
-| `/api/v1/merchant/sku/detail` | GET | SKU 详情 | TODO: 抓包验证 |
+| `/qnh-gw3/api/product/tenant/page-query` | POST | **SPU 分页列表** — `{page, pageSize, current}` | ✅ 已验证 |
+| `/qnh-gw3/api/product/tenant/detail` | POST | **SPU 详情** — `{spuId}` | 待验证参数 |
+| `/qnh-gw3/api/product/store/page-query-spu` | POST | 门店商品列表 | 待验证 |
+| `/qnh-gw3/api/product/tenant/page-query-sku` | POST | SKU 分页列表 | 待验证 |
+
+**SPU 列表返回字段：**
+`tenantId, spuId, spuName, picUrlList[], skus[], brand, weightType` 等
 
 **备选方案（已验证可用）：**
 - 热销商品排行 `homepage_hotsale_goods_rank_table_view_new` — goldengateway，含部分商品数据
@@ -139,8 +135,9 @@ yodaReady=h5&csecplatform=4&csecversion=4.2.0
 - 工作台数据 (`/workbench/b/dashboard/...`)
 - 推送消息 (`/common/push/message/...`)
 
-### 需要浏览器环境 (mtgsig)
+### 需要浏览器环境 (mtgsig / h5guard)
 - 门店指标/销售数据 (`/goldengateway/empower/generic/table/query`)
 - 渠道分布 (`/goldengateway/empower/homepage/channelDistributeList`)
 - 行业对标 (`/goldengateway/empower/complexModule/queryTable`)
+- **商品管理 SPU/SKU** (`/qnh-gw3/api/product/tenant/*`) — h5guard 签名
 - 聊天历史 (`api.neixin.cn/msg/api/pub/v3/history/chat/range`)
