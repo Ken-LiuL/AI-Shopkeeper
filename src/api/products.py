@@ -141,7 +141,15 @@ class KnowledgeBuildRequest(BaseModel):
 
 @router.post("/knowledge/search", response_model=APIResponse[list[dict]])
 async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[list[dict]]:
-    """商品搜索（SQL 全文匹配，轻量级替代向量搜索）。"""
+    """商品语义搜索（embedding 向量匹配，fallback SQL ILIKE）。"""
+    from src.agents.customer_service.skills_registry import get_product_knowledge
+
+    pk = get_product_knowledge()
+    if pk:
+        results = await pk.search_product(query=body.query, limit=body.limit)
+        return APIResponse(data=results)
+
+    # Fallback if skill not initialized
     pool = pg.get_pool()
     query = f"%{body.query}%"
     rows = await pool.fetch(
@@ -183,11 +191,15 @@ async def knowledge_stats() -> APIResponse[dict]:
     with_category = await pool.fetchval(
         "SELECT COUNT(*) FROM qnh_products WHERE category IS NOT NULL AND category != ''"
     )
+    with_embedding = await pool.fetchval(
+        "SELECT COUNT(*) FROM qnh_products WHERE embedding IS NOT NULL"
+    )
     return APIResponse(
         data={
             "source_products": source_products,
             "with_category": with_category,
-            "search_mode": "sql_fulltext",
+            "with_embedding": with_embedding,
+            "search_mode": "semantic" if with_embedding > 0 else "sql_fulltext",
         }
     )
 

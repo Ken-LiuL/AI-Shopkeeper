@@ -105,8 +105,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
-    # Vector search disabled — using SQL fulltext instead (Chroma OOM on Fly free tier)
-
     # Init and register skills for customer service agent
     try:
         from src.agents.customer_service.skills_registry import register_skills
@@ -141,6 +139,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             product_knowledge=product_knowledge_skill,
         )
         logger.info("Customer service skills registered (with product knowledge) ✓")
+
+        # Build embeddings in background (non-blocking)
+        import asyncio as _asyncio2
+
+        async def _bg_build_embeddings():
+            try:
+                from src.skills.product_knowledge import build_embeddings
+
+                await build_embeddings(pg_db.get_pool(), embedding_skill)
+            except Exception as e:
+                logger.error("Background embedding build failed: %s", e)
+
+        _asyncio2.create_task(_bg_build_embeddings())
+        logger.info("Background embedding build task started")
     except Exception:
         logger.warning("Failed to register customer service skills", exc_info=True)
 

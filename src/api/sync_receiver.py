@@ -156,10 +156,31 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
 
             weight_type = p.get("weightTypeDesc", p.get("weight_type", ""))
 
+            # --- 从 SKU 数据和 SPU 数据中提取更多字段 ---
+            first_sku = skus[0] if skus and isinstance(skus, list) else {}
+
+            # category: backendCategory (SPU level or first SKU)
+            category = p.get("category", "")
+            if not category:
+                bc = p.get("backendCategory") or first_sku.get("backendCategory")
+                if isinstance(bc, dict):
+                    category = bc.get("categoryNamePath", "") or bc.get("categoryName", "")
+
+            # barcode: upcList from first SKU
+            barcode = p.get("barcode", "")
+            if not barcode and first_sku:
+                upc_list = first_sku.get("upcList", [])
+                if upc_list and isinstance(upc_list, list):
+                    barcode = str(upc_list[0])
+
+            # unit: saleUnit from first SKU
+            unit = p.get("unit", "")
+            if not unit and first_sku:
+                unit = first_sku.get("saleUnit", "") or ""
+
             retail_price = p.get("retail_price")
             spec = p.get("spec", "")
-            if not retail_price and skus and isinstance(skus, list):
-                first_sku = skus[0] if skus else {}
+            if not retail_price and first_sku:
                 spec = spec or first_sku.get("specName", "")
                 suggest = first_sku.get("suggestPrice", {})
                 if isinstance(suggest, dict):
@@ -178,13 +199,15 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
             await conn.execute(
                 """
                 INSERT INTO qnh_products (spu_id, sku_id, name, brand, spec, retail_price,
-                    image_url, status, pic_urls, skus, weight_type, synced_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, NOW())
+                    image_url, status, pic_urls, skus, weight_type, category, barcode, unit, synced_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, NOW())
                 ON CONFLICT (spu_id, sku_id) DO UPDATE SET
                     name = EXCLUDED.name, brand = EXCLUDED.brand, spec = EXCLUDED.spec,
                     retail_price = EXCLUDED.retail_price, image_url = EXCLUDED.image_url,
                     status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
-                    skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type, synced_at = NOW()
+                    skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type,
+                    category = EXCLUDED.category, barcode = EXCLUDED.barcode,
+                    unit = EXCLUDED.unit, synced_at = NOW()
                 """,
                 spu_id,
                 sku_id,
@@ -197,6 +220,9 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
                 json.dumps(pic_urls, ensure_ascii=False),
                 json.dumps(skus, ensure_ascii=False),
                 weight_type,
+                category,
+                barcode,
+                unit,
             )
             count += 1
 
