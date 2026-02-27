@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
+from datetime import UTC
 
 from fastapi import APIRouter, Depends, Query
 
@@ -25,6 +27,27 @@ from .schemas import (
 router = APIRouter(prefix="/api/customer-service", tags=["customer_service"])
 logger = logging.getLogger(__name__)
 
+# ── In-memory session fallback (when Redis unavailable) ───────
+_MAX_MEM_SESSIONS = 200
+_MAX_HISTORY = 50
+_mem_sessions: OrderedDict[str, list[dict]] = OrderedDict()
+
+
+def _mem_ensure(session_id: str) -> list[dict]:
+    """Get or create an in-memory session."""
+    if session_id not in _mem_sessions:
+        if len(_mem_sessions) >= _MAX_MEM_SESSIONS:
+            _mem_sessions.popitem(last=False)
+        _mem_sessions[session_id] = []
+    return _mem_sessions[session_id]
+
+
+def _mem_add(session_id: str, role: str, content: str) -> None:
+    history = _mem_ensure(session_id)
+    history.append({"role": role, "content": content})
+    if len(history) > _MAX_HISTORY:
+        del history[: len(history) - _MAX_HISTORY]
+
 
 def _get_session_manager() -> SessionManager | None:
     r = redis_db.get_redis()
@@ -34,7 +57,7 @@ def _get_session_manager() -> SessionManager | None:
 
 
 def _require_redis() -> SessionManager:
-    sm = _require_redis()
+    sm = _get_session_manager()
     if sm is None:
         raise AppError("Customer service requires Redis (not configured)", status_code=503)
     return sm
@@ -47,12 +70,23 @@ def _require_redis() -> SessionManager:
 async def create_session(
     request: CreateSessionRequest | None = None,
 ) -> APIResponse[CreateSessionResponse]:
-    sm = _require_redis()
+    import uuid
+    from datetime import datetime
+
+    sm = _get_session_manager()
     req = request or CreateSessionRequest()
-    session_id, created_at = await sm.create_session(
-        customer_id=req.customer_id,
-        metadata=req.metadata,
-    )
+
+    if sm is not None:
+        session_id, created_at = await sm.create_session(
+            customer_id=req.customer_id,
+            metadata=req.metadata,
+        )
+    else:
+        # In-memory fallback
+        session_id = f"mem-{uuid.uuid4().hex[:12]}"
+        created_at = datetime.now(UTC).isoformat()
+        _mem_ensure(session_id)
+
     return APIResponse(data=CreateSessionResponse(session_id=session_id, created_at=created_at))
 
 
@@ -64,23 +98,21 @@ async def chat(
     request: ChatRequest,
     orch: Orchestrator = Depends(get_orchestrator),
 ) -> APIResponse[ChatResponse]:
-    sm = _require_redis()
+    sm = _get_session_manager()
 
-    # Validate session exists
-    if not await sm.session_exists(request.session_id):
-        raise NotFoundError("Session", request.session_id)
-
-    # Acquire distributed lock
-    if not await sm.acquire_lock(request.session_id, timeout=30):
-        raise AppError("Session is busy, please retry", status_code=429)
+    # Determine history source: Redis or in-memory fallback
+    if sm is not None and await sm.session_exists(request.session_id):
+        if not await sm.acquire_lock(request.session_id, timeout=30):
+            raise AppError("Session is busy, please retry", status_code=429)
+        use_redis = True
+        history = await sm.get_history(request.session_id, limit=20)
+        await sm.add_message(request.session_id, "user", request.message)
+    else:
+        use_redis = False
+        history = _mem_ensure(request.session_id)[-20:]
+        _mem_add(request.session_id, "user", request.message)
 
     try:
-        # Read history from Redis
-        history = await sm.get_history(request.session_id, limit=20)
-
-        # Store user message
-        await sm.add_message(request.session_id, "user", request.message)
-
         # Run agent
         result = await orch.run_customer_service(
             user_message=request.message,
@@ -98,7 +130,10 @@ async def chat(
         sources = result.get("enriched_results", result.get("sources", []))
 
         # Store assistant message
-        await sm.add_message(request.session_id, "assistant", reply)
+        if use_redis:
+            await sm.add_message(request.session_id, "assistant", reply)
+        else:
+            _mem_add(request.session_id, "assistant", reply)
 
         return APIResponse(
             data=ChatResponse(
@@ -109,7 +144,8 @@ async def chat(
             )
         )
     finally:
-        await sm.release_lock(request.session_id)
+        if use_redis:
+            await sm.release_lock(request.session_id)
 
 
 # ── List sessions ─────────────────────────────────────────────
