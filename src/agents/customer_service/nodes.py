@@ -616,11 +616,11 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
 
 
 async def human_transfer_node(state: CustomerServiceState) -> dict:
-    """转人工处理"""
+    """转人工处理 — 仅用于严重投诉/法律威胁场景"""
     reason = state.get("intent", {}).get("human_reason", "用户需求需要人工处理")
     return {
         "reply": {
-            "reply_text": "亲，您的问题这边帮您转接人工客服处理，请稍等~",
+            "reply_text": "亲，非常抱歉给您带来不好的体验🙏 您的问题我们非常重视，已为您转接专属客服处理，请稍等。我们一定给您一个满意的答复！",
             "confidence": 1.0,
             "requires_human_review": True,
             "review_reason": reason,
