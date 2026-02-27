@@ -52,6 +52,31 @@ class IngestResponse(BaseModel):
     message: str = ""
 
 
+class SyncPushRequest(BaseModel):
+    """Chrome Extension 推送数据请求"""
+
+    source: str
+    data: list[dict[str, Any]]
+    timestamp: str
+    metadata: dict[str, Any] | None = None
+
+
+class SyncPushResponse(BaseModel):
+    """Chrome Extension 推送数据响应"""
+
+    ok: bool
+    records: int
+    source: str
+    message: str = ""
+    next_sync_suggested: str | None = None
+
+
+class SyncStatusResponse(BaseModel):
+    """同步状态响应"""
+
+    sources: dict[str, dict[str, Any]]
+
+
 def _verify_key(api_key: str | None, header_key: str | None) -> None:
     """验证 API key。"""
     if not SYNC_API_KEY:
@@ -229,14 +254,63 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
     return count
 
 
-@router.get("/status")
-async def sync_status() -> dict[str, Any]:
+@router.post("/push", response_model=SyncPushResponse)
+async def push_sync_data(
+    request: SyncPushRequest,
+    x_api_key: str | None = Header(None, alias="X-API-Key"),
+) -> SyncPushResponse:
+    """Chrome Extension 数据推送端点
+
+    接收来自 Chrome Extension 的数据并存储到对应的数据库表中。
+    """
+    # 验证 API Key
+    _verify_key(None, x_api_key)
+
+    if request.source not in SOURCE_TABLE_MAP:
+        raise HTTPException(status_code=400, detail=f"Unknown source: {request.source}")
+
+    if not request.data:
+        return SyncPushResponse(ok=True, records=0, source=request.source, message="empty data")
+
+    table = SOURCE_TABLE_MAP[request.source]
+    pool = await get_pool()
+
+    try:
+        # 记录推送日志
+        await _log_sync_push(
+            pool, request.source, len(request.data), request.timestamp, request.metadata
+        )
+
+        # 插入数据
+        count = await _insert_records(pool, table, request.source, request.data, request.timestamp)
+
+        # 计算下次建议同步时间
+        next_sync = _calculate_next_sync_time(request.source)
+
+        logger.info("Extension push: %s, %d records", request.source, count)
+
+        return SyncPushResponse(
+            ok=True,
+            records=count,
+            source=request.source,
+            message="success",
+            next_sync_suggested=next_sync,
+        )
+
+    except Exception as e:
+        logger.error("Extension push failed for %s: %s", request.source, e, exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/status", response_model=SyncStatusResponse)
+async def sync_status() -> SyncStatusResponse:
     """同步状态：最近同步时间和记录数。"""
     pool = await get_pool()
     async with pool.acquire() as conn:
         results = {}
         for source, table in SOURCE_TABLE_MAP.items():
             try:
+                # 尝试从 _raw 表获取状态
                 row = await conn.fetchrow(
                     f"SELECT COUNT(*) as cnt, MAX(synced_at) as last_sync FROM {table}_raw"
                 )
@@ -244,6 +318,85 @@ async def sync_status() -> dict[str, Any]:
                     "count": row["cnt"] if row else 0,
                     "last_sync": str(row["last_sync"]) if row and row["last_sync"] else None,
                 }
+
+                # 如果是 products，同时获取结构化表的状态
+                if source == "products":
+                    try:
+                        prod_row = await conn.fetchrow(
+                            "SELECT COUNT(*) as cnt, MAX(synced_at) as last_sync FROM qnh_products"
+                        )
+                        if prod_row:
+                            results[source]["structured_count"] = prod_row["cnt"]
+                            results[source]["structured_last_sync"] = (
+                                str(prod_row["last_sync"]) if prod_row["last_sync"] else None
+                            )
+                    except Exception:
+                        pass
+
             except Exception:
                 results[source] = {"count": 0, "last_sync": None, "error": "table not found"}
-        return {"sources": results}
+
+        return SyncStatusResponse(sources=results)
+
+
+async def _log_sync_push(
+    pool: Any,
+    source: str,
+    record_count: int,
+    timestamp: str,
+    metadata: dict[str, Any] | None,
+) -> None:
+    """记录推送日志到 sync_push_log 表"""
+    try:
+        async with pool.acquire() as conn:
+            # 确保表存在
+            await conn.execute("""
+                CREATE TABLE IF NOT EXISTS sync_push_log (
+                    id SERIAL PRIMARY KEY,
+                    source VARCHAR(50) NOT NULL,
+                    record_count INTEGER NOT NULL DEFAULT 0,
+                    timestamp TIMESTAMP NOT NULL,
+                    metadata JSONB,
+                    ip_address INET,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
+            # 插入日志记录
+            import json
+
+            await conn.execute(
+                """
+                INSERT INTO sync_push_log (source, record_count, timestamp, metadata)
+                VALUES ($1, $2, $3, $4::jsonb)
+            """,
+                source,
+                record_count,
+                timestamp,
+                json.dumps(metadata) if metadata else None,
+            )
+
+    except Exception as e:
+        logger.warning("Failed to log sync push: %s", e)
+
+
+def _calculate_next_sync_time(source: str) -> str | None:
+    """计算下次建议同步时间"""
+    from datetime import timedelta
+
+    # 同步间隔映射 (分钟)
+    intervals = {
+        "orders": 5,  # 订单 - 5分钟
+        "inventory": 15,  # 库存 - 15分钟
+        "im_history": 15,  # IM消息 - 15分钟
+        "products": 60,  # 商品 - 1小时
+        "metrics": 60,  # 指标 - 1小时
+        "traffic": 60,  # 流量 - 1小时
+        "im_sessions": 60,  # IM会话 - 1小时
+        "finance": 1440,  # 财务 - 24小时
+        "refunds": 1440,  # 退款 - 24小时
+    }
+
+    interval_minutes = intervals.get(source, 60)  # 默认1小时
+    next_time = datetime.now(UTC) + timedelta(minutes=interval_minutes)
+    return next_time.isoformat()
