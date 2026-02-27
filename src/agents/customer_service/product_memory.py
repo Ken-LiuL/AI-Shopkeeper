@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from typing import Any
@@ -52,7 +53,11 @@ class ProductMemory:
                     "image_text": row["image_text"] or "",
                     "status": row["status"] or "",
                     "stock": row["stock"] or 0,
-                    "embedding": row["embedding"]  # 1536维的embedding列表
+                    "embedding": (
+                        json.loads(row["embedding"])
+                        if isinstance(row["embedding"], str)
+                        else row["embedding"]
+                    )  # 1536维的embedding列表
                 }
 
                 # 如果没有 embedding，生成搜索文本用于fallback

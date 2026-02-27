@@ -61,8 +61,9 @@ async def search_products_with_embedding(query: str, pool) -> list[dict]:
             from src.skills.embedding import EmbeddingSkill
             embedding_skill = EmbeddingSkill()
             query_embedding = embedding_skill.embed(query)
+            logger.info(f"Query embedding generated: dim={len(query_embedding)}")
         except Exception as e:
-            logger.warning(f"Failed to generate query embedding: {e}")
+            logger.warning(f"Failed to generate query embedding: {e}", exc_info=True)
 
         # 搜索商品
         results = await product_memory.search_products(
