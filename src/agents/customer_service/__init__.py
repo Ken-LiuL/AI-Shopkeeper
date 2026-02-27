@@ -1,5 +1,5 @@
-"""CustomerService Agent - 智能客服"""
+"""CustomerService Agent - 智能客服（新版：单次LLM调用）"""
 
-from .graph import build_customer_service_graph
+from .nodes import chat
 
-__all__ = ["build_customer_service_graph"]
+__all__ = ["chat"]
