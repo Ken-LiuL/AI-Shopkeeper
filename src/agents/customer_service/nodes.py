@@ -183,26 +183,20 @@ async def route_node(state: CustomerServiceState) -> dict:
     intent_data = state.get("intent", {})
     intent = intent_data.get("intent", "other")
 
-    # 检查是否需要转人工
-    if intent_data.get("requires_human", False):
-        return {"route": "human"}
-
-    # 检查消息中是否包含转人工触发词
+    # 检查消息中是否包含投诉类转人工触发词
     msg = state.get("user_message", "").lower()
-    for kw in HUMAN_TRANSFER_KEYWORDS:
-        if kw in msg:
-            return {"route": "human"}
+    has_complaint_kw = any(kw in msg for kw in HUMAN_TRANSFER_KEYWORDS)
+
+    # 仅投诉意图 或 包含投诉关键词 → 转人工
+    if intent == "complaint" or has_complaint_kw:
+        return {"route": "human"}
 
     # FAQ 路由（纯模板可答）
     if intent == "greeting":
         return {"route": "faq"}
 
-    # 仅投诉直接转人工
-    if intent == "complaint":
-        return {"route": "human"}
-
-    # 售后、物流、医疗建议、商品咨询等 → 走知识库+商品检索
-    # after_sales 会匹配 policy 类知识；medical_advice 会匹配 compliance 类知识
+    # 其他所有意图（包括 after_sales, medical_advice, logistics, product_inquiry 等）
+    # → 走知识库+商品检索，让 LLM 基于知识库生成专业回复
     return {"route": "search"}
 
 
