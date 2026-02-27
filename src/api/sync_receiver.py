@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from datetime import UTC, datetime
@@ -164,10 +165,8 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
                 if isinstance(suggest, dict):
                     tp = suggest.get("tenantSuggestPrice", {})
                     if isinstance(tp, dict) and tp.get("unifiedSuggestPrice"):
-                        try:
+                        with contextlib.suppress(ValueError, TypeError):
                             retail_price = float(tp["unifiedSuggestPrice"])
-                        except (ValueError, TypeError):
-                            pass
 
             status = p.get("status", "")
             if not status:
@@ -186,7 +185,14 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
                     status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
                     skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type, synced_at = NOW()
                 """,
-                spu_id, sku_id, name, brand, spec, retail_price, image_url, status,
+                spu_id,
+                sku_id,
+                name,
+                brand,
+                spec,
+                retail_price,
+                image_url,
+                status,
                 json.dumps(pic_urls, ensure_ascii=False),
                 json.dumps(skus, ensure_ascii=False),
                 weight_type,

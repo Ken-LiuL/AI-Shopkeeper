@@ -10,8 +10,6 @@ from pydantic import BaseModel
 
 from src.db import postgres as pg
 
-logger = logging.getLogger(__name__)
-
 from .deps import gen_id
 from .errors import NotFoundError
 from .schemas import (
@@ -21,6 +19,8 @@ from .schemas import (
     ProductUpdateRequest,
     SalesRecord,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
