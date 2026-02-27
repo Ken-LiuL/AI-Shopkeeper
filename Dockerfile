@@ -17,6 +17,7 @@ COPY src/ src/
 COPY config/ config/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
+COPY data/cs_knowledge_structured.json data/
 
 # Chromium NOT needed on server — sync runs locally via nodriver daemon
 # Server only serves API + agents
