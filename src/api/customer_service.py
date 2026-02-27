@@ -26,8 +26,18 @@ router = APIRouter(prefix="/api/customer-service", tags=["customer_service"])
 logger = logging.getLogger(__name__)
 
 
-def _get_session_manager() -> SessionManager:
-    return SessionManager(redis_db.get_redis())
+def _get_session_manager() -> SessionManager | None:
+    r = redis_db.get_redis()
+    if r is None:
+        return None
+    return SessionManager(r)
+
+
+def _require_redis() -> SessionManager:
+    sm = _require_redis()
+    if sm is None:
+        raise AppError("Customer service requires Redis (not configured)", status_code=503)
+    return sm
 
 
 # ── Create session ────────────────────────────────────────────
@@ -37,7 +47,7 @@ def _get_session_manager() -> SessionManager:
 async def create_session(
     request: CreateSessionRequest | None = None,
 ) -> APIResponse[CreateSessionResponse]:
-    sm = _get_session_manager()
+    sm = _require_redis()
     req = request or CreateSessionRequest()
     session_id, created_at = await sm.create_session(
         customer_id=req.customer_id,
@@ -54,7 +64,7 @@ async def chat(
     request: ChatRequest,
     orch: Orchestrator = Depends(get_orchestrator),
 ) -> APIResponse[ChatResponse]:
-    sm = _get_session_manager()
+    sm = _require_redis()
 
     # Validate session exists
     if not await sm.session_exists(request.session_id):
@@ -111,6 +121,8 @@ async def list_sessions(
     limit: int = Query(20, ge=1, le=100),
 ) -> APIResponse[list[SessionListItem]]:
     sm = _get_session_manager()
+    if sm is None:
+        return APIResponse(data=[])
     items = await sm.list_sessions(customer_id=customer_id, limit=limit)
     return APIResponse(data=[SessionListItem(**item) for item in items])
 
@@ -120,7 +132,7 @@ async def list_sessions(
 
 @router.get("/sessions/{session_id}/messages", response_model=APIResponse[SessionHistory])
 async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
-    sm = _get_session_manager()
+    sm = _require_redis()
     if not await sm.session_exists(session_id):
         raise NotFoundError("Session", session_id)
     history = await sm.get_history(session_id, limit=200)
@@ -132,7 +144,7 @@ async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
 
 @router.delete("/sessions/{session_id}", response_model=APIResponse[dict])
 async def delete_session(session_id: str) -> APIResponse[dict]:
-    sm = _get_session_manager()
+    sm = _require_redis()
     deleted = await sm.close_session(session_id)
     if not deleted:
         raise NotFoundError("Session", session_id)
