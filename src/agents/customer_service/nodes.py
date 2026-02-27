@@ -44,9 +44,12 @@ async def _search_knowledge_base(
         # 根据意图推荐对应类别
         intent_category_map = {
             "product_inquiry": ["faq", "usage_guide"],
-            "after_sales": ["policy"],
+            "recommendation": ["faq", "usage_guide"],
+            "comparison": ["faq", "usage_guide"],
+            "after_sales": ["policy", "faq"],
             "complaint": ["compliance", "policy"],
             "usage_question": ["usage_guide", "compliance"],
+            "medical_advice": ["compliance", "usage_guide"],
             "logistics": ["faq", "policy"],
             "greeting": ["faq"],
         }
@@ -190,15 +193,16 @@ async def route_node(state: CustomerServiceState) -> dict:
         if kw in msg:
             return {"route": "human"}
 
-    # FAQ 路由
-    if intent in ("greeting", "logistics"):
+    # FAQ 路由（纯模板可答）
+    if intent == "greeting":
         return {"route": "faq"}
 
-    # 需要转人工的意图
-    if intent in ("complaint", "after_sales"):
+    # 仅投诉直接转人工
+    if intent == "complaint":
         return {"route": "human"}
 
-    # 默认走检索
+    # 售后、物流、医疗建议、商品咨询等 → 走知识库+商品检索
+    # after_sales 会匹配 policy 类知识；medical_advice 会匹配 compliance 类知识
     return {"route": "search"}
 
 
@@ -240,13 +244,27 @@ async def faq_reply_node(state: CustomerServiceState) -> dict:
     if isinstance(templates, dict):
         return {"faq_reply": templates.get("reply", "亲，在的呢~请问有什么可以帮您？😊")}
 
+    # 模板变量默认值
+    tpl_defaults = {
+        "delivery_time": "30-60分钟内",
+        "order_status": "已接单",
+        "status_detail": "正在为您配货中~",
+        "after_sales_detail": "",
+    }
+
     for tpl in templates:
         triggers = tpl.get("trigger", [])
         if any(t in msg for t in triggers):
-            return {"faq_reply": tpl["reply"]}
+            reply = tpl["reply"]
+            for k, v in tpl_defaults.items():
+                reply = reply.replace("{" + k + "}", v)
+            return {"faq_reply": reply}
 
     if templates:
-        return {"faq_reply": templates[0]["reply"]}
+        reply = templates[0]["reply"]
+        for k, v in tpl_defaults.items():
+            reply = reply.replace("{" + k + "}", v)
+        return {"faq_reply": reply}
     return {"faq_reply": "亲，在的呢~请问有什么可以帮您？😊"}
 
 
