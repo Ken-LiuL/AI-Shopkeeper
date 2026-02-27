@@ -38,8 +38,78 @@ async def _search_knowledge_base(
     if not pool:
         return []
     try:
-        # 构建查询词列表
-        query_words = [w.lower().strip() for w in query.split() if len(w.strip()) > 1]
+        # 构建查询词列表 — 中文关键词提取（不依赖分词库）
+        # 1. 先按空格/标点拆分
+        import re
+
+        raw_tokens = re.split(r"[\s,，。？！?!、；;：:]+", query)
+        query_words = []
+        # 2. 常见客服关键词字典（匹配知识库 keywords）
+        _CS_KEYWORDS = [
+            "退货",
+            "退款",
+            "退换货",
+            "换货",
+            "退换",
+            "拆封",
+            "质量问题",
+            "保质期",
+            "过期",
+            "发票",
+            "配送",
+            "运费",
+            "价格",
+            "优惠",
+            "活动",
+            "口罩",
+            "血压计",
+            "体温计",
+            "血糖仪",
+            "血氧仪",
+            "雾化",
+            "轮椅",
+            "护具",
+            "护膝",
+            "拐杖",
+            "隐形眼镜",
+            "护理液",
+            "消毒",
+            "创可贴",
+            "敷贴",
+            "纱布",
+            "绷带",
+            "怎么用",
+            "使用方法",
+            "注意事项",
+            "保修",
+            "赔偿",
+            "投诉",
+            "差评",
+            "多久到",
+            "送到",
+            "配送时间",
+            "到账",
+            "发货",
+            "卫生巾",
+            "避孕套",
+            "医疗器械",
+            "处方药",
+            "安全",
+            "个人信息",
+            "隐私",
+            "客服",
+        ]
+        for token in raw_tokens:
+            token = token.strip().lower()
+            if not token:
+                continue
+            # 从 token 中提取匹配的关键词
+            for kw in _CS_KEYWORDS:
+                if kw in token and kw not in query_words:
+                    query_words.append(kw)
+            # 也保留原始 token 用于 ILIKE 匹配
+            if len(token) > 1 and token not in query_words:
+                query_words.append(token)
 
         # 根据意图推荐对应类别
         intent_category_map = {
@@ -55,33 +125,49 @@ async def _search_knowledge_base(
         }
         preferred_categories = intent_category_map.get(intent, [])
 
-        # 构建 SQL 查询
+        # Build params list from scratch: $1..$N for words, then categories, then limit
+        params: list = []
+        word_conditions = []
+        word_scores = []
+
+        for w in query_words[:10]:
+            idx = len(params) + 1
+            params.append(w)
+            word_conditions.append(
+                f"(keywords && ARRAY[${idx}]::text[] "
+                f"OR question ILIKE '%' || ${idx} || '%' "
+                f"OR answer ILIKE '%' || ${idx} || '%')"
+            )
+            word_scores.append(
+                f"(CASE WHEN keywords && ARRAY[${idx}]::text[] THEN 2 ELSE 0 END + "
+                f"CASE WHEN question ILIKE '%' || ${idx} || '%' THEN 1 ELSE 0 END + "
+                f"CASE WHEN answer ILIKE '%' || ${idx} || '%' THEN 0.5 ELSE 0 END)"
+            )
+
+        # Category filter
         if preferred_categories:
-            category_condition = "AND category = ANY($2)"
-            params = [query_words, preferred_categories, limit]
+            cat_idx = len(params) + 1
+            params.append(preferred_categories)
+            category_condition = f"AND category = ANY(${cat_idx})"
         else:
             category_condition = ""
-            params = [query_words, limit]
+
+        # Limit
+        limit_idx = len(params) + 1
+        params.append(limit)
+
+        where_words = " OR ".join(word_conditions) if word_conditions else "TRUE"
+        score_expr = " + ".join(word_scores) if word_scores else "0"
 
         sql = f"""
             SELECT id, category, subcategory, question, answer, keywords,
                    priority, product_categories,
-                   -- 关键词匹配分数
-                   (
-                       CASE WHEN keywords && $1 THEN 2 ELSE 0 END +
-                       CASE WHEN question ILIKE '%' || array_to_string($1, '%') || '%' THEN 1 ELSE 0 END +
-                       CASE WHEN answer ILIKE '%' || array_to_string($1, '%') || '%' THEN 0.5 ELSE 0 END +
-                       priority * 0.1
-                   ) as relevance_score
+                   ({score_expr} + priority * 0.1) as relevance_score
             FROM knowledge_base
-            WHERE (
-                keywords && $1 OR
-                question ILIKE '%' || array_to_string($1, '%') || '%' OR
-                answer ILIKE '%' || array_to_string($1, '%') || '%'
-            )
+            WHERE ({where_words})
             {category_condition}
             ORDER BY relevance_score DESC, priority DESC, id
-            LIMIT ${len(params)}
+            LIMIT ${limit_idx}
         """
 
         rows = await pool.fetch(sql, *params)
