@@ -46,7 +46,7 @@ class ProductKnowledgeSkill:
         limit: int = 5,
         hybrid: bool = True,
     ) -> list[dict[str, Any]]:
-        """搜索商品知识库（Chroma 向量检索）。
+        """搜索商品知识库（SQL 全文检索）。
 
         Args:
             query: 用户查询文本
@@ -57,53 +57,39 @@ class ProductKnowledgeSkill:
             [{"spu_id", "name", "category", "brand", "spec",
               "description", "image_text", "price", "score"}, ...]
         """
-        from src.db.chroma import get_collection
+        from src.db import postgres as pg
 
-        collection = get_collection()
-        if collection.count() == 0:
+        pool = self._pool or pg.get_pool()
+        if pool is None:
             return []
 
-        query_emb = self._embedding.embed(f"查询: {query}")
-
-        results = collection.query(
-            query_embeddings=[query_emb],
-            n_results=min(limit, collection.count()),
-            include=["metadatas", "distances"],
+        like_query = f"%{query}%"
+        rows = await pool.fetch(
+            """SELECT spu_id, name, category, brand, spec, retail_price, status, image_url
+               FROM qnh_products
+               WHERE name ILIKE $1 OR brand ILIKE $1 OR spec ILIKE $1 OR category ILIKE $1
+               LIMIT $2""",
+            like_query,
+            limit,
         )
 
         items = []
-        if results and results["ids"] and results["ids"][0]:
-            for i, doc_id in enumerate(results["ids"][0]):
-                meta = results["metadatas"][0][i] if results["metadatas"] else {}
-                distance = results["distances"][0][i] if results["distances"] else 1.0
-                score = 1.0 - distance  # cosine distance → similarity
-
-                # Parse image_urls from JSON string
-                image_urls_raw = meta.get("image_urls", "[]")
-                try:
-                    image_urls = (
-                        json.loads(image_urls_raw)
-                        if isinstance(image_urls_raw, str)
-                        else image_urls_raw
-                    )
-                except Exception:
-                    image_urls = []
-
-                items.append(
-                    {
-                        "spu_id": meta.get("spu_id", doc_id),
-                        "name": meta.get("name", ""),
-                        "category": meta.get("category", ""),
-                        "brand": meta.get("brand", ""),
-                        "spec": meta.get("spec", ""),
-                        "description": meta.get("description", ""),
-                        "image_text": meta.get("image_text", ""),
-                        "price": float(meta["price"]) if meta.get("price") else None,
-                        "status": meta.get("status", ""),
-                        "image_urls": image_urls,
-                        "score": round(score, 4),
-                    }
-                )
+        for r in rows:
+            items.append(
+                {
+                    "spu_id": r["spu_id"],
+                    "name": r["name"] or "",
+                    "category": r["category"] or "",
+                    "brand": r["brand"] or "",
+                    "spec": r["spec"] or "",
+                    "description": "",
+                    "image_text": "",
+                    "price": float(r["retail_price"]) if r["retail_price"] else None,
+                    "status": r["status"] or "",
+                    "image_urls": [r["image_url"]] if r.get("image_url") else [],
+                    "score": 1.0,
+                }
+            )
         return items
 
     # ── Build Pipeline ──────────────────────────────────────────────────
