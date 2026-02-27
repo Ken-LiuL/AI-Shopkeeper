@@ -7,12 +7,40 @@ from datetime import date
 
 from fastapi import APIRouter, Query
 
+from src.db import postgres as pg
 from src.services.cs_analytics import CSAnalyticsService
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/overview", response_model=APIResponse[dict])
+async def get_overview() -> APIResponse:
+    """返回店铺基本统计概览。"""
+    pool = pg.get_pool()
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    active_products = (
+        await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
+    )
+    total_orders = 0
+    total_revenue = 0
+    try:
+        total_orders = await pool.fetchval("SELECT COUNT(*) FROM qnh_orders") or 0
+        total_revenue = float(
+            await pool.fetchval("SELECT COALESCE(SUM(total_amount), 0) FROM qnh_orders") or 0
+        )
+    except Exception:
+        pass
+    return APIResponse(
+        data={
+            "total_products": total_products,
+            "active_products": active_products,
+            "total_orders": total_orders,
+            "total_revenue": total_revenue,
+        }
+    )
 
 
 @router.get("/customer-service", response_model=APIResponse[dict])

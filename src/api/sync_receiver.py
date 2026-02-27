@@ -172,7 +172,8 @@ async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
             if not status:
                 status = "在售" if p.get("onlineStatus") == 1 else "停售"
 
-            sku_id = str(p.get("skuId", p.get("sku_id", "")))
+            raw_sku = p.get("skuId") or p.get("sku_id") or ""
+            sku_id = str(raw_sku) if raw_sku else ""
 
             await conn.execute(
                 """

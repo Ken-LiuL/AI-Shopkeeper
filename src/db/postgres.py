@@ -41,16 +41,14 @@ async def init_pool() -> asyncpg.Pool:
         ssl_param = ssl_ctx
     _pool = await asyncpg.create_pool(
         dsn=dsn,
-        min_size=cfg.get("min_connections", 2),
-        max_size=cfg.get("max_connections", 5),
+        min_size=1,
+        max_size=10,
         timeout=10,
+        command_timeout=30,
+        max_inactive_connection_lifetime=300,
         **({"ssl": ssl_param} if ssl_param else {}),
     )
-    logger.info(
-        "PostgreSQL pool initialised (min=%s, max=%s)",
-        cfg.get("min_connections", 5),
-        cfg.get("max_connections", 20),
-    )
+    logger.info("PostgreSQL pool initialised (min=1, max=10)")
     return _pool
 
 

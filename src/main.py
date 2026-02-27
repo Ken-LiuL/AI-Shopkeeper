@@ -587,7 +587,6 @@ app.include_router(competitors_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
 app.include_router(analytics_router)
-app.include_router(sync_receiver_router)
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)
