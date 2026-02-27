@@ -48,12 +48,13 @@ async def list_products(
 
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM products{where}", *params)
+    # Read from qnh_products (synced from QNH platform)
+    total = await pool.fetchval(f"SELECT COUNT(*) FROM qnh_products{where}", *params)
 
     offset = (page - 1) * page_size
     params_page = params + [page_size, offset]
     rows = await pool.fetch(
-        f"SELECT * FROM products{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        f"SELECT *, spu_id AS product_id, synced_at AS created_at, synced_at AS updated_at FROM qnh_products{where} ORDER BY synced_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
         *params_page,
     )
     return PaginatedResponse(
@@ -200,7 +201,7 @@ async def list_categories() -> APIResponse[list[dict]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT category, COUNT(*)::int AS product_count
-           FROM products WHERE status != 'delisted' AND category IS NOT NULL
+           FROM qnh_products WHERE category IS NOT NULL
            GROUP BY category ORDER BY product_count DESC"""
     )
     return APIResponse(data=[dict(r) for r in rows])

@@ -16,9 +16,7 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-    total_products = (
-        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
-    )
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
     today_orders = (
         await pool.fetchval("SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE")
         or 0
