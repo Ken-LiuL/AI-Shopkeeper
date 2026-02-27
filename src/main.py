@@ -105,21 +105,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
-    # Auto-rebuild Chroma if empty but products exist in DB
-    try:
-        from src.db.chroma import get_collection as _get_chroma_col
-
-        _col = _get_chroma_col()
-        if _col.count() == 0:
-            pool = pg_db.get_pool()
-            prod_count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
-            if prod_count > 0:
-                logger.info("Chroma empty but %d products in DB, rebuilding…", prod_count)
-                await _build_vector_index(pool)
-        else:
-            logger.info("Chroma has %d items ✓", _col.count())
-    except Exception:
-        logger.warning("Chroma auto-rebuild check failed", exc_info=True)
+    # Vector search disabled — using SQL fulltext instead (Chroma OOM on Fly free tier)
 
     # Init and register skills for customer service agent
     try:
@@ -298,8 +284,7 @@ async def _initial_full_sync(pool: Any) -> None:
                 except Exception as e:
                     logger.error("Initial sync %s failed: %s", syncer.name, e)
 
-        # Build vector index after sync
-        await _build_vector_index(pool)
+        # Vector index disabled (Chroma OOM on Fly free tier, using SQL fulltext)
         logger.info("Initial full sync complete ✓")
 
     except Exception as e:

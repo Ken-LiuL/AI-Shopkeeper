@@ -85,18 +85,15 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
         stats["source_with_images"] = 0
 
     try:
-        from src.db.chroma import get_collection
-
-        collection = get_collection()
-        chroma_count = collection.count()
-        stats["knowledge_total"] = chroma_count
-        stats["with_embedding"] = chroma_count
+        stats["knowledge_total"] = stats.get("source_products", 0)
+        stats["with_embedding"] = 0
+        stats["search_mode"] = "sql_fulltext"
 
         with_image_text = 0
-        if chroma_count > 0:
-            all_meta = collection.get(include=["metadatas"])
+        if False:  # Chroma disabled
+            all_meta = {}  # type: ignore[assignment]
             with_image_text = sum(
-                1 for m in (all_meta["metadatas"] or []) if m.get("image_text", "").strip()
+                1 for m in (all_meta.get("metadatas") or []) if m.get("image_text", "").strip()
             )
         stats["with_image_text"] = with_image_text
     except Exception:

@@ -141,17 +141,18 @@ class KnowledgeBuildRequest(BaseModel):
 
 @router.post("/knowledge/search", response_model=APIResponse[list[dict]])
 async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[list[dict]]:
-    """语义搜索商品知识库（向量 + 全文混合检索）。"""
-    from src.agents.customer_service.skills_registry import get_product_knowledge
-
-    pk = get_product_knowledge()
-    if not pk:
-        return APIResponse(
-            success=False, data=[], message="Product knowledge skill not initialized"
-        )
-
-    results = await pk.search_product(query=body.query, limit=body.limit, hybrid=body.hybrid)
-    return APIResponse(data=results)
+    """商品搜索（SQL 全文匹配，轻量级替代向量搜索）。"""
+    pool = pg.get_pool()
+    query = f"%{body.query}%"
+    rows = await pool.fetch(
+        """SELECT spu_id, name, brand, category, spec, retail_price, status
+           FROM qnh_products
+           WHERE name ILIKE $1 OR brand ILIKE $1 OR spec ILIKE $1 OR category ILIKE $1
+           LIMIT $2""",
+        query,
+        body.limit,
+    )
+    return APIResponse(data=[dict(r) for r in rows])
 
 
 @router.post("/knowledge/build", response_model=APIResponse[dict])
@@ -176,31 +177,17 @@ async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> 
 
 @router.get("/knowledge/stats", response_model=APIResponse[dict])
 async def knowledge_stats() -> APIResponse[dict]:
-    """商品知识库统计信息（Chroma 向量库）。"""
-    from src.db.chroma import get_collection
-
+    """商品知识库统计信息。"""
     pool = pg.get_pool()
-    collection = get_collection()
-    chroma_count = collection.count()
-
-    # Count items with image_text in Chroma metadata
-    with_image_text = 0
-    if chroma_count > 0:
-        try:
-            all_meta = collection.get(include=["metadatas"])
-            with_image_text = sum(
-                1 for m in (all_meta["metadatas"] or []) if m.get("image_text", "").strip()
-            )
-        except Exception:
-            pass
-
     source_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+    with_category = await pool.fetchval(
+        "SELECT COUNT(*) FROM qnh_products WHERE category IS NOT NULL AND category != ''"
+    )
     return APIResponse(
         data={
-            "knowledge_total": chroma_count,
-            "with_embedding": chroma_count,  # all Chroma entries have embeddings
-            "with_image_text": with_image_text,
             "source_products": source_products,
+            "with_category": with_category,
+            "search_mode": "sql_fulltext",
         }
     )
 
