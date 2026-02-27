@@ -24,6 +24,7 @@ dependencies = [
     "nodriver>=0.40.0",
     "apscheduler>=3.10.0",
     "numpy>=1.26.0",
+    "chromadb>=0.4.0",
 ]
 
 [project.optional-dependencies]

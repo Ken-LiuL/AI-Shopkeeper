@@ -105,6 +105,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
+    # Auto-rebuild Chroma if empty but products exist in DB
+    try:
+        from src.db.chroma import get_collection as _get_chroma_col
+
+        _col = _get_chroma_col()
+        if _col.count() == 0:
+            pool = pg_db.get_pool()
+            prod_count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+            if prod_count > 0:
+                logger.info("Chroma empty but %d products in DB, rebuilding…", prod_count)
+                await _build_vector_index(pool)
+        else:
+            logger.info("Chroma has %d items ✓", _col.count())
+    except Exception:
+        logger.warning("Chroma auto-rebuild check failed", exc_info=True)
+
     # Init and register skills for customer service agent
     try:
         from src.agents.customer_service.skills_registry import register_skills
@@ -291,83 +307,83 @@ async def _initial_full_sync(pool: Any) -> None:
 
 
 async def _build_vector_index(pool: Any) -> None:
-    """Build pgvector embeddings for all products in kg_products."""
+    """Build Chroma vector index for all products from qnh_products."""
     try:
+        from src.db.chroma import get_collection
         from src.skills.embedding import EmbeddingSkill
+
+        collection = get_collection()
+        # Skip if already populated
+        if collection.count() > 0:
+            logger.info("Chroma already has %d items, skipping rebuild", collection.count())
+            return
 
         embedding_skill = EmbeddingSkill()
 
-        # Read all products from qnh_products
         rows = await pool.fetch("SELECT spu_id, name, category, brand, spec FROM qnh_products")
         if not rows:
             logger.info("No products to embed")
             return
 
-        logger.info("Building vector index for %d products…", len(rows))
+        logger.info("Building Chroma vector index for %d products…", len(rows))
 
-        batch_texts = []
-        batch_rows = []
-
-        for row in rows:
-            text = " ".join(
-                filter(
-                    None,
-                    [
-                        row["name"] or "",
-                        row.get("category") or "",
-                        row.get("brand") or "",
-                        row.get("spec") or "",
-                    ],
-                )
-            )
-            batch_texts.append(text)
-            batch_rows.append(row)
-
-        # Embed in batches
         batch_size = 32
-        for i in range(0, len(batch_texts), batch_size):
-            chunk_texts = batch_texts[i : i + batch_size]
-            chunk_rows = batch_rows[i : i + batch_size]
-            embeddings = embedding_skill.embed_batch(chunk_texts, batch_size=batch_size)
+        for i in range(0, len(rows), batch_size):
+            chunk = rows[i : i + batch_size]
+            texts = []
+            ids = []
+            metadatas = []
 
-            for row, emb in zip(chunk_rows, embeddings, strict=False):
-                emb_str = "[" + ",".join(str(x) for x in emb) + "]"
-                await pool.execute(
-                    """
-                    INSERT INTO kg_products (product_id, name, description, embedding, updated_at)
-                    VALUES ($1, $2, $3, $4::vector, now())
-                    ON CONFLICT (product_id) DO UPDATE SET
-                        name = EXCLUDED.name,
-                        description = EXCLUDED.description,
-                        embedding = EXCLUDED.embedding,
-                        updated_at = now()
-                    """,
-                    row["spu_id"],
-                    row["name"] or "",
-                    " ".join(
-                        filter(
-                            None,
-                            [
-                                row.get("category") or "",
-                                row.get("brand") or "",
-                                row.get("spec") or "",
-                            ],
-                        )
-                    ),
-                    emb_str,
+            for row in chunk:
+                text = " ".join(
+                    filter(
+                        None,
+                        [
+                            row["name"] or "",
+                            row.get("category") or "",
+                            row.get("brand") or "",
+                            row.get("spec") or "",
+                        ],
+                    )
                 )
+                texts.append(text)
+                ids.append(f"{row['spu_id']}_")
+                metadatas.append(
+                    {
+                        "spu_id": row["spu_id"],
+                        "sku_id": "",
+                        "name": row["name"] or "",
+                        "category": row.get("category") or "",
+                        "brand": row.get("brand") or "",
+                        "spec": row.get("spec") or "",
+                        "description": "",
+                        "image_text": "",
+                        "image_urls": "[]",
+                        "price": 0.0,
+                        "status": "",
+                    }
+                )
+
+            embeddings = embedding_skill.embed_batch(texts, batch_size=batch_size)
+
+            collection.upsert(
+                ids=ids,
+                embeddings=embeddings,
+                metadatas=metadatas,
+                documents=texts,
+            )
 
             logger.info(
-                "Embedded products %d–%d / %d",
+                "Chroma: embedded %d–%d / %d",
                 i + 1,
-                min(i + batch_size, len(batch_texts)),
-                len(batch_texts),
+                min(i + batch_size, len(rows)),
+                len(rows),
             )
 
-        logger.info("Vector index built for %d products ✓", len(rows))
+        logger.info("Chroma vector index built for %d products ✓", len(rows))
 
     except Exception as e:
-        logger.error("Failed to build vector index: %s", e, exc_info=True)
+        logger.error("Failed to build Chroma vector index: %s", e, exc_info=True)
 
 
 def _init_sync_scheduler() -> None:

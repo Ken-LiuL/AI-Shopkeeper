@@ -46,92 +46,65 @@ class ProductKnowledgeSkill:
         limit: int = 5,
         hybrid: bool = True,
     ) -> list[dict[str, Any]]:
-        """搜索商品知识库，返回最相关的商品信息。
+        """搜索商品知识库（Chroma 向量检索）。
 
         Args:
             query: 用户查询文本
             limit: 返回数量
-            hybrid: 是否使用向量+全文混合检索
+            hybrid: ignored (kept for API compat)
 
         Returns:
             [{"spu_id", "name", "category", "brand", "spec",
               "description", "image_text", "price", "score"}, ...]
         """
-        if not self._pool:
+        from src.db.chroma import get_collection
+
+        collection = get_collection()
+        if collection.count() == 0:
             return []
 
-        # Generate query embedding
         query_emb = self._embedding.embed(f"查询: {query}")
-        emb_str = "[" + ",".join(str(x) for x in query_emb) + "]"
 
-        if hybrid:
-            # Hybrid: vector similarity + full-text search, RRF fusion
-            rows = await self._pool.fetch(
-                """
-                WITH vector_results AS (
-                    SELECT id, spu_id, name, category, brand, spec, description,
-                           image_text, price, status, image_urls,
-                           1 - (embedding <=> $1::vector) AS vec_score,
-                           ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS vec_rank
-                    FROM product_knowledge
-                    WHERE embedding IS NOT NULL
-                    ORDER BY embedding <=> $1::vector
-                    LIMIT $2 * 3
-                ),
-                fts_results AS (
-                    SELECT id,
-                           ts_rank(fts, plainto_tsquery('simple', $3)) AS fts_score,
-                           ROW_NUMBER() OVER (
-                               ORDER BY ts_rank(fts, plainto_tsquery('simple', $3)) DESC
-                           ) AS fts_rank
-                    FROM product_knowledge
-                    WHERE fts @@ plainto_tsquery('simple', $3)
-                    LIMIT $2 * 3
+        results = collection.query(
+            query_embeddings=[query_emb],
+            n_results=min(limit, collection.count()),
+            include=["metadatas", "distances"],
+        )
+
+        items = []
+        if results and results["ids"] and results["ids"][0]:
+            for i, doc_id in enumerate(results["ids"][0]):
+                meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                distance = results["distances"][0][i] if results["distances"] else 1.0
+                score = 1.0 - distance  # cosine distance → similarity
+
+                # Parse image_urls from JSON string
+                image_urls_raw = meta.get("image_urls", "[]")
+                try:
+                    image_urls = (
+                        json.loads(image_urls_raw)
+                        if isinstance(image_urls_raw, str)
+                        else image_urls_raw
+                    )
+                except Exception:
+                    image_urls = []
+
+                items.append(
+                    {
+                        "spu_id": meta.get("spu_id", doc_id),
+                        "name": meta.get("name", ""),
+                        "category": meta.get("category", ""),
+                        "brand": meta.get("brand", ""),
+                        "spec": meta.get("spec", ""),
+                        "description": meta.get("description", ""),
+                        "image_text": meta.get("image_text", ""),
+                        "price": float(meta["price"]) if meta.get("price") else None,
+                        "status": meta.get("status", ""),
+                        "image_urls": image_urls,
+                        "score": round(score, 4),
+                    }
                 )
-                SELECT v.*, COALESCE(f.fts_score, 0) AS fts_score,
-                       -- RRF fusion score
-                       (1.0 / (60 + v.vec_rank)) +
-                       (1.0 / (60 + COALESCE(f.fts_rank, 1000))) AS rrf_score
-                FROM vector_results v
-                LEFT JOIN fts_results f ON v.id = f.id
-                ORDER BY rrf_score DESC
-                LIMIT $2
-                """,
-                emb_str,
-                limit,
-                query,
-            )
-        else:
-            rows = await self._pool.fetch(
-                """
-                SELECT spu_id, name, category, brand, spec, description,
-                       image_text, price, status, image_urls,
-                       1 - (embedding <=> $1::vector) AS vec_score
-                FROM product_knowledge
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> $1::vector
-                LIMIT $2
-                """,
-                emb_str,
-                limit,
-            )
-
-        return [
-            {
-                "spu_id": r["spu_id"],
-                "name": r["name"],
-                "category": r.get("category", ""),
-                "brand": r.get("brand", ""),
-                "spec": r.get("spec", ""),
-                "description": r.get("description", ""),
-                "image_text": r.get("image_text", ""),
-                "price": float(r["price"]) if r.get("price") else None,
-                "status": r.get("status", ""),
-                "image_urls": r.get("image_urls", []),
-                "score": float(r.get("rrf_score", r.get("vec_score", 0))),
-            }
-            for r in rows
-        ]
+        return items
 
     # ── Build Pipeline ──────────────────────────────────────────────────
 
@@ -225,49 +198,36 @@ class ProductKnowledgeSkill:
                 errors += len(batch)
                 continue
 
-            # Upsert to product_knowledge
+            # Upsert to Chroma
+            from src.db.chroma import get_collection
+
+            collection = get_collection()
             for rec, emb in zip(records, embeddings, strict=True):
                 try:
-                    emb_str = "[" + ",".join(str(x) for x in emb) + "]"
-                    await self._pool.execute(
-                        """
-                        INSERT INTO product_knowledge
-                            (spu_id, sku_id, name, category, brand, spec,
-                             description, image_text, combined_text, embedding,
-                             image_urls, price, status, updated_at)
-                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                                $10::vector, $11, $12, $13, now())
-                        ON CONFLICT (spu_id, sku_id) DO UPDATE SET
-                            name = EXCLUDED.name,
-                            category = EXCLUDED.category,
-                            brand = EXCLUDED.brand,
-                            spec = EXCLUDED.spec,
-                            description = EXCLUDED.description,
-                            image_text = EXCLUDED.image_text,
-                            combined_text = EXCLUDED.combined_text,
-                            embedding = EXCLUDED.embedding,
-                            image_urls = EXCLUDED.image_urls,
-                            price = EXCLUDED.price,
-                            status = EXCLUDED.status,
-                            updated_at = now()
-                        """,
-                        rec["spu_id"],
-                        rec["sku_id"],
-                        rec["name"],
-                        rec["category"],
-                        rec["brand"],
-                        rec["spec"],
-                        rec["description"],
-                        rec["image_text"],
-                        rec["combined_text"],
-                        emb_str,
-                        rec["image_urls"],
-                        rec["price"],
-                        rec["status"],
+                    doc_id = f"{rec['spu_id']}_{rec['sku_id']}"
+                    # Chroma metadata values must be str/int/float/bool
+                    meta = {
+                        "spu_id": rec["spu_id"],
+                        "sku_id": rec["sku_id"],
+                        "name": rec["name"],
+                        "category": rec["category"],
+                        "brand": rec["brand"],
+                        "spec": rec["spec"],
+                        "description": rec["description"][:1000] if rec["description"] else "",
+                        "image_text": rec["image_text"][:1000] if rec["image_text"] else "",
+                        "image_urls": json.dumps(rec["image_urls"]),
+                        "price": float(rec["price"]) if rec["price"] else 0.0,
+                        "status": rec["status"],
+                    }
+                    collection.upsert(
+                        ids=[doc_id],
+                        embeddings=[emb],
+                        metadatas=[meta],
+                        documents=[rec["combined_text"]],
                     )
                     updated += 1
                 except Exception as e:
-                    logger.error(f"Upsert failed for {rec['spu_id']}: {e}")
+                    logger.error(f"Chroma upsert failed for {rec['spu_id']}: {e}")
                     errors += 1
 
             logger.info(f"Knowledge base: {i + len(batch)}/{total} processed")

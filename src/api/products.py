@@ -176,20 +176,29 @@ async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> 
 
 @router.get("/knowledge/stats", response_model=APIResponse[dict])
 async def knowledge_stats() -> APIResponse[dict]:
-    """商品知识库统计信息。"""
+    """商品知识库统计信息（Chroma 向量库）。"""
+    from src.db.chroma import get_collection
+
     pool = pg.get_pool()
-    total = await pool.fetchval("SELECT COUNT(*) FROM product_knowledge")
-    with_embedding = await pool.fetchval(
-        "SELECT COUNT(*) FROM product_knowledge WHERE embedding IS NOT NULL"
-    )
-    with_image_text = await pool.fetchval(
-        "SELECT COUNT(*) FROM product_knowledge WHERE image_text != '' AND image_text IS NOT NULL"
-    )
+    collection = get_collection()
+    chroma_count = collection.count()
+
+    # Count items with image_text in Chroma metadata
+    with_image_text = 0
+    if chroma_count > 0:
+        try:
+            all_meta = collection.get(include=["metadatas"])
+            with_image_text = sum(
+                1 for m in (all_meta["metadatas"] or []) if m.get("image_text", "").strip()
+            )
+        except Exception:
+            pass
+
     source_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
     return APIResponse(
         data={
-            "knowledge_total": total,
-            "with_embedding": with_embedding,
+            "knowledge_total": chroma_count,
+            "with_embedding": chroma_count,  # all Chroma entries have embeddings
             "with_image_text": with_image_text,
             "source_products": source_products,
         }

@@ -85,13 +85,20 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
         stats["source_with_images"] = 0
 
     try:
-        stats["knowledge_total"] = await pool.fetchval("SELECT COUNT(*) FROM product_knowledge")
-        stats["with_embedding"] = await pool.fetchval(
-            "SELECT COUNT(*) FROM product_knowledge WHERE embedding IS NOT NULL"
-        )
-        stats["with_image_text"] = await pool.fetchval(
-            "SELECT COUNT(*) FROM product_knowledge WHERE image_text != '' AND image_text IS NOT NULL"
-        )
+        from src.db.chroma import get_collection
+
+        collection = get_collection()
+        chroma_count = collection.count()
+        stats["knowledge_total"] = chroma_count
+        stats["with_embedding"] = chroma_count
+
+        with_image_text = 0
+        if chroma_count > 0:
+            all_meta = collection.get(include=["metadatas"])
+            with_image_text = sum(
+                1 for m in (all_meta["metadatas"] or []) if m.get("image_text", "").strip()
+            )
+        stats["with_image_text"] = with_image_text
     except Exception:
         stats["knowledge_total"] = 0
         stats["with_embedding"] = 0
