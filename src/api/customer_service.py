@@ -96,9 +96,12 @@ async def create_session(
 @router.post("/chat", response_model=APIResponse[ChatResponse])
 async def chat(
     request: ChatRequest,
-    orch: Orchestrator = Depends(get_orchestrator),
 ) -> APIResponse[ChatResponse]:
+    from src.agents.customer_service.nodes import chat as cs_chat
+    from src.db import postgres as pg_db
+    
     sm = _get_session_manager()
+    pool = pg_db.get_pool()
 
     # Determine history source: Redis or in-memory fallback
     if sm is not None and await sm.session_exists(request.session_id):
@@ -113,21 +116,18 @@ async def chat(
         _mem_add(request.session_id, "user", request.message)
 
     try:
-        # Run agent
-        result = await orch.run_customer_service(
-            user_message=request.message,
-            conversation_history=history,
+        # Call new simplified chat function
+        result = await cs_chat(
             session_id=request.session_id,
+            message=request.message,
+            pool=pool,
+            conversation_history=history,
         )
 
-        # Extract reply
-        reply_data = result.get("reply", {})
-        reply = (
-            reply_data.get("reply_text", "") if isinstance(reply_data, dict) else str(reply_data)
-        )
-        intent_data = result.get("intent", {})
-        intent = intent_data.get("intent") if isinstance(intent_data, dict) else None
-        sources = result.get("enriched_results", result.get("sources", []))
+        reply = result.get("reply", "")
+        intent = result.get("intent")
+        sources = result.get("sources", [])
+        needs_human = result.get("needs_human", False)
 
         # Store assistant message
         if use_redis:
@@ -141,6 +141,7 @@ async def chat(
                 reply=reply,
                 intent=intent,
                 sources=sources,
+                needs_human=needs_human,  # 添加新字段
             )
         )
     finally:
