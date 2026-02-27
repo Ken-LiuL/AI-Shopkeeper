@@ -1,10 +1,11 @@
 """CustomerService Agent 各节点实现
 
 融合数据:
-  - IM历史 (qnh_im_sessions/messages) — 检索类似问题作为few-shot examples
+  - 客服知识库 (knowledge_base) — 检索标准回答和专业指导
   - 客户画像 (qnh_customers) — 高价值客户优先处理、语气更重视
   - 待处理订单 (qnh_orders_raw) — 客服回复时带上订单状态上下文
   - 热销商品 (qnh_products_raw) — 客服推荐时有数据支撑
+  - 对话日志 (cs_conversation_log) — 记录所有对话用于分析优化
 """
 
 from __future__ import annotations
@@ -27,34 +28,111 @@ from .state import CustomerServiceState
 logger = logging.getLogger(__name__)
 
 
-async def _search_im_history(pool, query: str, limit: int = 3) -> list[dict]:
-    """从IM历史中检索类似问题的对话。
+async def _search_knowledge_base(
+    pool, query: str, intent: str = None, limit: int = 3
+) -> list[dict]:
+    """从客服知识库中检索相关知识。
 
-    TODO: 接入向量检索(pgvector)实现语义匹配。当前用关键词模糊匹配。
+    基于意图分类 + 关键词匹配，优先级排序。
     """
     if not pool:
         return []
     try:
-        rows = await pool.fetch(
-            """
-            SELECT s.session_id, s.customer_name,
-                   array_agg(json_build_object('role', m.role, 'content', m.content)
-                             ORDER BY m.msg_time) as messages
-            FROM qnh_im_sessions s
-            JOIN qnh_im_messages m ON s.session_id = m.session_id
-            WHERE m.content ILIKE '%' || $1 || '%'
-              AND m.role = 'customer'
-            GROUP BY s.session_id, s.customer_name
-            ORDER BY s.started_at DESC
-            LIMIT $2
-            """,
-            query[:20],  # 取查询前20字符做模糊匹配
-            limit,
+        # 构建查询词列表
+        query_words = [w.lower().strip() for w in query.split() if len(w.strip()) > 1]
+
+        # 根据意图推荐对应类别
+        intent_category_map = {
+            "product_inquiry": ["faq", "usage_guide"],
+            "after_sales": ["policy"],
+            "complaint": ["compliance", "policy"],
+            "usage_question": ["usage_guide", "compliance"],
+            "logistics": ["faq", "policy"],
+            "greeting": ["faq"],
+        }
+        preferred_categories = intent_category_map.get(intent, [])
+
+        # 构建 SQL 查询
+        if preferred_categories:
+            category_condition = "AND category = ANY($2)"
+            params = [query_words, preferred_categories, limit]
+        else:
+            category_condition = ""
+            params = [query_words, limit]
+
+        sql = f"""
+            SELECT id, category, subcategory, question, answer, keywords,
+                   priority, product_categories,
+                   -- 关键词匹配分数
+                   (
+                       CASE WHEN keywords && $1 THEN 2 ELSE 0 END +
+                       CASE WHEN question ILIKE '%' || array_to_string($1, '%') || '%' THEN 1 ELSE 0 END +
+                       CASE WHEN answer ILIKE '%' || array_to_string($1, '%') || '%' THEN 0.5 ELSE 0 END +
+                       priority * 0.1
+                   ) as relevance_score
+            FROM knowledge_base
+            WHERE (
+                keywords && $1 OR
+                question ILIKE '%' || array_to_string($1, '%') || '%' OR
+                answer ILIKE '%' || array_to_string($1, '%') || '%'
+            )
+            {category_condition}
+            ORDER BY relevance_score DESC, priority DESC, id
+            LIMIT ${len(params)}
+        """
+
+        rows = await pool.fetch(sql, *params)
+
+        results = []
+        for r in rows:
+            result = dict(r)
+            # 只返回相关性分数 > 0 的结果
+            if result.get("relevance_score", 0) > 0:
+                results.append(result)
+
+        logger.info(
+            f"Knowledge base search returned {len(results)} results for query: {query[:50]}"
         )
-        return [dict(r) for r in rows]
+        return results
+
     except Exception as e:
-        logger.warning(f"IM history search failed: {e}")
+        logger.warning(f"Knowledge base search failed: {e}")
         return []
+
+
+async def _log_conversation(
+    pool,
+    session_id: str = None,
+    user_message: str = "",
+    intent: str = "",
+    ai_response: str = "",
+    matched_kb_ids: list[int] = None,
+    matched_product_ids: list[str] = None,
+    confidence: float = 0.0,
+) -> None:
+    """记录对话日志，用于后续分析和训练。"""
+    if not pool:
+        return
+
+    try:
+        await pool.execute(
+            """
+            INSERT INTO cs_conversation_log (
+                session_id, user_message, intent, ai_response,
+                matched_kb_ids, matched_product_ids, confidence, created_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+            """,
+            session_id,
+            user_message[:1000],  # 限制长度避免数据库问题
+            intent,
+            ai_response[:2000],
+            matched_kb_ids or [],
+            matched_product_ids or [],
+            confidence,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to log conversation: {e}")
+        # 不中断正常流程
 
 
 async def _get_customer_profile(pool, phone_tail: str | None = None) -> dict | None:
@@ -323,8 +401,9 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
     """Reply Sub-Agent: 生成回复（使用 Sonnet）
 
     融合:
-      - IM历史中类似问题作为 few-shot examples
+      - 知识库中的标准回答作为参考
       - 客户画像：高价值客户语气更重视
+      - 自动记录对话日志用于后续分析
     """
     # 如果有 FAQ 回复，直接返回
     faq = state.get("faq_reply")
@@ -344,13 +423,19 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
         pool = state.get("db_pool")
         user_message = state["user_message"]
 
-        # 检索IM历史中的类似问题
-        im_examples = await _search_im_history(pool, user_message)
-        im_context = ""
-        if im_examples:
-            im_context = "\n\n# 历史类似对话（参考回答风格和内容）:\n" + json.dumps(
-                im_examples, ensure_ascii=False, default=str
-            )
+        # 检索知识库中的相关知识
+        intent_name = state.get("intent", {}).get("intent", "")
+        kb_results = await _search_knowledge_base(pool, user_message, intent_name)
+        kb_context = ""
+        if kb_results:
+            # 格式化知识库结果为上下文
+            kb_items = []
+            for kb in kb_results[:3]:  # 取前3个最相关的
+                if kb.get("question"):
+                    kb_items.append(f"Q: {kb['question']}\nA: {kb['answer']}")
+                else:
+                    kb_items.append(f"知识: {kb['answer']}")
+            kb_context = "\n\n# 知识库参考（客服标准回答）:\n" + "\n---\n".join(kb_items)
 
         # 新增: 获取待处理订单上下文（来自 qnh_orders_raw）
         orders_data = await fetch_latest_raw(pool, "qnh_orders_raw")
@@ -394,7 +479,7 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
 
         prompt = reply_prompt(
             user_message=user_message
-            + im_context
+            + kb_context
             + customer_context
             + order_context
             + hotsale_context,
@@ -406,6 +491,18 @@ async def reply_generation_node(state: CustomerServiceState) -> dict:
         # 高价值客户标记需要人工审核以确保服务质量
         if customer and float(customer.get("total_amount", 0)) >= 2000:
             result["vip_customer"] = True
+
+        # 记录对话日志
+        await _log_conversation(
+            pool=pool,
+            session_id=state.get("session_id"),
+            user_message=user_message,
+            intent=intent_name,
+            ai_response=result.get("reply_text", ""),
+            matched_kb_ids=[kb.get("id") for kb in kb_results if kb.get("id")],
+            matched_product_ids=[p.get("id") for p in enriched if p.get("id")],
+            confidence=result.get("confidence", 0.0),
+        )
 
         return {"reply": result}
     except Exception as e:
