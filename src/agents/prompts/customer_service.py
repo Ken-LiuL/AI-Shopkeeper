@@ -125,10 +125,10 @@ def _format_conversation_strategies(sk: dict) -> str:
 
 def _select_few_shot(user_message: str, sk: dict) -> str:
     """根据用户消息动态选择最相关的 few-shot 示例（优先使用自动进化的动态示例）"""
-    
+
     # 1. 优先加载动态few-shot示例（自动进化系统生成）
     dynamic_few_shots = _load_dynamic_few_shots()
-    
+
     # 2. 如果没有动态示例，使用结构化知识库中的示例
     if not dynamic_few_shots:
         few_shots = sk.get("dynamic_few_shot", {})
@@ -140,13 +140,13 @@ def _select_few_shot(user_message: str, sk: dict) -> str:
     # 3. 关键词 → 类别映射（统一的分类策略）
     category_keywords = {
         "after_sales": ["退", "换", "坏", "不好", "质量", "差", "退款", "赔", "损坏", "不满"],
-        "medical_safety": ["血压", "血糖", "吃药", "治疗", "症状", "病", "疼", "痛"], 
+        "medical_safety": ["血压", "血糖", "吃药", "治疗", "症状", "病", "疼", "痛"],
         "logistics": ["送", "到", "配送", "多久", "发货", "等"],
         "product_inquiry": ["推荐", "哪个好", "买", "有没有", "多少钱", "怎么选"],
         "usage_guidance": ["怎么用", "使用方法", "用法", "操作"],
         "recommendation": ["推荐", "哪款", "选择", "比较"],
         "complaint_handling": ["投诉", "不满意", "态度", "服务"],
-        "greeting": ["你好", "在吗", "hello", "hi"]
+        "greeting": ["你好", "在吗", "hello", "hi"],
     }
 
     # 4. 匹配最相关的类别
@@ -160,19 +160,18 @@ def _select_few_shot(user_message: str, sk: dict) -> str:
     # 5. 选择匹配的示例
     selected = []
     used_categories = set()
-    
+
     # 优先选择匹配度高的类别
     for category, _ in matched_categories[:2]:
         if category in few_shots:
             examples = few_shots[category][:1]  # 每类取最高分的1个
             for example in examples:
                 # 动态few-shots的格式适配
-                if 'user_message' in example and 'ai_response' in example:
-                    selected.append({
-                        'user': example['user_message'],
-                        'assistant': example['ai_response']
-                    })
-                elif 'user' in example and 'assistant' in example:
+                if "user_message" in example and "ai_response" in example:
+                    selected.append(
+                        {"user": example["user_message"], "assistant": example["ai_response"]}
+                    )
+                elif "user" in example and "assistant" in example:
                     selected.append(example)
                 used_categories.add(category)
 
@@ -182,12 +181,11 @@ def _select_few_shot(user_message: str, sk: dict) -> str:
             break
         if category not in used_categories and examples:
             example = examples[0]  # 取该类别最高分示例
-            if 'user_message' in example and 'ai_response' in example:
-                selected.append({
-                    'user': example['user_message'],
-                    'assistant': example['ai_response']
-                })
-            elif 'user' in example and 'assistant' in example:
+            if "user_message" in example and "ai_response" in example:
+                selected.append(
+                    {"user": example["user_message"], "assistant": example["ai_response"]}
+                )
+            elif "user" in example and "assistant" in example:
                 selected.append(example)
 
     if not selected:
@@ -196,10 +194,10 @@ def _select_few_shot(user_message: str, sk: dict) -> str:
     # 7. 格式化输出
     lines = []
     for ex in selected:
-        user_msg = ex.get('user', '')[:100]  # 限制长度
-        assistant_reply = ex.get('assistant', '')[:200]
+        user_msg = ex.get("user", "")[:100]  # 限制长度
+        assistant_reply = ex.get("assistant", "")[:200]
         lines.append(f"用户：{user_msg}\n客服：{assistant_reply}\n")
-    
+
     return "\n".join(lines)
 
 
@@ -245,9 +243,9 @@ def build_system_prompt(knowledge_base: list[dict], after_sales_scripts: dict | 
     if knowledge_patches:
         kb_content += "\n### 🔄 自动补充知识（基于对话学习）\n"
         for patch in knowledge_patches[-10:]:  # 只显示最近10个补丁
-            category = patch.get('category', '其他')
-            content = patch.get('knowledge_content', '')
-            question_pattern = patch.get('question_pattern', '')
+            category = patch.get("category", "其他")
+            content = patch.get("knowledge_content", "")
+            question_pattern = patch.get("question_pattern", "")
             if content:
                 kb_content += f"- **{category}**: {question_pattern} → {content}\n"
 

@@ -1,4 +1,6 @@
 function getBaseUrl(): string {
+  // In production (Vercel), use the rewrite rules by using empty base URL
+  // In development, use the direct API URL
   if (typeof window !== 'undefined') {
     const stored = localStorage.getItem('app-settings');
     if (stored) {
@@ -8,6 +10,12 @@ function getBaseUrl(): string {
       } catch {}
     }
   }
+
+  // Use relative URLs in production to leverage Vercel rewrites
+  if (process.env.NODE_ENV === 'production') {
+    return '';
+  }
+
   return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 }
 

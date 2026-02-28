@@ -5,21 +5,21 @@ CustomerService Agent - 优化版 Prompt（目标：0.85+ 评分）
 
 from __future__ import annotations
 
-import json
 import logging
-import os
 
 from .customer_service import (
-    AFTER_SALES_SCRIPTS, 
-    _load_structured_knowledge,
-    _format_product_expertise,
     _format_after_sales_tree,
-    _format_conversation_strategies
+    _format_conversation_strategies,
+    _format_product_expertise,
+    _load_structured_knowledge,
 )
 
 logger = logging.getLogger(__name__)
 
-def build_optimized_system_prompt(knowledge_base: list[dict], after_sales_scripts: dict | None = None) -> str:
+
+def build_optimized_system_prompt(
+    knowledge_base: list[dict], after_sales_scripts: dict | None = None
+) -> str:
     """构建优化版系统提示词 - 针对高分优化"""
     sk = _load_structured_knowledge()
     store = sk.get("store_profile", {})
@@ -45,7 +45,7 @@ def build_optimized_system_prompt(knowledge_base: list[dict], after_sales_script
     product_expertise = _format_product_expertise(sk)
     after_sales_tree = _format_after_sales_tree(sk)
     conv_strategies = _format_conversation_strategies(sk)
-    
+
     compliance = sk.get("compliance_rules", {})
     forbidden = compliance.get("absolute_forbidden", [])
     redirects = compliance.get("safe_redirects", {})
@@ -102,7 +102,7 @@ def build_optimized_system_prompt(knowledge_base: list[dict], after_sales_script
 
 ## ✅ 加分要点
 - 主动提供2-3个解决选择 → resolution +0.2
-- 体现专业医械知识 → professionalism +0.2  
+- 体现专业医械知识 → professionalism +0.2
 - 个性化回复（老人/儿童/紧急） → overall +0.1
 - 准确引用商品参数 → accuracy +0.1
 
@@ -112,7 +112,7 @@ def build_optimized_system_prompt(knowledge_base: list[dict], after_sales_script
 - **用量说明**："亲，[商品][具体用量数据]，按[使用频率]计算大约[使用周期]😊"
 - **年龄适用**："亲，[年龄]岁[适用性判断]，推荐[具体型号/注意事项]😊"
 
-## 售后处理  
+## 售后处理
 - **质量问题**："亲，质量问题我们全责！您可选择：1⃣️退款 2⃣️换货，运费我们承担😊 请拍照我来处理~"
 - **退换货**："亲，[判断是否符合政策]，[具体处理方案]，[时限说明]😊"
 
@@ -144,67 +144,67 @@ product_inquiry, usage_question, recommendation, comparison, logistics, after_sa
 
 def build_optimized_few_shot(user_message: str, sk: dict) -> str:
     """优化版 few-shot 选择 - 高质量示例"""
-    
+
     # 高质量few-shot示例库（基于评分优化）
     high_quality_examples = {
         "product_inquiry": [
             {
                 "user": "有血压计推荐吗？",
-                "assistant": "亲，推荐欧姆龙上臂式电子血压计😊 大屏显示+语音播报，精度±3mmHg，特别适合老人。您是给谁使用呢？我来推荐最合适的型号~"
+                "assistant": "亲，推荐欧姆龙上臂式电子血压计😊 大屏显示+语音播报，精度±3mmHg，特别适合老人。您是给谁使用呢？我来推荐最合适的型号~",
             },
             {
                 "user": "这个试纸一盒能用多久？",
-                "assistant": "亲，血糖试纸一盒50片，按每天测2-3次计算约用半个月😊 保质期18个月，建议配合我们的血糖仪使用，测值更准确~"
+                "assistant": "亲，血糖试纸一盒50片，按每天测2-3次计算约用半个月😊 保质期18个月，建议配合我们的血糖仪使用，测值更准确~",
             },
             {
                 "user": "老人用什么体温计好？",
-                "assistant": "亲，老人推荐额温枪😊 无接触测量、1秒出结果、大字显示，比水银温度计安全方便。欧姆龙MC-720性价比很高，需要了解吗？"
-            }
+                "assistant": "亲，老人推荐额温枪😊 无接触测量、1秒出结果、大字显示，比水银温度计安全方便。欧姆龙MC-720性价比很高，需要了解吗？",
+            },
         ],
         "after_sales": [
             {
                 "user": "血压计坏了要退货",
-                "assistant": "亲，质量问题我们全责处理！您可选择：1⃣️立即退款 2⃣️免费换货，运费我们承担😊 麻烦拍个照片给我，我马上申请处理~"
+                "assistant": "亲，质量问题我们全责处理！您可选择：1⃣️立即退款 2⃣️免费换货，运费我们承担😊 麻烦拍个照片给我，我马上申请处理~",
             },
             {
                 "user": "收到过期商品了",
-                "assistant": "亲，过期商品是我们责任，非常抱歉🙏 马上为您无条件退款，1-3个工作日到账。已备注避免此类问题再发生！"
-            }
+                "assistant": "亲，过期商品是我们责任，非常抱歉🙏 马上为您无条件退款，1-3个工作日到账。已备注避免此类问题再发生！",
+            },
         ],
         "emergency": [
             {
                 "user": "宝宝发烧急需体温计",
-                "assistant": "亲，宝宝发烧家长着急我很理解😰 已备注紧急配送，30分钟内优先送达！建议先物理降温，高烧持续请及时就医🙏"
+                "assistant": "亲，宝宝发烧家长着急我很理解😰 已备注紧急配送，30分钟内优先送达！建议先物理降温，高烧持续请及时就医🙏",
             },
             {
                 "user": "手受伤需要创可贴碘伏",
-                "assistant": "亲，外伤处理已加急！创可贴+碘伏套装30分钟内送达😊 先用清水冲洗伤口，如伤口较深建议及时就医包扎~"
-            }
+                "assistant": "亲，外伤处理已加急！创可贴+碘伏套装30分钟内送达😊 先用清水冲洗伤口，如伤口较深建议及时就医包扎~",
+            },
         ],
         "logistics": [
             {
                 "user": "订单1小时了怎么还没到",
-                "assistant": "亲，我马上联系骑手催单！看您比较着急，已备注加急处理😊 如果超时我们有相应补偿，请稍等我处理结果~"
+                "assistant": "亲，我马上联系骑手催单！看您比较着急，已备注加急处理😊 如果超时我们有相应补偿，请稍等我处理结果~",
             },
             {
                 "user": "骑手说找不到地址",
-                "assistant": "亲，我马上联系骑手确认地址😊 已把您的详细地址重新发给他，并提醒注意查看。预计10分钟内重新联系您~"
-            }
+                "assistant": "亲，我马上联系骑手确认地址😊 已把您的详细地址重新发给他，并提醒注意查看。预计10分钟内重新联系您~",
+            },
         ],
         "complaint": [
             {
                 "user": "你们服务态度太差了",
-                "assistant": "亲，非常抱歉给您带来不好体验🙏 我们很重视您的反馈！请问具体遇到什么问题？我来解决，同时会向上级反馈改进服务~"
+                "assistant": "亲，非常抱歉给您带来不好体验🙏 我们很重视您的反馈！请问具体遇到什么问题？我来解决，同时会向上级反馈改进服务~",
             }
         ],
         "medical_redirect": [
             {
                 "user": "血压150需要吃什么药",
-                "assistant": "亲，血压用药问题建议咨询医生🙏 我们可以为您提供精准的血压计，方便日常监测血压变化。需要推荐家用血压计吗？"
+                "assistant": "亲，血压用药问题建议咨询医生🙏 我们可以为您提供精准的血压计，方便日常监测血压变化。需要推荐家用血压计吗？",
             }
-        ]
+        ],
     }
-    
+
     # 关键词匹配逻辑（优化版）
     category_keywords = {
         "product_inquiry": ["推荐", "有没有", "什么好", "买", "选", "血压计", "体温计", "试纸"],
@@ -212,9 +212,9 @@ def build_optimized_few_shot(user_message: str, sk: dict) -> str:
         "emergency": ["发烧", "急", "紧急", "外伤", "受伤"],
         "logistics": ["送", "配送", "多久", "还没", "催", "骑手"],
         "complaint": ["态度", "投诉", "差", "服务"],
-        "medical_redirect": ["血压", "血糖", "药", "治疗", "效果"]
+        "medical_redirect": ["血压", "血糖", "药", "治疗", "效果"],
     }
-    
+
     # 匹配最相关类别
     matched_categories = []
     for category, keywords in category_keywords.items():
@@ -222,38 +222,38 @@ def build_optimized_few_shot(user_message: str, sk: dict) -> str:
         if score > 0:
             matched_categories.append((category, score))
     matched_categories.sort(key=lambda x: -x[1])
-    
+
     # 选择示例
     selected = []
     used_categories = set()
-    
+
     # 首先选择匹配的类别
     for category, _ in matched_categories[:2]:
         if category in high_quality_examples:
             selected.extend(high_quality_examples[category][:1])
             used_categories.add(category)
-    
+
     # 补充其他类别，确保示例多样性
     for category, examples in high_quality_examples.items():
         if len(selected) >= 4:
             break
         if category not in used_categories and examples:
             selected.append(examples[0])
-    
+
     if not selected:
         # fallback 到基础示例
         selected = [
             {
                 "user": "血压计推荐一个",
-                "assistant": "亲，推荐欧姆龙上臂式血压计😊 大屏显示+语音播报，精度高操作简单，特别适合家用。需要了解具体型号吗？"
+                "assistant": "亲，推荐欧姆龙上臂式血压计😊 大屏显示+语音播报，精度高操作简单，特别适合家用。需要了解具体型号吗？",
             }
         ]
-    
+
     # 格式化输出
     lines = []
     for ex in selected:
         lines.append(f"用户：{ex['user']}\n客服：{ex['assistant']}\n")
-    
+
     return "\n".join(lines)
 
 
@@ -294,9 +294,11 @@ def build_optimized_user_message_with_context(
     # 优化版 few-shot（动态选择高质量示例）
     few_shot = build_optimized_few_shot(user_message, sk)
     parts.append(f"## 高质量参考示例（严格按照这个水准回复）\n{few_shot}")
-    
+
     # 评分提醒
-    parts.append("## ⚠️ 评分提醒\n你的回复将被评分，目标≥0.85。必须：回答核心问题+提供解决方案+体现专业度+合规安全。")
+    parts.append(
+        "## ⚠️ 评分提醒\n你的回复将被评分，目标≥0.85。必须：回答核心问题+提供解决方案+体现专业度+合规安全。"
+    )
 
     # 用户问题
     parts.append(f"## 用户问题\n{user_message}")

@@ -168,12 +168,12 @@ async def chat(
 
         # 3. 构建优化版系统提示词
         try:
+            from ..prompts.customer_service import AFTER_SALES_SCRIPTS
             from ..prompts.customer_service_optimized import (
                 build_optimized_system_prompt,
                 build_optimized_user_message_with_context,
             )
-            from ..prompts.customer_service import AFTER_SALES_SCRIPTS
-            
+
             system_prompt = build_optimized_system_prompt(
                 knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
             )
@@ -186,6 +186,7 @@ async def chat(
                 build_system_prompt,
                 build_user_message_with_context,
             )
+
             system_prompt = build_system_prompt(
                 knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
             )
@@ -215,6 +216,7 @@ async def chat(
             )
         else:
             from ..prompts.customer_service import build_user_message_with_context
+
             user_message_with_context = build_user_message_with_context(
                 user_message=message,
                 conversation_history=conversation_history,
@@ -311,20 +313,20 @@ async def chat(
             from .auto_evolve import after_reply_hook
 
             context = {
-                'conversation_history': conversation_history,
-                'product_results': product_results,
-                'intent': intent,
-                'confidence': confidence,
-                'needs_human': needs_human
+                "conversation_history": conversation_history,
+                "product_results": product_results,
+                "intent": intent,
+                "confidence": confidence,
+                "needs_human": needs_human,
             }
-            
+
             asyncio.create_task(
                 after_reply_hook(
                     session_id=session_id,
                     user_msg=message,
                     reply=reply_text,
                     context=context,
-                    pool=pool
+                    pool=pool,
                 )
             )
 

@@ -49,59 +49,59 @@ CREATE TABLE IF NOT EXISTS system_config (
 -- 创建索引优化查询性能
 
 -- cs_improvement_log 索引
-CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_score 
+CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_score
 ON cs_improvement_log(score);
 
-CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_created 
+CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_created
 ON cs_improvement_log(created_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_session 
+CREATE INDEX IF NOT EXISTS idx_cs_improvement_log_session
 ON cs_improvement_log(session_id);
 
 -- cs_few_shot_candidates 索引
-CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_score 
+CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_score
 ON cs_few_shot_candidates(score DESC);
 
-CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_category 
+CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_category
 ON cs_few_shot_candidates(category);
 
-CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_created 
+CREATE INDEX IF NOT EXISTS idx_cs_few_shot_candidates_created
 ON cs_few_shot_candidates(created_at DESC);
 
 -- cs_reply_scores 索引
-CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_session 
+CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_session
 ON cs_reply_scores(session_id);
 
-CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_overall 
+CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_overall
 ON cs_reply_scores(overall DESC);
 
-CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_created 
+CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_created
 ON cs_reply_scores(created_at DESC);
 
 -- 复合索引：按时间和分数查询高质量回复
-CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_recent_high_score 
-ON cs_reply_scores(created_at DESC, overall DESC) 
+CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_recent_high_score
+ON cs_reply_scores(created_at DESC, overall DESC)
 WHERE overall >= 0.85;
 
 -- 复合索引：按时间和分数查询低质量回复
-CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_recent_low_score 
-ON cs_reply_scores(created_at DESC, overall ASC) 
+CREATE INDEX IF NOT EXISTS idx_cs_reply_scores_recent_low_score
+ON cs_reply_scores(created_at DESC, overall ASC)
 WHERE overall < 0.6;
 
 -- system_config 索引
-CREATE INDEX IF NOT EXISTS idx_system_config_key 
+CREATE INDEX IF NOT EXISTS idx_system_config_key
 ON system_config(key);
 
 -- 添加一些初始配置数据
-INSERT INTO system_config (key, value) 
+INSERT INTO system_config (key, value)
 VALUES ('cs_evolution_enabled', 'true'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
-INSERT INTO system_config (key, value) 
+INSERT INTO system_config (key, value)
 VALUES ('cs_evolution_high_score_threshold', '0.85'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
-INSERT INTO system_config (key, value) 
+INSERT INTO system_config (key, value)
 VALUES ('cs_evolution_low_score_threshold', '0.6'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
@@ -122,21 +122,21 @@ COMMENT ON COLUMN cs_reply_scores.overall IS '综合评分 (0-1)，用于触发�
 
 -- 高质量回复统计视图
 CREATE OR REPLACE VIEW cs_high_quality_replies AS
-SELECT 
+SELECT
     category,
     COUNT(*) as count,
     AVG(score) as avg_score,
     MAX(score) as max_score,
     MIN(created_at) as first_seen,
     MAX(created_at) as last_updated
-FROM cs_few_shot_candidates 
+FROM cs_few_shot_candidates
 WHERE score >= 0.85
 GROUP BY category
 ORDER BY count DESC, avg_score DESC;
 
 -- 改进需求统计视图
 CREATE OR REPLACE VIEW cs_improvement_summary AS
-SELECT 
+SELECT
     DATE(created_at) as date,
     COUNT(*) as low_score_count,
     AVG(score) as avg_low_score,
@@ -148,7 +148,7 @@ ORDER BY date DESC;
 
 -- 评分趋势分析视图
 CREATE OR REPLACE VIEW cs_scoring_trends AS
-SELECT 
+SELECT
     DATE(created_at) as date,
     COUNT(*) as total_evaluations,
     AVG(overall) as avg_overall_score,
