@@ -166,16 +166,31 @@ async def chat(
         if pool:
             product_results = await search_products_with_embedding(message, pool)
 
-        # 3. 构建系统提示词
-        from ..prompts.customer_service import (
-            AFTER_SALES_SCRIPTS,
-            build_system_prompt,
-            build_user_message_with_context,
-        )
-
-        system_prompt = build_system_prompt(
-            knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
-        )
+        # 3. 构建优化版系统提示词
+        try:
+            from ..prompts.customer_service_optimized import (
+                build_optimized_system_prompt,
+                build_optimized_user_message_with_context,
+            )
+            from ..prompts.customer_service import AFTER_SALES_SCRIPTS
+            
+            system_prompt = build_optimized_system_prompt(
+                knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
+            )
+            use_optimized = True
+            logger.info("Using optimized prompts for better quality")
+        except ImportError:
+            # Fallback to original prompts
+            from ..prompts.customer_service import (
+                AFTER_SALES_SCRIPTS,
+                build_system_prompt,
+                build_user_message_with_context,
+            )
+            system_prompt = build_system_prompt(
+                knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
+            )
+            use_optimized = False
+            logger.warning("Using fallback prompts")
 
         # 4. 多轮意图追踪
         conversation_context = ""
@@ -190,13 +205,22 @@ async def chat(
         except Exception as e:
             logger.warning(f"Failed to track conversation: {e}")
 
-        # 5. 构建包含上下文的用户消息
-        user_message_with_context = build_user_message_with_context(
-            user_message=message,
-            conversation_history=conversation_history,
-            product_results=product_results,
-            conversation_context=conversation_context,
-        )
+        # 5. 构建包含上下文的用户消息（优化版）
+        if use_optimized:
+            user_message_with_context = build_optimized_user_message_with_context(
+                user_message=message,
+                conversation_history=conversation_history,
+                product_results=product_results,
+                conversation_context=conversation_context,
+            )
+        else:
+            from ..prompts.customer_service import build_user_message_with_context
+            user_message_with_context = build_user_message_with_context(
+                user_message=message,
+                conversation_history=conversation_history,
+                product_results=product_results,
+                conversation_context=conversation_context,
+            )
 
         # 5. 调用LLM生成回复（支持图片）
         tool_schema = {
@@ -280,6 +304,27 @@ async def chat(
                     ai_reply=reply_text,
                     conversation_history=conversation_history,
                     product_results=product_results,
+                )
+            )
+
+            # 9. 自动进化Hook（不阻塞响应）
+            from .auto_evolve import after_reply_hook
+
+            context = {
+                'conversation_history': conversation_history,
+                'product_results': product_results,
+                'intent': intent,
+                'confidence': confidence,
+                'needs_human': needs_human
+            }
+            
+            asyncio.create_task(
+                after_reply_hook(
+                    session_id=session_id,
+                    user_msg=message,
+                    reply=reply_text,
+                    context=context,
+                    pool=pool
                 )
             )
 

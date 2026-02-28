@@ -41,6 +41,36 @@ def _load_structured_knowledge() -> dict:
     return _structured_knowledge
 
 
+def _load_dynamic_few_shots() -> dict:
+    """加载动态few-shot示例（自动进化生成）"""
+    few_shots_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "data", "dynamic_few_shots.json"
+    )
+    try:
+        with open(few_shots_path, encoding="utf-8") as f:
+            few_shots = json.load(f)
+            logger.info(f"Loaded {len(few_shots)} categories of dynamic few-shots")
+            return few_shots
+    except Exception as e:
+        logger.debug(f"No dynamic few-shots found: {e}")
+        return {}
+
+
+def _load_knowledge_patches() -> list:
+    """加载知识库补丁（自动进化生成）"""
+    patches_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "..", "data", "cs_knowledge_patches.json"
+    )
+    try:
+        with open(patches_path, encoding="utf-8") as f:
+            patches = json.load(f)
+            logger.info(f"Loaded {len(patches)} knowledge patches")
+            return patches
+    except Exception as e:
+        logger.debug(f"No knowledge patches found: {e}")
+        return []
+
+
 def _format_product_expertise(sk: dict) -> str:
     """格式化商品专业知识"""
     expertise = sk.get("product_expertise", {})
@@ -94,20 +124,32 @@ def _format_conversation_strategies(sk: dict) -> str:
 
 
 def _select_few_shot(user_message: str, sk: dict) -> str:
-    """根据用户消息动态选择最相关的 few-shot 示例"""
-    few_shots = sk.get("dynamic_few_shot", {})
-    if not few_shots:
-        return _default_few_shot()
+    """根据用户消息动态选择最相关的 few-shot 示例（优先使用自动进化的动态示例）"""
+    
+    # 1. 优先加载动态few-shot示例（自动进化系统生成）
+    dynamic_few_shots = _load_dynamic_few_shots()
+    
+    # 2. 如果没有动态示例，使用结构化知识库中的示例
+    if not dynamic_few_shots:
+        few_shots = sk.get("dynamic_few_shot", {})
+        if not few_shots:
+            return _default_few_shot()
+    else:
+        few_shots = dynamic_few_shots
 
-    # 关键词 → 类别映射
+    # 3. 关键词 → 类别映射（统一的分类策略）
     category_keywords = {
         "after_sales": ["退", "换", "坏", "不好", "质量", "差", "退款", "赔", "损坏", "不满"],
-        "medical_redirect": ["血压", "血糖", "吃药", "治疗", "症状", "病", "疼", "痛"],
+        "medical_safety": ["血压", "血糖", "吃药", "治疗", "症状", "病", "疼", "痛"], 
         "logistics": ["送", "到", "配送", "多久", "发货", "等"],
         "product_inquiry": ["推荐", "哪个好", "买", "有没有", "多少钱", "怎么选"],
+        "usage_guidance": ["怎么用", "使用方法", "用法", "操作"],
+        "recommendation": ["推荐", "哪款", "选择", "比较"],
+        "complaint_handling": ["投诉", "不满意", "态度", "服务"],
+        "greeting": ["你好", "在吗", "hello", "hi"]
     }
 
-    # 匹配最相关的类别
+    # 4. 匹配最相关的类别
     matched_categories = []
     for category, keywords in category_keywords.items():
         score = sum(1 for kw in keywords if kw in user_message)
@@ -115,28 +157,49 @@ def _select_few_shot(user_message: str, sk: dict) -> str:
             matched_categories.append((category, score))
     matched_categories.sort(key=lambda x: -x[1])
 
-    # 选择匹配的 + 补充通用的
+    # 5. 选择匹配的示例
     selected = []
     used_categories = set()
+    
+    # 优先选择匹配度高的类别
     for category, _ in matched_categories[:2]:
         if category in few_shots:
-            for example in few_shots[category][:1]:  # 每类取 1 个
-                selected.append(example)
+            examples = few_shots[category][:1]  # 每类取最高分的1个
+            for example in examples:
+                # 动态few-shots的格式适配
+                if 'user_message' in example and 'ai_response' in example:
+                    selected.append({
+                        'user': example['user_message'],
+                        'assistant': example['ai_response']
+                    })
+                elif 'user' in example and 'assistant' in example:
+                    selected.append(example)
                 used_categories.add(category)
 
-    # 补充未匹配的类别各 1 个，总共不超过 4 个
+    # 6. 补充其他类别的优秀示例，总共不超过4个
     for category, examples in few_shots.items():
         if len(selected) >= 4:
             break
         if category not in used_categories and examples:
-            selected.append(examples[0])
+            example = examples[0]  # 取该类别最高分示例
+            if 'user_message' in example and 'ai_response' in example:
+                selected.append({
+                    'user': example['user_message'],
+                    'assistant': example['ai_response']
+                })
+            elif 'user' in example and 'assistant' in example:
+                selected.append(example)
 
     if not selected:
         return _default_few_shot()
 
+    # 7. 格式化输出
     lines = []
     for ex in selected:
-        lines.append(f"用户：{ex['user']}\n客服：{ex['assistant']}\n")
+        user_msg = ex.get('user', '')[:100]  # 限制长度
+        assistant_reply = ex.get('assistant', '')[:200]
+        lines.append(f"用户：{user_msg}\n客服：{assistant_reply}\n")
+    
     return "\n".join(lines)
 
 
@@ -156,11 +219,11 @@ def _default_few_shot() -> str:
 
 
 def build_system_prompt(knowledge_base: list[dict], after_sales_scripts: dict | None = None) -> str:
-    """构建高质量系统提示词 - 结构化知识 + 动态 few-shot"""
+    """构建高质量系统提示词 - 结构化知识 + 动态 few-shot + 自动补丁"""
     sk = _load_structured_knowledge()
     store = sk.get("store_profile", {})
 
-    # 知识库按类别格式化
+    # 知识库按类别格式化（基础知识库）
     kb_content = ""
     if knowledge_base:
         kb_by_cat: dict[str, list] = {}
@@ -176,6 +239,17 @@ def build_system_prompt(knowledge_base: list[dict], after_sales_scripts: dict | 
                     kb_content += f"- Q: {q} → {a}\n"
                 else:
                     kb_content += f"- {a}\n"
+
+    # 加载并合并知识库补丁（自动进化系统生成）
+    knowledge_patches = _load_knowledge_patches()
+    if knowledge_patches:
+        kb_content += "\n### 🔄 自动补充知识（基于对话学习）\n"
+        for patch in knowledge_patches[-10:]:  # 只显示最近10个补丁
+            category = patch.get('category', '其他')
+            content = patch.get('knowledge_content', '')
+            question_pattern = patch.get('question_pattern', '')
+            if content:
+                kb_content += f"- **{category}**: {question_pattern} → {content}\n"
 
     # 商品专业知识
     product_expertise = _format_product_expertise(sk)

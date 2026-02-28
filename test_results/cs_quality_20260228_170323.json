@@ -1,0 +1,718 @@
+{
+  "timestamp": "20260228_170323",
+  "iteration": 3,
+  "results": [
+    {
+      "scenario": {
+        "category": "product_inquiry",
+        "description": "基础商品咨询",
+        "user_message": "你们有血压计吗？推荐一个",
+        "expected_intent": "product_inquiry",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_product_inquiry_170257",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNm4CcPeBytfH1BjCd'}"
+      },
+      "session_id": "test_product_inquiry_170257"
+    },
+    {
+      "scenario": {
+        "category": "product_inquiry",
+        "description": "用量咨询",
+        "user_message": "这个试纸一盒能用多久？",
+        "expected_intent": "usage_question",
+        "conversation_history": [
+          {
+            "role": "user",
+            "content": "血糖试纸有吗？"
+          },
+          {
+            "role": "assistant",
+            "content": "亲，有的~我们有多款血糖试纸😊"
+          }
+        ]
+      },
+      "cs_response": {
+        "session_id": "test_product_inquiry_170259",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNr6Zmo8nxFx5JoeaH'}"
+      },
+      "session_id": "test_product_inquiry_170259"
+    },
+    {
+      "scenario": {
+        "category": "product_inquiry",
+        "description": "年龄适用性",
+        "user_message": "80岁老人用什么血压计好？",
+        "expected_intent": "recommendation",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_product_inquiry_170300",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNwAffxhWFbGsc7V1A'}"
+      },
+      "session_id": "test_product_inquiry_170300"
+    },
+    {
+      "scenario": {
+        "category": "product_inquiry",
+        "description": "医疗级别咨询",
+        "user_message": "这个体温计是医疗级的吗？",
+        "expected_intent": "product_inquiry",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_product_inquiry_170301",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCP2mWWsHwwhyerYN6Y'}"
+      },
+      "session_id": "test_product_inquiry_170301"
+    },
+    {
+      "scenario": {
+        "category": "product_inquiry",
+        "description": "商品对比",
+        "user_message": "额温枪和耳温枪哪个准确？",
+        "expected_intent": "comparison",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_product_inquiry_170302",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCP7hBVTFnN2UxMRALH'}"
+      },
+      "session_id": "test_product_inquiry_170302"
+    },
+    {
+      "scenario": {
+        "category": "after_sales",
+        "description": "退款申请",
+        "user_message": "这个血压计不好用，我要退款",
+        "expected_intent": "after_sales",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_after_sales_170303",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPChZQnCyrSGvgruaU'}"
+      },
+      "session_id": "test_after_sales_170303"
+    },
+    {
+      "scenario": {
+        "category": "after_sales",
+        "description": "换货申请",
+        "user_message": "收到的体温计坏了，能换一个吗？",
+        "expected_intent": "after_sales",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_after_sales_170305",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPHpsn7HFB2FevwNyo'}"
+      },
+      "session_id": "test_after_sales_170305"
+    },
+    {
+      "scenario": {
+        "category": "after_sales",
+        "description": "质量问题",
+        "user_message": "试纸受潮了，测不准",
+        "expected_intent": "after_sales",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_after_sales_170306",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPNrzqeQUmi8X75GcG'}"
+      },
+      "session_id": "test_after_sales_170306"
+    },
+    {
+      "scenario": {
+        "category": "complaint",
+        "description": "态度投诉",
+        "user_message": "你们客服态度太差了，我要投诉",
+        "expected_intent": "complaint",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_complaint_170307",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPUAET6MqYcc4twhdM'}"
+      },
+      "session_id": "test_complaint_170307"
+    },
+    {
+      "scenario": {
+        "category": "complaint",
+        "description": "发错货",
+        "user_message": "订单要的血压计，发来的是血糖仪！",
+        "expected_intent": "complaint",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_complaint_170308",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPZAs6SyjtKp5eXdc1'}"
+      },
+      "session_id": "test_complaint_170308"
+    },
+    {
+      "scenario": {
+        "category": "complaint",
+        "description": "过期商品",
+        "user_message": "收到的药品过期了，这怎么能卖？",
+        "expected_intent": "complaint",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_complaint_170309",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPkVzhBKL5qeSK5fy1'}"
+      },
+      "session_id": "test_complaint_170309"
+    },
+    {
+      "scenario": {
+        "category": "logistics",
+        "description": "配送时间",
+        "user_message": "下单多久能送到？",
+        "expected_intent": "logistics",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_logistics_170312",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPqNvysp4omuFBSvtL'}"
+      },
+      "session_id": "test_logistics_170312"
+    },
+    {
+      "scenario": {
+        "category": "logistics",
+        "description": "骑手问题",
+        "user_message": "骑手说找不到地址，怎么办？",
+        "expected_intent": "logistics",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_logistics_170313",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPvTHHqLGppfFYgx4n'}"
+      },
+      "session_id": "test_logistics_170313"
+    },
+    {
+      "scenario": {
+        "category": "logistics",
+        "description": "催单",
+        "user_message": "订单一小时了还没送到，什么情况？",
+        "expected_intent": "logistics",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_logistics_170314",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQ1PSbNr72jPnemsJr'}"
+      },
+      "session_id": "test_logistics_170314"
+    },
+    {
+      "scenario": {
+        "category": "special",
+        "description": "开发票",
+        "user_message": "能开发票吗？怎么申请？",
+        "expected_intent": "other",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_special_170316",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQ6QZrshsJe4s3thWY'}"
+      },
+      "session_id": "test_special_170316"
+    },
+    {
+      "scenario": {
+        "category": "special",
+        "description": "隐私订单",
+        "user_message": "买避孕套，配送员会看到吗？",
+        "expected_intent": "other",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_special_170317",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQBNDo27FvSJUw4kJn'}"
+      },
+      "session_id": "test_special_170317"
+    },
+    {
+      "scenario": {
+        "category": "emergency",
+        "description": "发烧紧急",
+        "user_message": "小孩发烧39度，体温计多久能送到？",
+        "expected_intent": "other",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_emergency_170318",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQGEusns79ZMbtWuMF'}"
+      },
+      "session_id": "test_emergency_170318"
+    },
+    {
+      "scenario": {
+        "category": "emergency",
+        "description": "外伤紧急",
+        "user_message": "手划伤了，急需碘伏和创可贴",
+        "expected_intent": "other",
+        "conversation_history": null
+      },
+      "cs_response": {
+        "session_id": "test_emergency_170319",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQMoX9vqJW6HL2WXbM'}"
+      },
+      "session_id": "test_emergency_170319"
+    },
+    {
+      "scenario": {
+        "category": "multi_turn",
+        "description": "客户追问",
+        "user_message": "那个血压计准确吗？",
+        "expected_intent": "product_inquiry",
+        "conversation_history": [
+          {
+            "role": "user",
+            "content": "推荐个血压计"
+          },
+          {
+            "role": "assistant",
+            "content": "亲，推荐欧姆龙上臂式血压计😊 大屏显示，操作简单"
+          }
+        ]
+      },
+      "cs_response": {
+        "session_id": "test_multi_turn_170320",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQShwxsmNz3NnGTsLU'}"
+      },
+      "session_id": "test_multi_turn_170320"
+    },
+    {
+      "scenario": {
+        "category": "multi_turn",
+        "description": "补充信息",
+        "user_message": "老人85岁，有高血压",
+        "expected_intent": "product_inquiry",
+        "conversation_history": [
+          {
+            "role": "user",
+            "content": "推荐个血压计"
+          },
+          {
+            "role": "assistant",
+            "content": "亲，推荐欧姆龙上臂式血压计😊"
+          },
+          {
+            "role": "user",
+            "content": "老人用的"
+          },
+          {
+            "role": "assistant",
+            "content": "好的~那更推荐大屏语音款，老人看得清楚😊"
+          }
+        ]
+      },
+      "cs_response": {
+        "session_id": "test_multi_turn_170321",
+        "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+        "intent": "other",
+        "sources": [],
+        "needs_human": true
+      },
+      "evaluation": {
+        "accuracy": 0.5,
+        "professionalism": 0.5,
+        "tone": 0.5,
+        "resolution": 0.5,
+        "compliance": 0.5,
+        "overall": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQXhb2gXFBTjWALGSV'}"
+      },
+      "session_id": "test_multi_turn_170321"
+    }
+  ],
+  "analysis": {
+    "total_tests": 20,
+    "average_score": 0.5,
+    "category_scores": {
+      "product_inquiry": 0.5,
+      "after_sales": 0.5,
+      "complaint": 0.5,
+      "logistics": 0.5,
+      "special": 0.5,
+      "emergency": 0.5,
+      "multi_turn": 0.5
+    },
+    "low_score_cases": [
+      {
+        "description": "基础商品咨询",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNm4CcPeBytfH1BjCd'}",
+        "user_message": "你们有血压计吗？推荐一个",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "用量咨询",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNr6Zmo8nxFx5JoeaH'}",
+        "user_message": "这个试纸一盒能用多久？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "年龄适用性",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCNwAffxhWFbGsc7V1A'}",
+        "user_message": "80岁老人用什么血压计好？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "医疗级别咨询",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCP2mWWsHwwhyerYN6Y'}",
+        "user_message": "这个体温计是医疗级的吗？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "商品对比",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCP7hBVTFnN2UxMRALH'}",
+        "user_message": "额温枪和耳温枪哪个准确？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "退款申请",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPChZQnCyrSGvgruaU'}",
+        "user_message": "这个血压计不好用，我要退款",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "换货申请",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPHpsn7HFB2FevwNyo'}",
+        "user_message": "收到的体温计坏了，能换一个吗？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "质量问题",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPNrzqeQUmi8X75GcG'}",
+        "user_message": "试纸受潮了，测不准",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "态度投诉",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPUAET6MqYcc4twhdM'}",
+        "user_message": "你们客服态度太差了，我要投诉",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "发错货",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPZAs6SyjtKp5eXdc1'}",
+        "user_message": "订单要的血压计，发来的是血糖仪！",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "过期商品",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPkVzhBKL5qeSK5fy1'}",
+        "user_message": "收到的药品过期了，这怎么能卖？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "配送时间",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPqNvysp4omuFBSvtL'}",
+        "user_message": "下单多久能送到？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "骑手问题",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCPvTHHqLGppfFYgx4n'}",
+        "user_message": "骑手说找不到地址，怎么办？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "催单",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQ1PSbNr72jPnemsJr'}",
+        "user_message": "订单一小时了还没送到，什么情况？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "开发票",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQ6QZrshsJe4s3thWY'}",
+        "user_message": "能开发票吗？怎么申请？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "隐私订单",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQBNDo27FvSJUw4kJn'}",
+        "user_message": "买避孕套，配送员会看到吗？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "发烧紧急",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQGEusns79ZMbtWuMF'}",
+        "user_message": "小孩发烧39度，体温计多久能送到？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "外伤紧急",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQMoX9vqJW6HL2WXbM'}",
+        "user_message": "手划伤了，急需碘伏和创可贴",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "客户追问",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQShwxsmNz3NnGTsLU'}",
+        "user_message": "那个血压计准确吗？",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      },
+      {
+        "description": "补充信息",
+        "score": 0.5,
+        "feedback": "评分失败: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.'}, 'request_id': 'req_011CYaCQXhb2gXFBTjWALGSV'}",
+        "user_message": "老人85岁，有高血压",
+        "ai_reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+      }
+    ],
+    "pass_rate": 0.0
+  },
+  "target_achieved": false
+}
