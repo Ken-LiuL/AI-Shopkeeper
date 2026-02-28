@@ -72,10 +72,10 @@ export const createChatSession = (customerId?: string) =>
     method: 'POST',
     body: JSON.stringify({ customer_id: customerId }),
   });
-export const sendChatMessage = (message: string, sessionId: string) =>
+export const sendChatMessage = (message: string, sessionId: string, images?: string[]) =>
   request<any>('/api/customer-service/chat', {
     method: 'POST',
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify({ message, session_id: sessionId, images: images || [] }),
   });
 export const getChatSessions = (customerId?: string) => {
   const sp = new URLSearchParams();
@@ -86,6 +86,13 @@ export const getChatHistory = (sessionId: string) =>
   request<any>(`/api/customer-service/sessions/${sessionId}/messages`);
 export const deleteChatSession = (sessionId: string) =>
   request<any>(`/api/customer-service/sessions/${sessionId}`, { method: 'DELETE' });
+export const submitFeedback = (sessionId: string, messageId: string | null, rating: 'good' | 'bad', comment?: string) =>
+  request<any>('/api/customer-service/feedback', {
+    method: 'POST',
+    body: JSON.stringify({ session_id: sessionId, message_id: messageId, rating, comment }),
+  });
+export const getCsAnalytics = () =>
+  request<any>('/api/customer-service/analytics');
 
 // Replenishment
 export const getReplenishmentSuggestions = () => request<any>('/api/replenishment/suggestions');

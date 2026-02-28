@@ -72,6 +72,7 @@ class CreateSessionResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    images: list[str] = Field(default_factory=list, description="Base64 encoded images")
 
 
 class ChatResponse(BaseModel):
@@ -94,6 +95,13 @@ class SessionListItem(BaseModel):
 class SessionHistory(BaseModel):
     session_id: str
     messages: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FeedbackRequest(BaseModel):
+    session_id: str
+    message_id: str | None = None
+    rating: str = Field(..., pattern="^(good|bad)$")
+    comment: str | None = None
 
 
 # ── Alerts ───────────────────────────────────────────────────

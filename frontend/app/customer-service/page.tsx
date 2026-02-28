@@ -3,7 +3,8 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { Header } from '@/components/layout/header';
 import { ChatBubble } from '@/components/ui/chat-bubble';
 import { Loading } from '@/components/ui/loading';
-import { sendChatMessage, getChatSessions, getChatHistory, createChatSession, deleteChatSession } from '@/lib/api';
+import { ImageUpload } from '@/components/ui/image-upload';
+import { sendChatMessage, getChatSessions, getChatHistory, createChatSession, deleteChatSession, submitFeedback, getCsAnalytics } from '@/lib/api';
 import type { ChatMessage, ChatSession } from '@/lib/types';
 
 export default function CustomerServicePage() {

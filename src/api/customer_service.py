@@ -6,13 +6,11 @@ import logging
 from collections import OrderedDict
 from datetime import UTC
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Query
 
-from src.agents.orchestrator import Orchestrator
 from src.db import redis as redis_db
 from src.services.session_manager import SessionManager
 
-from .deps import get_orchestrator
 from .errors import AppError, NotFoundError
 from .schemas import (
     APIResponse,
@@ -20,6 +18,7 @@ from .schemas import (
     ChatResponse,
     CreateSessionRequest,
     CreateSessionResponse,
+    FeedbackRequest,
     SessionHistory,
     SessionListItem,
 )
@@ -99,7 +98,7 @@ async def chat(
 ) -> APIResponse[ChatResponse]:
     from src.agents.customer_service.nodes import chat as cs_chat
     from src.db import postgres as pg_db
-    
+
     sm = _get_session_manager()
     pool = pg_db.get_pool()
 
@@ -122,6 +121,7 @@ async def chat(
             message=request.message,
             pool=pool,
             conversation_history=history,
+            images=request.images,
         )
 
         reply = result.get("reply", "")
@@ -186,3 +186,57 @@ async def delete_session(session_id: str) -> APIResponse[dict]:
     if not deleted:
         raise NotFoundError("Session", session_id)
     return APIResponse(data={"session_id": session_id, "deleted": True})
+
+
+# ── Feedback ──────────────────────────────────────────────
+
+
+@router.post("/feedback", response_model=APIResponse[dict])
+async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
+    """Submit user feedback for a customer service interaction."""
+    from src.db import postgres as pg_db
+
+    pool = pg_db.get_pool()
+    if not pool:
+        raise AppError("Database connection unavailable", status_code=503)
+
+    try:
+        # Store feedback in database
+        await pool.execute(
+            """
+            INSERT INTO cs_feedback (session_id, message_id, rating, comment, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            """,
+            request.session_id,
+            request.message_id,
+            request.rating,
+            request.comment,
+        )
+
+        return APIResponse(data={"submitted": True})
+
+    except Exception as e:
+        logger.error(f"Failed to submit feedback: {e}")
+        raise AppError("Failed to submit feedback", status_code=500) from e
+
+
+# ── Analytics ─────────────────────────────────────────────
+
+
+@router.get("/analytics", response_model=APIResponse[dict])
+async def get_analytics() -> APIResponse[dict]:
+    """Get customer service analytics data."""
+    from src.agents.customer_service.learning import get_analytics_summary
+    from src.db import postgres as pg_db
+
+    pool = pg_db.get_pool()
+    if not pool:
+        raise AppError("Database connection unavailable", status_code=503)
+
+    try:
+        analytics_data = await get_analytics_summary(pool)
+        return APIResponse(data=analytics_data)
+
+    except Exception as e:
+        logger.error(f"Failed to get analytics: {e}")
+        raise AppError("Failed to get analytics", status_code=500) from e

@@ -117,7 +117,7 @@ def _anthropic_tool_to_openai_function(tool: dict) -> dict:
 
 
 async def _call_openrouter(
-    prompt: str,
+    prompt: str | list[dict],
     tool: dict,
     model: str,
     max_tokens: int,
@@ -165,7 +165,7 @@ async def _call_openrouter(
 
 
 async def _call_anthropic(
-    prompt: str,
+    prompt: str | list[dict],
     tool: dict,
     model: str,
     max_tokens: int,
@@ -199,7 +199,7 @@ async def _call_anthropic(
 
 
 async def call_tool(
-    prompt: str,
+    prompt: str | list[dict],
     tool: dict,
     model: str = MODEL_SONNET,
     max_tokens: int = 4096,
@@ -267,6 +267,45 @@ def _record_llm_metrics(model: str, input_tokens: int, output_tokens: int, durat
         llm_request_duration.labels(model=model).observe(duration)
     except ImportError:
         pass
+
+
+def build_multimodal_content(text: str, images: list[str]) -> list[dict]:
+    """Build multimodal message content with text and images."""
+    content = [{"type": "text", "text": text}]
+
+    for image in images:
+        # Ensure proper data URI format
+        if not image.startswith("data:"):
+            image = f"data:image/jpeg;base64,{image}"
+
+        content.append({"type": "image_url", "image_url": {"url": image}})
+
+    return content
+
+
+async def call_vision(
+    text: str,
+    images: list[str],
+    tool: dict,
+    model: str = "google/gemini-2.0-flash-001",  # Default to vision model
+    max_tokens: int = 4096,
+    system: str | None = None,
+    trace_name: str | None = None,
+) -> dict[str, Any]:
+    """
+    Specialized function for vision + tool calling.
+    Combines text and images into multimodal content.
+    """
+    multimodal_content = build_multimodal_content(text, images)
+
+    return await call_tool(
+        prompt=multimodal_content,
+        tool=tool,
+        model=model,
+        max_tokens=max_tokens,
+        system=system,
+        trace_name=trace_name,
+    )
 
 
 async def call_tool_with_reflection(

@@ -200,9 +200,9 @@ def build_system_prompt(knowledge_base: list[dict], after_sales_scripts: dict | 
 你是"小康"，美团即时零售医疗器械专营店的AI客服。你专业、温暖、高效。
 
 # 店铺
-- 平台：美团闪购（即时零售，{store.get('delivery_time', '30-60分钟')}送达）
-- 范围：{store.get('delivery_range', '3公里内')}
-- 商品：{store.get('total_products', 1914)}款，覆盖：
+- 平台：美团闪购（即时零售，{store.get("delivery_time", "30-60分钟")}送达）
+- 范围：{store.get("delivery_range", "3公里内")}
+- 商品：{store.get("total_products", 1914)}款，覆盖：
 {categories_text}
 # 商品专业知识（回答时引用这些知识显得专业）
 {product_expertise}
@@ -238,6 +238,7 @@ def build_user_message_with_context(
     user_message: str,
     conversation_history: list[dict] | None = None,
     product_results: list[dict] | None = None,
+    conversation_context: str | None = None,
 ) -> str:
     """构建包含上下文的用户消息"""
     sk = _load_structured_knowledge()
@@ -260,6 +261,10 @@ def build_user_message_with_context(
             desc = p.get("description", p.get("name", ""))
             product_lines.append(f"{i}. {desc}")
         parts.append("## 店内相关商品\n" + "\n".join(product_lines))
+
+    # 对话状态上下文
+    if conversation_context:
+        parts.append(f"## 对话状态提示\n{conversation_context}")
 
     # 动态 few-shot
     few_shot = _select_few_shot(user_message, sk)

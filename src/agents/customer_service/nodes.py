@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ..llm import MODEL_DEEPSEEK, call_tool
+from ..llm import MODEL_DEEPSEEK, call_tool, call_vision
 from .product_memory import get_product_memory
 
 logger = logging.getLogger(__name__)
@@ -27,15 +27,17 @@ async def load_knowledge_base(pool) -> list[dict]:
 
         knowledge_base = []
         for row in rows:
-            knowledge_base.append({
-                "category": row["category"],
-                "subcategory": row["subcategory"],
-                "question": row["question"],
-                "answer": row["answer"],
-                "keywords": row["keywords"] or [],
-                "priority": row["priority"],
-                "product_categories": row["product_categories"] or []
-            })
+            knowledge_base.append(
+                {
+                    "category": row["category"],
+                    "subcategory": row["subcategory"],
+                    "question": row["question"],
+                    "answer": row["answer"],
+                    "keywords": row["keywords"] or [],
+                    "priority": row["priority"],
+                    "product_categories": row["product_categories"] or [],
+                }
+            )
 
         logger.info(f"Loaded {len(knowledge_base)} knowledge base items")
         return knowledge_base
@@ -59,6 +61,7 @@ async def search_products_with_embedding(query: str, pool) -> list[dict]:
         query_embedding = None
         try:
             from src.skills.embedding import EmbeddingSkill
+
             embedding_skill = EmbeddingSkill()
             query_embedding = embedding_skill.embed(query)
             logger.info(f"Query embedding generated: dim={len(query_embedding)}")
@@ -67,9 +70,7 @@ async def search_products_with_embedding(query: str, pool) -> list[dict]:
 
         # 搜索商品
         results = await product_memory.search_products(
-            query_embedding=query_embedding,
-            query_text=query,
-            top_k=5
+            query_embedding=query_embedding, query_text=query, top_k=5
         )
 
         logger.info(f"Product search returned {len(results)} results for: {query[:50]}")
@@ -125,7 +126,13 @@ _knowledge_base_cache: list[dict] | None = None
 _cache_loaded = False
 
 
-async def chat(session_id: str, message: str, pool=None, conversation_history: list[dict] | None = None) -> dict:
+async def chat(
+    session_id: str,
+    message: str,
+    pool=None,
+    conversation_history: list[dict] | None = None,
+    images: list[str] | None = None,
+) -> dict:
     """
     新版客服聊天函数 - 单次LLM调用完成所有任务
 
@@ -167,45 +174,80 @@ async def chat(session_id: str, message: str, pool=None, conversation_history: l
         )
 
         system_prompt = build_system_prompt(
-            knowledge_base=knowledge_base,
-            after_sales_scripts=AFTER_SALES_SCRIPTS
+            knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
         )
 
-        # 4. 构建包含上下文的用户消息
+        # 4. 多轮意图追踪
+        conversation_context = ""
+        try:
+            from .tracker import track_conversation
+
+            tracking_result = track_conversation(
+                conversation_history=conversation_history or [], user_message=message
+            )
+            conversation_context = tracking_result.get("context_summary", "")
+            logger.info(f"Conversation state: {tracking_result.get('state', 'unknown')}")
+        except Exception as e:
+            logger.warning(f"Failed to track conversation: {e}")
+
+        # 5. 构建包含上下文的用户消息
         user_message_with_context = build_user_message_with_context(
             user_message=message,
             conversation_history=conversation_history,
-            product_results=product_results
+            product_results=product_results,
+            conversation_context=conversation_context,
         )
 
-        # 5. 调用LLM生成回复
-        result = await call_tool(
-            prompt=user_message_with_context,
-            tool={
-                "name": "output_reply",
-                "description": "输出客服回复",
-                "input_schema": {
-                    "type": "object",
-                    "properties": {
-                        "reply_text": {"type": "string", "maxLength": 200},
-                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                        "requires_human_review": {"type": "boolean", "description": "是否需要转人工"},
-                        "intent": {
-                            "type": "string",
-                            "enum": [
-                                "product_inquiry", "usage_question", "recommendation",
-                                "comparison", "logistics", "after_sales", "complaint",
-                                "medical_advice", "greeting", "other"
-                            ]
-                        },
+        # 5. 调用LLM生成回复（支持图片）
+        tool_schema = {
+            "name": "output_reply",
+            "description": "输出客服回复",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "reply_text": {"type": "string", "maxLength": 200},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "requires_human_review": {"type": "boolean", "description": "是否需要转人工"},
+                    "intent": {
+                        "type": "string",
+                        "enum": [
+                            "product_inquiry",
+                            "usage_question",
+                            "recommendation",
+                            "comparison",
+                            "logistics",
+                            "after_sales",
+                            "complaint",
+                            "medical_advice",
+                            "greeting",
+                            "other",
+                        ],
                     },
-                    "required": ["reply_text", "confidence", "requires_human_review"]
-                }
+                },
+                "required": ["reply_text", "confidence", "requires_human_review"],
             },
-            model=MODEL_DEEPSEEK,
-            system=system_prompt,
-            trace_name="customer_service_chat"
-        )
+        }
+
+        if images and len(images) > 0:
+            # Use vision model for image processing
+            result = await call_vision(
+                text=user_message_with_context,
+                images=images,
+                tool=tool_schema,
+                model="google/gemini-2.0-flash-001",
+                system=system_prompt
+                + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
+                trace_name="customer_service_vision_chat",
+            )
+        else:
+            # Use regular text model
+            result = await call_tool(
+                prompt=user_message_with_context,
+                tool=tool_schema,
+                model=MODEL_DEEPSEEK,
+                system=system_prompt,
+                trace_name="customer_service_chat",
+            )
 
         # 6. 提取结果
         reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
@@ -215,15 +257,31 @@ async def chat(session_id: str, message: str, pool=None, conversation_history: l
 
         # 7. 异步记录日志（不阻塞响应）
         if pool:
-            asyncio.create_task(_log_conversation(
-                pool=pool,
-                session_id=session_id,
-                user_message=message,
-                intent=intent,
-                ai_response=reply_text,
-                sources=product_results,
-                confidence=confidence,
-            ))
+            asyncio.create_task(
+                _log_conversation(
+                    pool=pool,
+                    session_id=session_id,
+                    user_message=message,
+                    intent=intent,
+                    ai_response=reply_text,
+                    sources=product_results,
+                    confidence=confidence,
+                )
+            )
+
+            # 8. 异步评分（不阻塞响应）
+            from .evaluator import evaluate_and_store
+
+            asyncio.create_task(
+                evaluate_and_store(
+                    pool=pool,
+                    session_id=session_id,
+                    user_message=message,
+                    ai_reply=reply_text,
+                    conversation_history=conversation_history,
+                    product_results=product_results,
+                )
+            )
 
         # 8. 返回结果
         return {
@@ -231,7 +289,7 @@ async def chat(session_id: str, message: str, pool=None, conversation_history: l
             "reply": reply_text,
             "intent": intent,
             "sources": product_results,
-            "needs_human": needs_human
+            "needs_human": needs_human,
         }
 
     except Exception as e:
@@ -241,12 +299,14 @@ async def chat(session_id: str, message: str, pool=None, conversation_history: l
             "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
             "intent": "other",
             "sources": [],
-            "needs_human": True  # 出错时转人工
+            "needs_human": True,  # 出错时转人工
         }
 
 
 # 为了向后兼容，保留一些原有函数签名（但实现很简单）
-async def _search_knowledge_base(pool, query: str, intent: str = None, limit: int = 3) -> list[dict]:
+async def _search_knowledge_base(
+    pool, query: str, intent: str = None, limit: int = 3
+) -> list[dict]:
     """向后兼容的知识库搜索（已废弃，新版本不使用）"""
     logger.warning("_search_knowledge_base is deprecated, use new chat() function instead")
     return []

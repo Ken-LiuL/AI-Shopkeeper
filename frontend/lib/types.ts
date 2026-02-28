@@ -116,6 +116,9 @@ export interface ChatMessage {
   timestamp?: string;
   intent?: string;
   confidence?: number;
+  images?: string[];
+  messageId?: string;
+  feedback?: 'good' | 'bad' | null;
 }
 
 export interface ChatSession {
