@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
+import json
 import logging
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
@@ -17,8 +20,79 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 logger = logging.getLogger(__name__)
 
 
+def _extract_metric(raw_data: dict, key: str, use_reference: bool = True) -> float:
+    """Extract metric value from complex goldengateway JSON.
+
+    Structure: {key: {indicValue: {originValue: X}, reference: {lastPeriodValue: {originValue: Y}}}}
+    If current value is 0 and use_reference=True, fall back to lastPeriodValue.
+    """
+    field = raw_data.get(key, {})
+    if not isinstance(field, dict):
+        # Simple flat value
+        try:
+            return float(field)
+        except (TypeError, ValueError):
+            return 0.0
+
+    current = 0.0
+    indic = field.get("indicValue", {})
+    if isinstance(indic, dict):
+        current = float(indic.get("originValue", 0) or 0)
+
+    if current == 0 and use_reference:
+        ref = field.get("reference", {})
+        if isinstance(ref, dict):
+            lp = ref.get("lastPeriodValue", {})
+            if isinstance(lp, dict):
+                current = float(lp.get("originValue", 0) or 0)
+
+    return current
+
+
+async def _get_aggregated_metrics(pool, days: int) -> dict:
+    """Aggregate metrics from raw table data for specified period."""
+    with contextlib.suppress(Exception):
+        start_date = datetime.now() - timedelta(days=days)
+        # Get raw metrics data from the period
+        rows = await pool.fetch(
+            """SELECT raw_data, created_at FROM qnh_store_metrics_raw
+               WHERE created_at >= $1 ORDER BY created_at DESC""",
+            start_date,
+        )
+
+        if rows:
+            # Use the most recent data or aggregate if needed
+            latest_data = rows[0]["raw_data"]
+            if isinstance(latest_data, str):
+                latest_data = json.loads(latest_data)
+
+            total_revenue = _extract_metric(latest_data, "sale_amt_gmv")
+            order_count = int(_extract_metric(latest_data, "eff_ord_cnt"))
+            actual_pay = _extract_metric(latest_data, "actual_pay_amt")
+
+            return {
+                "order_count": order_count,
+                "total_revenue": total_revenue,
+                "avg_order_value": actual_pay / max(order_count, 1),
+                "refund_count": 0,  # Not available in raw data
+                "refund_rate": 0.0,
+                "cs_responses": 0,  # CS data would be in separate table
+            }
+
+    return {
+        "order_count": 0,
+        "total_revenue": 0.0,
+        "avg_order_value": 0.0,
+        "refund_count": 0,
+        "refund_rate": 0.0,
+        "cs_responses": 0,
+    }
+
+
 async def _period_report(days: int) -> dict:
     pool = pg.get_pool()
+
+    # Try structured tables first
     row = await pool.fetchrow(
         """SELECT COUNT(*)::int AS order_count,
                   COALESCE(SUM(total_amount), 0) AS total_revenue,
@@ -30,6 +104,12 @@ async def _period_report(days: int) -> dict:
     )
     d = dict(row)
     d["refund_rate"] = round(d["refund_count"] / max(d["order_count"], 1), 4)
+
+    # If no data in structured tables, use raw table fallback
+    if d["order_count"] == 0:
+        logger.info(f"No structured data for {days} days, falling back to raw metrics")
+        d = await _get_aggregated_metrics(pool, days)
+
     # cs responses
     cs_count = (
         await pool.fetchval(
