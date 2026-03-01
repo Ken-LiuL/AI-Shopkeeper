@@ -77,12 +77,13 @@ async def overview() -> APIResponse[DashboardOverview]:
         if metrics:
             today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
 
-    # Get pending alerts count from alerts table
+    # Get pending alerts count dynamically
     pending_alerts = 0
     with contextlib.suppress(Exception):
-        pending_alerts = (
-            await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL") or 0
-        )
+        from .alerts import _generate_smart_alerts
+
+        smart_alerts = await _generate_smart_alerts(pool)
+        pending_alerts = len([a for a in smart_alerts if a.get("status") == "pending"])
 
     pending_tasks = 0
     for q in [

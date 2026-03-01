@@ -133,49 +133,43 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                 }
             )
 
-    # 4. Sales volume anomaly alerts - products with low sales numbers
+    # 4. Turnover anomaly alert from store metrics
     with contextlib.suppress(Exception):
-        low_sales_products = await pool.fetch(
-            """SELECT spu_id, name, sale_num, retail_price FROM qnh_products
-               WHERE status = '在售' AND sale_num IS NOT NULL AND sale_num < 5
-               AND retail_price > 50
-               ORDER BY sale_num ASC LIMIT 3"""
-        )
-        for product in low_sales_products:
+        turnover_days = _extract_metric(data, "turnover_days_by_amount") if data else 0
+        if turnover_days > 60:
             alerts.append(
                 {
-                    "alert_id": f"low_sales_{product['spu_id']}",
-                    "type": "sales",
-                    "severity": "medium",
-                    "title": "销量异常提醒",
-                    "description": f"商品 {product['name']} 销量偏低 ({product['sale_num']}件), 可能需要调整价格或推广策略",
-                    "product_id": product["spu_id"],
+                    "alert_id": f"high_turnover_{int(turnover_days)}",
+                    "type": "inventory",
+                    "severity": "high" if turnover_days > 90 else "medium",
+                    "title": "库存周转天数过高",
+                    "description": f"库存周转天数: {turnover_days:.0f}天，远超行业标准30天，资金占用严重",
+                    "product_id": None,
                     "status": "pending",
-                    "created_at": "2026-03-01T06:20:00Z",
+                    "created_at": now_str,
                     "resolved_at": None,
                 }
             )
 
-    # 5. Zero stock/inventory alerts
+    # 5. Category concentration alert - too many products in one category
     with contextlib.suppress(Exception):
-        zero_stock_count = (
-            await pool.fetchval(
-                """SELECT COUNT(*) FROM qnh_products
-               WHERE status = '在售' AND (sale_num IS NULL OR sale_num = 0)"""
-            )
-            or 0
+        top_cat = await pool.fetchrow(
+            """SELECT category, COUNT(*)::int AS cnt FROM qnh_products
+               WHERE status = '在售' AND category != ''
+               GROUP BY category ORDER BY cnt DESC LIMIT 1"""
         )
-        if zero_stock_count > 0:
+        total = await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 1
+        if top_cat and top_cat["cnt"] > total * 0.3:
             alerts.append(
                 {
-                    "alert_id": f"zero_stock_count_{zero_stock_count}",
-                    "type": "inventory",
-                    "severity": "high",
-                    "title": "零库存商品提醒",
-                    "description": f"发现 {zero_stock_count} 个商品可能缺货，请及时补货",
+                    "alert_id": f"category_concentration_{top_cat['cnt']}",
+                    "type": "sales",
+                    "severity": "low",
+                    "title": "品类集中度偏高",
+                    "description": f"品类「{top_cat['category']}」占 {top_cat['cnt']}/{total} 个商品({top_cat['cnt'] * 100 // total}%)，建议丰富其他品类",
                     "product_id": None,
                     "status": "pending",
-                    "created_at": "2026-03-01T06:15:00Z",
+                    "created_at": now_str,
                     "resolved_at": None,
                 }
             )
