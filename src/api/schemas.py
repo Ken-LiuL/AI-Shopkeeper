@@ -193,6 +193,10 @@ class SalesRecord(BaseModel):
 class DashboardOverview(BaseModel):
     total_products: int = 0
     today_orders: int = 0
+    today_gmv: Decimal = Decimal("0")
+    avg_order_value: Decimal = Decimal("0")
+    total_customers: int = 0
+    conversion_rate: float = 0.0
     pending_alerts: int = 0
     pending_tasks: int = 0
 

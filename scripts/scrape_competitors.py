@@ -59,7 +59,19 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
     """Scrape nearby pharmacy stores from Meituan Waimai."""
     import nodriver as uc
 
-    browser = await uc.start(headless=headless)
+    # Configure Chengdu location
+    CHENGDU_LAT = 30.572816
+    CHENGDU_LNG = 104.066801
+
+    browser = await uc.start(
+        headless=headless,
+        no_sandbox=True,
+        browser_args=[
+            "--disable-blink-features=AutomationControlled",
+            "--disable-dev-shm-usage",
+            "--disable-background-timer-throttling",
+        ],
+    )
 
     stores = []
     products = []
@@ -69,9 +81,40 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
         page = await browser.get("https://h5.waimai.meituan.com/waimai/mindex/home")
         await asyncio.sleep(3)
 
+        # Try to set geolocation to Chengdu
+        try:
+            await page.execute_cdp_cmd(
+                "Emulation.setGeolocationOverride",
+                {"latitude": CHENGDU_LAT, "longitude": CHENGDU_LNG, "accuracy": 100},
+            )
+            logger.info(f"Set location to Chengdu: lat={CHENGDU_LAT}, lng={CHENGDU_LNG}")
+        except Exception as e:
+            logger.warning(f"Failed to set geolocation: {e}")
+
         # Try to get location permission or set city
         logger.info("Opened Meituan Waimai, waiting for page load...")
         await asyncio.sleep(5)
+
+        # Try to set location via JavaScript if supported
+        try:
+            await page.evaluate("""
+                if (navigator.geolocation) {
+                    navigator.geolocation.getCurrentPosition = function(success) {
+                        success({
+                            coords: {
+                                latitude: 30.572816,
+                                longitude: 104.066801,
+                                accuracy: 100
+                            }
+                        });
+                    };
+                }
+            """)
+            logger.info("Injected Chengdu coordinates via JavaScript")
+        except Exception as e:
+            logger.debug(f"JS geolocation injection failed: {e}")
+
+        await asyncio.sleep(3)
 
         # Search for pharmacies
         for keyword in SEARCH_KEYWORDS[:2]:

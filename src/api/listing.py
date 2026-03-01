@@ -25,6 +25,12 @@ router = APIRouter(prefix="/api/listing", tags=["listing"])
 logger = logging.getLogger(__name__)
 
 
+@router.get("/optimization", response_model=APIResponse[dict])
+async def listing_optimization() -> APIResponse[dict]:
+    """商品上架优化 — 待开通"""
+    return APIResponse(data=None, message="商品上架优化功能待开通，当前商品均通过牵牛花平台管理")
+
+
 @router.get("", response_model=PaginatedResponse[dict])
 async def list_listings(
     page: int = 1,

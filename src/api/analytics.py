@@ -182,3 +182,121 @@ async def get_conversion(days: int = Query(7, ge=1, le=90)) -> APIResponse:
             for r in records
         ]
     )
+
+
+@router.get("/sales-trend", response_model=APIResponse[list[dict]])
+async def sales_trend(days: int = Query(30, ge=1, le=90)) -> APIResponse:
+    """Sales trend analysis, reusing dashboard logic."""
+    import contextlib
+
+    from .dashboard import _extract_metric
+
+    pool = pg.get_pool()
+    results = []
+
+    # Try structured sales_history first
+    with contextlib.suppress(Exception):
+        rows = await pool.fetch(
+            """SELECT sale_date AS date, SUM(quantity)::int AS quantity, SUM(revenue) AS revenue
+               FROM sales_history
+               WHERE sale_date >= CURRENT_DATE - INTERVAL '%s days'
+               GROUP BY sale_date ORDER BY sale_date""",
+            days,
+        )
+        if rows:
+            results = [
+                {
+                    "date": str(r["date"]),
+                    "quantity": r["quantity"],
+                    "revenue": float(r["revenue"]),
+                }
+                for r in rows
+            ]
+
+    # Fallback: aggregate from raw metrics per day
+    if not results:
+        with contextlib.suppress(Exception):
+            raw_rows = await pool.fetch(
+                """SELECT DISTINCT ON (created_at::date)
+                          created_at::date AS date, raw_data
+                   FROM qnh_store_metrics_raw
+                   WHERE created_at >= CURRENT_DATE - make_interval(days => $1)
+                   ORDER BY created_at::date, created_at DESC""",
+                days,
+            )
+            for r in raw_rows:
+                import json
+
+                d = str(r["date"])
+                data = r["raw_data"]
+                if isinstance(data, str):
+                    data = json.loads(data)
+                orders = int(_extract_metric(data, "eff_ord_cnt"))
+                revenue = _extract_metric(data, "sale_amt_gmv")
+                results.append({"date": d, "quantity": orders, "revenue": revenue})
+            results = sorted(results, key=lambda x: x["date"])
+
+    return APIResponse(data=results)
+
+
+@router.get("/product-performance", response_model=APIResponse[list[dict]])
+async def product_performance() -> APIResponse:
+    """Product performance analysis from qnh_products."""
+    pool = pg.get_pool()
+    rows = await pool.fetch(
+        """SELECT spu_id AS product_id, name, category, retail_price, channel_price, status
+           FROM qnh_products
+           WHERE name != '' AND retail_price IS NOT NULL
+           ORDER BY retail_price DESC
+           LIMIT 50"""
+    )
+
+    return APIResponse(
+        data=[
+            {
+                "product_id": str(r["product_id"]),
+                "name": r["name"],
+                "category": r["category"],
+                "retail_price": float(r["retail_price"]) if r["retail_price"] else 0.0,
+                "channel_price": float(r["channel_price"]) if r["channel_price"] else 0.0,
+                "status": r["status"],
+                "performance_score": float(r["retail_price"])
+                if r["retail_price"]
+                else 0.0,  # Use price as proxy
+            }
+            for r in rows
+        ]
+    )
+
+
+@router.get("/category-analysis", response_model=APIResponse[list[dict]])
+async def category_analysis() -> APIResponse:
+    """Category analysis aggregated from qnh_products."""
+    pool = pg.get_pool()
+    rows = await pool.fetch(
+        """SELECT category,
+                  COUNT(*)::int AS product_count,
+                  AVG(retail_price) AS avg_price,
+                  MIN(retail_price) AS min_price,
+                  MAX(retail_price) AS max_price,
+                  COUNT(CASE WHEN status = '在售' THEN 1 END)::int AS active_products
+           FROM qnh_products
+           WHERE category IS NOT NULL AND category != '' AND retail_price IS NOT NULL
+           GROUP BY category
+           ORDER BY product_count DESC"""
+    )
+
+    return APIResponse(
+        data=[
+            {
+                "category": r["category"],
+                "product_count": r["product_count"],
+                "active_products": r["active_products"],
+                "avg_price": float(r["avg_price"]) if r["avg_price"] else 0.0,
+                "min_price": float(r["min_price"]) if r["min_price"] else 0.0,
+                "max_price": float(r["max_price"]) if r["max_price"] else 0.0,
+                "price_range": f"¥{float(r['min_price']) if r['min_price'] else 0:.1f} - ¥{float(r['max_price']) if r['max_price'] else 0:.1f}",
+            }
+            for r in rows
+        ]
+    )

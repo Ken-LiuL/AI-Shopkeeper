@@ -1,75 +1,116 @@
-'use client';
-import { ReactNode } from 'react';
+"use client"
 
-export interface Column<T> {
-  key: string;
-  label: string;
-  render?: (row: T) => ReactNode;
-  className?: string;
-}
+import * as React from "react"
 
-interface TableProps<T> {
-  columns: Column<T>[];
-  data: T[];
-  onRowClick?: (row: T) => void;
-  page?: number;
-  totalPages?: number;
-  onPageChange?: (page: number) => void;
-}
+import { cn } from "@/lib/utils"
 
-export function Table<T extends Record<string, any>>({ columns, data, onRowClick, page, totalPages, onPageChange }: TableProps<T>) {
+function Table({ className, ...props }: React.ComponentProps<"table">) {
   return (
-    <div>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-white/[0.08]">
-              {columns.map((col) => (
-                <th key={col.key} className={`text-left text-gray-400 font-medium py-3 px-4 ${col.className || ''}`}>
-                  {col.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {data.map((row, i) => (
-              <tr
-                key={i}
-                onClick={() => onRowClick?.(row)}
-                className={`border-b border-white/[0.04] ${onRowClick ? 'cursor-pointer hover:bg-white/[0.03]' : ''} transition-colors`}
-              >
-                {columns.map((col) => (
-                  <td key={col.key} className={`py-3 px-4 text-gray-300 ${col.className || ''}`}>
-                    {col.render ? col.render(row) : row[col.key]}
-                  </td>
-                ))}
-              </tr>
-            ))}
-            {data.length === 0 && (
-              <tr>
-                <td colSpan={columns.length} className="text-center text-gray-500 py-8">暂无数据</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {totalPages && totalPages > 1 && onPageChange && (
-        <div className="flex items-center justify-between mt-4 px-4">
-          <span className="text-sm text-gray-500">第 {page} / {totalPages} 页</span>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onPageChange(page! - 1)}
-              disabled={page === 1}
-              className="px-3 py-1 rounded bg-white/5 text-gray-400 text-sm disabled:opacity-30 hover:bg-white/10"
-            >上一页</button>
-            <button
-              onClick={() => onPageChange(page! + 1)}
-              disabled={page === totalPages}
-              className="px-3 py-1 rounded bg-white/5 text-gray-400 text-sm disabled:opacity-30 hover:bg-white/10"
-            >下一页</button>
-          </div>
-        </div>
-      )}
+    <div
+      data-slot="table-container"
+      className="relative w-full overflow-x-auto"
+    >
+      <table
+        data-slot="table"
+        className={cn("w-full caption-bottom text-sm", className)}
+        {...props}
+      />
     </div>
-  );
+  )
+}
+
+function TableHeader({ className, ...props }: React.ComponentProps<"thead">) {
+  return (
+    <thead
+      data-slot="table-header"
+      className={cn("[&_tr]:border-b", className)}
+      {...props}
+    />
+  )
+}
+
+function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
+  return (
+    <tbody
+      data-slot="table-body"
+      className={cn("[&_tr:last-child]:border-0", className)}
+      {...props}
+    />
+  )
+}
+
+function TableFooter({ className, ...props }: React.ComponentProps<"tfoot">) {
+  return (
+    <tfoot
+      data-slot="table-footer"
+      className={cn(
+        "bg-muted/50 border-t font-medium [&>tr]:last:border-b-0",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function TableRow({ className, ...props }: React.ComponentProps<"tr">) {
+  return (
+    <tr
+      data-slot="table-row"
+      className={cn(
+        "hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function TableHead({ className, ...props }: React.ComponentProps<"th">) {
+  return (
+    <th
+      data-slot="table-head"
+      className={cn(
+        "text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function TableCell({ className, ...props }: React.ComponentProps<"td">) {
+  return (
+    <td
+      data-slot="table-cell"
+      className={cn(
+        "p-2 align-middle whitespace-nowrap [&:has([role=checkbox])]:pr-0 [&>[role=checkbox]]:translate-y-[2px]",
+        className
+      )}
+      {...props}
+    />
+  )
+}
+
+function TableCaption({
+  className,
+  ...props
+}: React.ComponentProps<"caption">) {
+  return (
+    <caption
+      data-slot="table-caption"
+      className={cn("text-muted-foreground mt-4 text-sm", className)}
+      {...props}
+    />
+  )
+}
+
+export {
+  Table,
+  TableHeader,
+  TableBody,
+  TableFooter,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableCaption,
 }

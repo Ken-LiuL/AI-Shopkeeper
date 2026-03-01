@@ -13,6 +13,86 @@ from .schemas import APIResponse, PaginatedResponse
 router = APIRouter(prefix="/api/competitors", tags=["competitors"])
 
 
+@router.get("/overview", response_model=APIResponse[dict])
+async def competitors_overview() -> APIResponse[dict]:
+    """Competitor overview with counts and summary statistics."""
+    pool = pg.get_pool()
+
+    # Get competitor stores count
+    total_stores = 0
+    active_stores = 0
+    with contextlib.suppress(Exception):
+        total_stores = await pool.fetchval("SELECT COUNT(*) FROM competitor_stores") or 0
+        active_stores = (
+            await pool.fetchval(
+                """SELECT COUNT(*) FROM competitor_stores
+                   WHERE last_synced >= NOW() - INTERVAL '30 days'"""
+            )
+            or 0
+        )
+
+    # Get competitor products count
+    total_products = 0
+    active_products = 0
+    avg_price = 0.0
+    with contextlib.suppress(Exception):
+        total_products = await pool.fetchval("SELECT COUNT(*) FROM competitor_products") or 0
+        active_products = (
+            await pool.fetchval(
+                """SELECT COUNT(*) FROM competitor_products
+                   WHERE last_synced >= NOW() - INTERVAL '30 days'"""
+            )
+            or 0
+        )
+        avg_price = float(
+            await pool.fetchval(
+                "SELECT COALESCE(AVG(price), 0) FROM competitor_products WHERE price > 0"
+            )
+            or 0
+        )
+
+    # Get keywords count
+    total_keywords = 0
+    with contextlib.suppress(Exception):
+        total_keywords = await pool.fetchval("SELECT COUNT(*) FROM competitor_keywords") or 0
+
+    # Get top categories
+    top_categories = []
+    with contextlib.suppress(Exception):
+        category_rows = await pool.fetch(
+            """SELECT category, COUNT(*)::int AS product_count,
+                      AVG(price) AS avg_price
+               FROM competitor_products
+               WHERE category IS NOT NULL AND category != ''
+               GROUP BY category
+               ORDER BY product_count DESC
+               LIMIT 5"""
+        )
+        top_categories = [
+            {
+                "category": r["category"],
+                "product_count": r["product_count"],
+                "avg_price": float(r["avg_price"]) if r["avg_price"] else 0.0,
+            }
+            for r in category_rows
+        ]
+
+    return APIResponse(
+        data={
+            "summary": {
+                "total_stores": total_stores,
+                "active_stores": active_stores,
+                "total_products": total_products,
+                "active_products": active_products,
+                "total_keywords": total_keywords,
+                "avg_product_price": round(avg_price, 2),
+            },
+            "top_categories": top_categories,
+            "last_updated": "实时数据",
+        }
+    )
+
+
 @router.get("/stores", response_model=PaginatedResponse[dict])
 async def list_stores(
     page: int = Query(1, ge=1),
@@ -164,19 +244,21 @@ async def price_comparison(
                        ROUND(((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100)::numeric, 2) AS price_diff_pct
                 FROM qnh_products p
                 JOIN competitor_products cp ON (
-                    -- Better matching: same category AND reasonable price range
-                    cp.category = p.category 
+                    -- Fuzzy category matching: our categories are like "医用急救>纱布绷带胶带", competitor is "纱布"
+                    (p.category ILIKE '%' || cp.category || '%'
+                     OR cp.category ILIKE '%' || split_part(p.category, '>', 2) || '%'
+                     OR p.name ILIKE '%' || cp.category || '%')
                     AND cp.price > 0 AND p.retail_price > 0
                     AND (
-                        -- Only allow price differences within 10x bounds
-                        cp.price <= p.retail_price * 10 
+                        cp.price <= p.retail_price * 10
                         AND cp.price >= p.retail_price * 0.1
                     )
                 )
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
                 {where}
-                ORDER BY 
-                    -- Prioritize similar price ranges
+                ORDER BY
+                    -- Show meaningful comparisons: prioritize items with actual price differences
+                    CASE WHEN ABS(p.retail_price - cp.price) > 0.01 THEN 0 ELSE 1 END,
                     ABS(p.retail_price - cp.price) ASC
                 LIMIT ${idx}""",
             *params,

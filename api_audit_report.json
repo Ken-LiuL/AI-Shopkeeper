@@ -1,0 +1,72 @@
+{
+  "audit_timestamp": "2026-03-01T22:27:45.009916",
+  "summary": {
+    "passed_tests": 10,
+    "failed_tests": 8,
+    "total_issues": 8
+  },
+  "issues": [
+    {
+      "endpoint": "/health",
+      "type": "response_structure",
+      "description": "Missing or invalid 'success' boolean field",
+      "response_data": {
+        "status": "ok"
+      },
+      "timestamp": "2026-03-01T22:27:37.269471"
+    },
+    {
+      "endpoint": "/ready",
+      "type": "response_structure",
+      "description": "Missing or invalid 'success' boolean field",
+      "response_data": {
+        "status": "ok",
+        "postgres": true,
+        "redis": true
+      },
+      "timestamp": "2026-03-01T22:27:37.684092"
+    },
+    {
+      "endpoint": "/api/dashboard/overview",
+      "type": "data_quality",
+      "description": "GMV should be numeric, got: <class 'str'>",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:38.154661"
+    },
+    {
+      "endpoint": "/api/dashboard/sales-trends?period=7d",
+      "type": "response_structure",
+      "description": "Error response should have success=false",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:38.439759"
+    },
+    {
+      "endpoint": "/api/competitors/price-comparison",
+      "type": "data_quality",
+      "description": "All price differences are 0% - suspicious",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:39.388530"
+    },
+    {
+      "endpoint": "/api/metrics/summary",
+      "type": "response_structure",
+      "description": "Error response should have success=false",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:43.840887"
+    },
+    {
+      "endpoint": "/api/analytics/performance",
+      "type": "response_structure",
+      "description": "Error response should have success=false",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:44.725038"
+    },
+    {
+      "endpoint": "/api/system/stats",
+      "type": "response_structure",
+      "description": "Error response should have success=false",
+      "response_data": null,
+      "timestamp": "2026-03-01T22:27:45.008477"
+    }
+  ]
+}

@@ -59,6 +59,7 @@ async def _get_latest_metrics(pool) -> dict:
     return {}
 
 
+@router.get("", response_model=APIResponse[DashboardOverview])
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
@@ -71,11 +72,27 @@ async def overview() -> APIResponse[DashboardOverview]:
             or 0
         )
 
-    # Fallback: extract from raw metrics
-    if today_orders == 0:
-        metrics = await _get_latest_metrics(pool)
-        if metrics:
+    # Extract GMV / orders from raw metrics
+    today_gmv = 0.0
+    avg_order_value = 0.0
+    total_customers = 0
+    conversion_rate = 0.0
+    metrics = await _get_latest_metrics(pool)
+    if metrics:
+        if today_orders == 0:
             today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
+        today_gmv = _extract_metric(metrics, "sale_amt_gmv")
+        if today_gmv == 0:
+            today_gmv = _extract_metric(metrics, "actual_pay_amt")
+        total_customers = int(_extract_metric(metrics, "user_cnt"))
+        # Unit price from raw metric directly
+        avg_order_value = _extract_metric(metrics, "unit_price")
+        if avg_order_value == 0 and today_orders > 0 and today_gmv > 0:
+            avg_order_value = today_gmv / today_orders
+        # Conversion
+        expose_cnt = _extract_metric(metrics, "expose_cnt")
+        if expose_cnt > 0 and today_orders > 0:
+            conversion_rate = round(today_orders / expose_cnt * 100, 2)
 
     # Get pending alerts count dynamically
     pending_alerts = 0
@@ -94,14 +111,34 @@ async def overview() -> APIResponse[DashboardOverview]:
         with contextlib.suppress(Exception):
             pending_tasks += await pool.fetchval(q) or 0
 
+    from decimal import Decimal
+
     return APIResponse(
         data=DashboardOverview(
             total_products=total_products,
             today_orders=today_orders,
+            today_gmv=Decimal(str(round(today_gmv, 2))),
+            avg_order_value=Decimal(str(round(avg_order_value, 2))),
+            total_customers=total_customers,
+            conversion_rate=conversion_rate,
             pending_alerts=pending_alerts,
             pending_tasks=pending_tasks,
         )
     )
+
+
+@router.get("/alerts", response_model=APIResponse[list[dict]])
+async def dashboard_alerts() -> APIResponse[list[dict]]:
+    """Get dashboard alerts from smart alerts generator."""
+    pool = pg.get_pool()
+    try:
+        from .alerts import _generate_smart_alerts
+
+        alerts = await _generate_smart_alerts(pool)
+        return APIResponse(data=alerts)
+    except Exception as e:
+        logger.error("Failed to generate alerts: %s", e)
+        return APIResponse(data=[], message="Failed to load alerts")
 
 
 @router.get("/sales-trend", response_model=APIResponse[list[SalesTrendPoint]])

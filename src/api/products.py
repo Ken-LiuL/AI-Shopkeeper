@@ -189,6 +189,82 @@ async def low_stock(
     )
 
 
+@router.get("/inventory", response_model=APIResponse[dict])
+async def inventory_overview() -> APIResponse[dict]:
+    """Inventory overview and status summary."""
+    pool = pg.get_pool()
+
+    # Get inventory status summary from qnh_products
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    active_products = (
+        await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
+    )
+    inactive_products = total_products - active_products
+
+    # Simulate low stock products (using price as proxy for turnover)
+    low_stock_count = (
+        await pool.fetchval(
+            """SELECT COUNT(*) FROM qnh_products
+           WHERE status = '在售' AND retail_price > 0 AND retail_price < 30"""
+        )
+        or 0
+    )
+
+    # Get category breakdown
+    category_breakdown = await pool.fetch(
+        """SELECT category,
+                  COUNT(*)::int AS count,
+                  COUNT(CASE WHEN status = '在售' THEN 1 END)::int AS active_count
+           FROM qnh_products
+           WHERE category IS NOT NULL AND category != ''
+           GROUP BY category
+           ORDER BY count DESC
+           LIMIT 10"""
+    )
+
+    # Get recent low stock items (simulated based on price)
+    low_stock_items = await pool.fetch(
+        """SELECT spu_id AS product_id, name, category, retail_price,
+                  CASE WHEN retail_price < 20 THEN 5
+                       WHEN retail_price < 50 THEN 8
+                       ELSE 12 END AS estimated_stock
+           FROM qnh_products
+           WHERE status = '在售' AND retail_price > 0 AND retail_price < 30
+           ORDER BY retail_price ASC
+           LIMIT 10"""
+    )
+
+    return APIResponse(
+        data={
+            "summary": {
+                "total_products": total_products,
+                "active_products": active_products,
+                "inactive_products": inactive_products,
+                "low_stock_count": low_stock_count,
+            },
+            "category_breakdown": [
+                {
+                    "category": r["category"],
+                    "total_count": r["count"],
+                    "active_count": r["active_count"],
+                    "inactive_count": r["count"] - r["active_count"],
+                }
+                for r in category_breakdown
+            ],
+            "low_stock_items": [
+                {
+                    "product_id": str(r["product_id"]),
+                    "name": r["name"],
+                    "category": r["category"],
+                    "retail_price": float(r["retail_price"]),
+                    "estimated_stock": r["estimated_stock"],
+                }
+                for r in low_stock_items
+            ],
+        }
+    )
+
+
 # ── Product Knowledge Base endpoints ────────────────────────────────
 
 

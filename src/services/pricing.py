@@ -147,6 +147,17 @@ class PricingService:
                 product_id,
             )
 
+        # Fallback: try numeric id lookup
+        if not product:
+            try:
+                pid_int = int(product_id)
+                product = await pool.fetchrow(
+                    "SELECT spu_id as product_id, name, retail_price, NULL as cost_price FROM qnh_products WHERE id = $1",
+                    pid_int,
+                )
+            except (ValueError, TypeError):
+                pass
+
         if not product:
             raise ValueError(f"Product {product_id} not found")
 

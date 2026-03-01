@@ -23,11 +23,30 @@ class NotFoundError(AppError):
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    from fastapi import HTTPException
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
     @app.exception_handler(AppError)
     async def app_error_handler(_req: Request, exc: AppError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
-            content={"success": False, "message": exc.message, "detail": exc.detail},
+            content={"success": False, "data": None, "message": exc.message, "detail": exc.detail},
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_exception_handler(_req: Request, exc: HTTPException) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "data": None, "message": exc.detail},
+        )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def starlette_http_exception_handler(
+        _req: Request, exc: StarletteHTTPException
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"success": False, "data": None, "message": exc.detail},
         )
 
     @app.exception_handler(Exception)
@@ -37,6 +56,7 @@ def register_error_handlers(app: FastAPI) -> None:
             status_code=500,
             content={
                 "success": False,
+                "data": None,
                 "message": "Internal server error",
                 "debug": f"{type(exc).__name__}: {exc}",
             },

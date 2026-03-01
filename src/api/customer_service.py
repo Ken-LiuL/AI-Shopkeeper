@@ -286,6 +286,8 @@ async def get_stats() -> APIResponse[dict]:
         logger.error(f"Failed to get customer service stats: {e}")
 
         # Fallback: extract IM task data from qnh_orders_raw
+        im_sessions = 0
+        call_sessions = 0
         try:
             import json
 
@@ -296,36 +298,27 @@ async def get_stats() -> APIResponse[dict]:
                 data = raw_row["raw_data"]
                 if isinstance(data, str):
                     data = json.loads(data)
-
                 if isinstance(data, dict):
-                    upcoming_im_tasks = data.get("upcomingIMTaskCount", 0)
-                    upcoming_call_tasks = data.get("upcomingCallTaskCount", 0)
-
-                    return APIResponse(
-                        data={
-                            "total_sessions": upcoming_im_tasks + upcoming_call_tasks,
-                            "today_sessions": upcoming_im_tasks,
-                            "avg_session_length": 3.5,  # Estimated average
-                            "total_feedback": max(upcoming_im_tasks // 3, 1),
-                            "avg_rating": 4.2,  # Estimated positive rating
-                            "resolution_rate": 85.0,  # Estimated
-                            "human_transfer_rate": 15.0,  # Estimated
-                        }
-                    )
+                    im_sessions = data.get("upcomingIMTaskCount", 0)
+                    call_sessions = data.get("upcomingCallTaskCount", 0)
         except Exception as fallback_err:
             logger.warning(f"Fallback IM task extraction failed: {fallback_err}")
 
-        # Final fallback: default stats
         return APIResponse(
             data={
-                "total_sessions": 0,
-                "today_sessions": 0,
+                "total_sessions": im_sessions + call_sessions,
+                "today_sessions": im_sessions,
+                "pending_im_tasks": im_sessions,
+                "pending_call_tasks": call_sessions,
                 "avg_session_length": 0,
                 "total_feedback": 0,
                 "avg_rating": 0,
                 "resolution_rate": 0,
                 "human_transfer_rate": 0,
-            }
+                "note": "客服会话表未初始化，显示待处理任务数"
+                if (im_sessions + call_sessions) > 0
+                else "暂无客服数据",
+            },
         )
 
 

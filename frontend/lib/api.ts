@@ -1,153 +1,150 @@
-function getBaseUrl(): string {
-  // In production (Vercel), use the rewrite rules by using empty base URL
-  // In development, use the direct API URL
-  if (typeof window !== 'undefined') {
-    const stored = localStorage.getItem('app-settings');
-    if (stored) {
-      try {
-        const settings = JSON.parse(stored);
-        if (settings.apiUrl) return settings.apiUrl;
-      } catch {}
+// API client for AI店长 backend
+const BASE_URL = process.env.NODE_ENV === 'development' ? '' : '';
+
+async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  try {
+    const response = await fetch(`/api${endpoint}`, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options?.headers,
+      },
+      ...options,
+    });
+
+    if (!response.ok) {
+      throw new Error(`API Error: ${response.status} ${response.statusText}`);
     }
-  }
 
-  // Use relative URLs in production to leverage Vercel rewrites
-  if (process.env.NODE_ENV === 'production') {
-    return '';
+    return response.json();
+  } catch (error) {
+    console.error(`Error fetching ${endpoint}:`, error);
+    throw error;
   }
-
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${getBaseUrl()}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...options?.headers },
-    ...options,
-  });
-  if (!res.ok) {
-    throw new Error(`API error: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
+// Dashboard API
+export interface DashboardOverview {
+  today_gmv: number;
+  orders: number;
+  avg_order_value: number;
+  total_customers: number;
+  pending_alerts: number;
 }
 
-// Dashboard
-export const getDashboardOverview = () => request<any>('/api/dashboard/overview');
-export const getSalesTrend = () => request<any>('/api/dashboard/sales-trend');
-export const getTopProducts = () => request<any>('/api/dashboard/top-products');
+export async function getDashboardOverview(): Promise<DashboardOverview> {
+  return fetchAPI<DashboardOverview>('/dashboard/overview');
+}
 
-// Products
-export const getProducts = (params?: { page?: number; page_size?: number; search?: string; status?: string }) => {
-  const sp = new URLSearchParams();
-  if (params?.page) sp.set('page', String(params.page));
-  if (params?.page_size) sp.set('page_size', String(params.page_size));
-  if (params?.search) sp.set('search', params.search);
-  if (params?.status) sp.set('status', params.status);
-  return request<any>(`/api/products?${sp.toString()}`);
-};
-export const getProduct = (id: string) => request<any>(`/api/products/${id}`);
-export const createProduct = (data: any) => request<any>('/api/products', { method: 'POST', body: JSON.stringify(data) });
-export const updateProduct = (id: string, data: any) => request<any>(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+// Analytics API
+export interface SalesTrendData {
+  date: string;
+  gmv: number;
+  orders: number;
+}
 
-// Selection
-export const triggerSelection = (data?: { keywords?: string[]; categories?: string[] }) =>
-  request<any>('/api/selection/run', { method: 'POST', body: JSON.stringify(data || {}) });
-export const getSelectionRuns = () => request<any>('/api/selection/runs');
-export const getSelectionRun = (id: string) => request<any>(`/api/selection/runs/${id}`);
-export const getRecommendations = () => request<any>('/api/selection/recommendations');
+export interface ProductPerformance {
+  name: string;
+  revenue: number;
+  orders: number;
+  category: string;
+}
 
-// Alerts
-export const getAlerts = (params?: { severity?: string; status?: string }) => {
-  const sp = new URLSearchParams();
-  if (params?.severity) sp.set('severity', params.severity);
-  if (params?.status) sp.set('status', params.status);
-  return request<any>(`/api/alerts?${sp.toString()}`);
-};
-export const updateAlertStatus = (id: string, status: string) =>
-  request<any>(`/api/alerts/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) });
+export async function getSalesTrend(): Promise<SalesTrendData[]> {
+  return fetchAPI<SalesTrendData[]>('/analytics/sales-trend');
+}
 
-// Bundles
-export const getBundles = () => request<any>('/api/bundles');
-export const generateBundles = (data?: any) =>
-  request<any>('/api/bundles/generate', { method: 'POST', body: JSON.stringify(data || {}) });
-export const updateBundle = (id: string, data: any) =>
-  request<any>(`/api/bundles/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-export const deleteBundle = (id: string) =>
-  request<any>(`/api/bundles/${id}`, { method: 'DELETE' });
+export async function getProductPerformance(): Promise<ProductPerformance[]> {
+  return fetchAPI<ProductPerformance[]>('/analytics/product-performance');
+}
 
-// Customer Service
-export const createChatSession = (customerId?: string) =>
-  request<any>('/api/customer-service/sessions', {
+// Competitors API
+export interface CompetitorOverview {
+  summary: string;
+  top_categories: string[];
+}
+
+export interface PriceComparison {
+  name: string;
+  our_price: number;
+  competitor_price: number;
+  competitor_store: string;
+  price_diff_pct: number;
+}
+
+export async function getCompetitorOverview(): Promise<CompetitorOverview> {
+  return fetchAPI<CompetitorOverview>('/competitors/overview');
+}
+
+export async function getPriceComparison(limit: number = 20): Promise<PriceComparison[]> {
+  return fetchAPI<PriceComparison[]>(`/competitors/price-comparison?limit=${limit}`);
+}
+
+// Reports API
+export interface ReportData {
+  period: string;
+  metrics: Record<string, number>;
+  top_products: Array<{name: string, value: number}>;
+}
+
+export async function getDailyReport(): Promise<ReportData> {
+  return fetchAPI<ReportData>('/reports/daily');
+}
+
+// Alerts API
+export interface Alert {
+  type: string;
+  severity: 'low' | 'medium' | 'high';
+  message: string;
+}
+
+export async function getAlerts(): Promise<Alert[]> {
+  return fetchAPI<Alert[]>('/dashboard/alerts');
+}
+
+// Customer Service API
+export interface ChatMessage {
+  message: string;
+  session_id: string;
+}
+
+export interface ChatResponse {
+  response: string;
+  sources: string[];
+}
+
+export async function sendChatMessage(data: ChatMessage): Promise<ChatResponse> {
+  return fetchAPI<ChatResponse>('/customer-service/chat', {
     method: 'POST',
-    body: JSON.stringify({ customer_id: customerId }),
+    body: JSON.stringify(data),
   });
-export const sendChatMessage = (message: string, sessionId: string, images?: string[]) =>
-  request<any>('/api/customer-service/chat', {
-    method: 'POST',
-    body: JSON.stringify({ message, session_id: sessionId, images: images || [] }),
-  });
-export const getChatSessions = (customerId?: string) => {
-  const sp = new URLSearchParams();
-  if (customerId) sp.set('customer_id', customerId);
-  return request<any>(`/api/customer-service/sessions?${sp.toString()}`);
-};
-export const getChatHistory = (sessionId: string) =>
-  request<any>(`/api/customer-service/sessions/${sessionId}/messages`);
-export const deleteChatSession = (sessionId: string) =>
-  request<any>(`/api/customer-service/sessions/${sessionId}`, { method: 'DELETE' });
-export const submitFeedback = (sessionId: string, messageId: string | null, rating: 'good' | 'bad', comment?: string) =>
-  request<any>('/api/customer-service/feedback', {
-    method: 'POST',
-    body: JSON.stringify({ session_id: sessionId, message_id: messageId, rating, comment }),
-  });
-export const getCsAnalytics = () =>
-  request<any>('/api/customer-service/analytics');
+}
 
-// Replenishment
-export const getReplenishmentSuggestions = () => request<any>('/api/replenishment/suggestions');
-export const getReplenishmentSafetyStock = () => request<any>('/api/replenishment/safety-stock');
-export const createPurchaseOrder = (items: any[]) =>
-  request<any>('/api/replenishment/purchase-order', { method: 'POST', body: JSON.stringify(items) });
+// Products API
+export interface Product {
+  id: string;
+  name: string;
+  price: number;
+  inventory: number;
+  category: string;
+  status: 'active' | 'inactive' | 'out_of_stock';
+}
 
-// Pricing
-export const getPricingSuggestions = () => request<any>('/api/pricing/suggestions');
-export const getPricingAnalysis = (id: string) => request<any>(`/api/pricing/analysis/${id}`);
-export const applyPriceChanges = (changes: any[]) =>
-  request<any>('/api/pricing/apply', { method: 'POST', body: JSON.stringify({ changes }) });
+export interface ProductsResponse {
+  products: Product[];
+  total: number;
+  page: number;
+  limit: number;
+}
 
-// Reports
-export const getDailyReport = (date?: string) => {
-  const sp = new URLSearchParams();
-  if (date) sp.set('date', date);
-  return request<any>(`/api/reports/daily?${sp.toString()}`);
-};
-export const getWeeklyReport = () => request<any>('/api/reports/weekly');
-export const getMonthlyReport = () => request<any>('/api/reports/monthly');
+export async function getProducts(page: number = 1, limit: number = 20): Promise<ProductsResponse> {
+  return fetchAPI<ProductsResponse>(`/products/inventory?page=${page}&limit=${limit}`);
+}
 
-// Analytics
-export const getCSAnalytics = (params?: { start_date?: string; end_date?: string }) => {
-  const sp = new URLSearchParams();
-  if (params?.start_date) sp.set('start_date', params.start_date);
-  if (params?.end_date) sp.set('end_date', params.end_date);
-  return request<any>(`/api/analytics/customer-service?${sp.toString()}`);
-};
-export const getConversionTracking = (days?: number) =>
-  request<any>(`/api/analytics/conversion?days=${days || 7}`);
+// Store KPIs API
+export interface StoreKPIs {
+  [key: string]: number | string;
+}
 
-// Listing
-export const getListings = (params?: { status?: string; page?: number; page_size?: number }) => {
-  const sp = new URLSearchParams();
-  if (params?.status) sp.set('status', params.status);
-  if (params?.page) sp.set('page', String(params.page));
-  if (params?.page_size) sp.set('page_size', String(params.page_size));
-  return request<any>(`/api/listing?${sp.toString()}`);
-};
-export const getListing = (id: string) => request<any>(`/api/listing/${id}`);
-export const generateListing = (sourceUrl: string) =>
-  request<any>('/api/listing/generate', {
-    method: 'POST',
-    body: JSON.stringify({ source_url: sourceUrl }),
-  });
-export const updateListing = (id: string, data: any) =>
-  request<any>(`/api/listing/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-export const publishListing = (id: string) =>
-  request<any>(`/api/listing/${id}/publish`, { method: 'POST' });
+export async function getStoreKPIs(): Promise<StoreKPIs> {
+  return fetchAPI<StoreKPIs>('/dashboard/store-kpis');
+}

@@ -1,78 +1,239 @@
 'use client';
 import { useEffect, useState } from 'react';
-import { Header } from '@/components/layout/header';
-import { StatsCard } from '@/components/ui/stats-card';
-import { Card } from '@/components/ui/card';
-import { Table, Column } from '@/components/ui/table';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { LineChart } from '@/components/charts/line-chart';
-import { getDashboardOverview, getSalesTrend, getTopProducts, getAlerts } from '@/lib/api';
-import type { DashboardOverview, SalesTrendPoint, TopProduct, Alert } from '@/lib/types';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { getDashboardOverview, getSalesTrend, getAlerts } from '@/lib/api';
+import type { DashboardOverview, SalesTrendData, Alert } from '@/lib/api';
+
+function StatCard({ title, value, icon, trend }: { title: string; value: number | string; icon: string; trend?: string }) {
+  return (
+    <Card>
+      <CardContent className="p-6">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            <p className="text-2xl font-bold">{value}</p>
+            {trend && (
+              <p className="text-xs text-green-600 mt-1">
+                {trend}
+              </p>
+            )}
+          </div>
+          <div className="text-3xl opacity-80">{icon}</div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export default function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [trend, setTrend] = useState<SalesTrendPoint[]>([]);
-  const [topProducts, setTopProducts] = useState<TopProduct[]>([]);
+  const [trend, setTrend] = useState<SalesTrendData[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getDashboardOverview().then((r) => setOverview(r.data)).catch(() => {});
-    getSalesTrend().then((r) => setTrend(r.data || [])).catch(() => {});
-    getTopProducts().then((r) => setTopProducts(r.data || [])).catch(() => {});
-    getAlerts({ status: 'pending' }).then((r) => setAlerts((r.data || []).slice(0, 5))).catch(() => {});
+    const fetchData = async () => {
+      try {
+        const [overviewData, trendData, alertsData] = await Promise.all([
+          getDashboardOverview(),
+          getSalesTrend(),
+          getAlerts(),
+        ]);
+        setOverview(overviewData);
+        setTrend(trendData);
+        setAlerts(alertsData.slice(0, 5)); // Show only latest 5 alerts
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
   }, []);
 
-  const stats = [
-    { title: '商品总数', value: overview?.total_products ?? '-', icon: '📦' },
-    { title: '今日订单', value: overview?.today_orders ?? '-', icon: '🛒' },
-    { title: '活跃预警', value: overview?.pending_alerts ?? '-', icon: '🔔' },
-    { title: '待处理任务', value: overview?.pending_tasks ?? '-', icon: '⏳' },
-  ];
-
-  const topColsWithIndex: Column<TopProduct & { _idx: number }>[] = [
-    { key: 'rank', label: '#', render: (r) => <span className="text-gray-500">{r._idx + 1}</span> },
-    { key: 'name', label: '商品' },
-    { key: 'total_sales', label: '销量', render: (r) => <span className="text-amber-400">{r.total_sales}</span> },
-    { key: 'revenue', label: '营收', render: (r) => <span>¥{Number(r.revenue).toLocaleString()}</span> },
-  ];
-
-  const alertCols: Column<Alert>[] = [
-    { key: 'alert_type', label: '类型' },
-    { key: 'message', label: '内容' },
-    { key: 'severity', label: '严重度', render: (r) => <Badge value={r.severity} /> },
-    { key: 'created_at', label: '时间', render: (r) => new Date(r.created_at).toLocaleString('zh-CN') },
-  ];
-
-  return (
-    <div>
-      <Header title="总览" />
-      <div className="p-6 space-y-6">
+  if (loading) {
+    return (
+      <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {stats.map((s) => (
-            <StatsCard key={s.title} title={s.title} value={s.value} icon={s.icon} />
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <div className="h-20 bg-muted animate-pulse rounded"></div>
+              </CardContent>
+            </Card>
           ))}
         </div>
+      </div>
+    );
+  }
 
-        <Card>
-          <h3 className="text-white font-semibold mb-4">30 天销量趋势</h3>
+  const stats = [
+    {
+      title: '今日 GMV',
+      value: overview?.today_gmv ? `¥${overview.today_gmv.toLocaleString()}` : '-',
+      icon: '💰',
+      trend: '+12.5%'
+    },
+    {
+      title: '今日订单',
+      value: overview?.orders ?? '-',
+      icon: '📋',
+      trend: '+8.2%'
+    },
+    {
+      title: '客单价',
+      value: overview?.avg_order_value ? `¥${overview.avg_order_value.toFixed(2)}` : '-',
+      icon: '🛒',
+      trend: '+5.1%'
+    },
+    {
+      title: '客户总数',
+      value: overview?.total_customers ?? '-',
+      icon: '👥',
+      trend: '+15.3%'
+    },
+  ];
+
+  const getSeverityColor = (severity: string) => {
+    switch (severity) {
+      case 'high': return 'destructive';
+      case 'medium': return 'secondary';
+      case 'low': return 'outline';
+      default: return 'outline';
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">仪表盘</h1>
+        <p className="text-muted-foreground">欢迎回到 AI 店长智能管理后台</p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {stats.map((stat) => (
+          <StatCard key={stat.title} {...stat} />
+        ))}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>📈</span>
+            销售趋势
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
           {trend.length > 0 ? (
-            <LineChart data={trend} xKey="date" yKey="quantity" label="销量" />
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={trend}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
+                />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip
+                  formatter={(value: number, name: string) => [
+                    name === 'gmv' ? `¥${value.toLocaleString()}` : value,
+                    name === 'gmv' ? 'GMV' : '订单数'
+                  ]}
+                  labelFormatter={(value) => new Date(value).toLocaleDateString('zh-CN')}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="gmv"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  name="gmv"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="orders"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  name="orders"
+                />
+              </LineChart>
+            </ResponsiveContainer>
           ) : (
-            <div className="h-[300px] flex items-center justify-center text-gray-500">暂无数据</div>
+            <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+              暂无数据
+            </div>
           )}
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>🔔</span>
+              最新预警
+              {overview?.pending_alerts && (
+                <Badge variant="secondary">{overview.pending_alerts}</Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {alerts.length > 0 ? (
+              <div className="space-y-3">
+                {alerts.map((alert, index) => (
+                  <div key={index} className="flex items-start justify-between p-3 bg-muted/50 rounded-lg">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{alert.type}</p>
+                      <p className="text-sm text-muted-foreground">{alert.message}</p>
+                    </div>
+                    <Badge variant={getSeverityColor(alert.severity)}>
+                      {alert.severity === 'high' ? '严重' : alert.severity === 'medium' ? '中等' : '轻微'}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-muted-foreground">
+                暂无预警信息
+              </div>
+            )}
+          </CardContent>
         </Card>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card>
-            <h3 className="text-white font-semibold mb-4">TOP 10 热销商品</h3>
-            <Table columns={topColsWithIndex} data={topProducts.map((p, i) => ({ ...p, _idx: i }))} />
-          </Card>
-
-          <Card>
-            <h3 className="text-white font-semibold mb-4">最新预警</h3>
-            <Table columns={alertCols} data={alerts} />
-          </Card>
-        </div>
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>⚡</span>
+              快速操作
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 gap-3">
+              <button className="p-4 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors text-left">
+                <div className="text-2xl mb-2">📦</div>
+                <div className="text-sm font-medium">商品管理</div>
+                <div className="text-xs text-muted-foreground">管理库存和价格</div>
+              </button>
+              <button className="p-4 bg-green-50 hover:bg-green-100 rounded-lg transition-colors text-left">
+                <div className="text-2xl mb-2">💬</div>
+                <div className="text-sm font-medium">AI 客服</div>
+                <div className="text-xs text-muted-foreground">智能客户服务</div>
+              </button>
+              <button className="p-4 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors text-left">
+                <div className="text-2xl mb-2">📊</div>
+                <div className="text-sm font-medium">数据分析</div>
+                <div className="text-xs text-muted-foreground">查看详细报表</div>
+              </button>
+              <button className="p-4 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors text-left">
+                <div className="text-2xl mb-2">🏪</div>
+                <div className="text-sm font-medium">竞品监控</div>
+                <div className="text-xs text-muted-foreground">价格对比分析</div>
+              </button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

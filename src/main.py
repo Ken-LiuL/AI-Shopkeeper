@@ -526,9 +526,11 @@ app.add_middleware(
 
 # ─── Health check ────────────────────────────────────────────
 @app.get("/health", tags=["system"])
-async def health_check() -> dict[str, str]:
+async def health_check():
     """Basic liveness probe."""
-    return {"status": "ok"}
+    from src.api.schemas import APIResponse
+
+    return APIResponse(success=True, data={"status": "ok"}, message="System is healthy")
 
 
 @app.get("/debug/migrations", tags=["system"])
@@ -563,8 +565,10 @@ async def run_migrations_endpoint():
 
 
 @app.get("/ready", tags=["system"])
-async def readiness_check() -> dict[str, str | bool]:
+async def readiness_check():
     """Deep readiness probe — verify all dependencies."""
+    from src.api.schemas import APIResponse
+
     checks: dict[str, bool] = {}
 
     # PostgreSQL
@@ -590,7 +594,13 @@ async def readiness_check() -> dict[str, str | bool]:
         checks["redis"] = False
 
     all_ok = all(checks.values())
-    return {"status": "ok" if all_ok else "degraded", **checks}  # type: ignore[return-value]
+    status = "ok" if all_ok else "degraded"
+
+    return APIResponse(
+        success=all_ok,
+        data={"status": status, **checks},
+        message=f"System is {'ready' if all_ok else 'degraded'}",
+    )
 
 
 # ─── Register API routers ───────────────────────────────────
