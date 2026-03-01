@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC
 
 from fastapi import APIRouter, BackgroundTasks
 
@@ -83,6 +84,50 @@ async def sync_status() -> APIResponse[list[dict]]:
                   last_sync_duration_ms, updated_at
            FROM sync_state ORDER BY syncer_name"""
     )
+
+    # If no sync state exists, return default status info
+    if not rows:
+        from datetime import datetime
+
+        default_status = [
+            {
+                "syncer_name": "products",
+                "last_full_sync": None,
+                "last_incremental_sync": None,
+                "last_sync_status": "ready",
+                "last_sync_error": None,
+                "records_synced": 0,
+                "last_sync_duration_ms": None,
+                "updated_at": datetime.now(UTC),
+                "description": "商品数据同步器 - 等待手动触发",
+            },
+            {
+                "syncer_name": "orders",
+                "last_full_sync": None,
+                "last_incremental_sync": None,
+                "last_sync_status": "ready",
+                "last_sync_error": None,
+                "records_synced": 0,
+                "last_sync_duration_ms": None,
+                "updated_at": datetime.now(UTC),
+                "description": "订单数据同步器 - 等待手动触发",
+            },
+            {
+                "syncer_name": "metrics",
+                "last_full_sync": None,
+                "last_incremental_sync": None,
+                "last_sync_status": "ready",
+                "last_sync_error": None,
+                "records_synced": 0,
+                "last_sync_duration_ms": None,
+                "updated_at": datetime.now(UTC),
+                "description": "指标数据同步器 - 等待手动触发",
+            },
+        ]
+        return APIResponse(
+            data=default_status, message="同步状态初始化，可通过 /api/sync/trigger 手动触发同步"
+        )
+
     return APIResponse(data=[dict(r) for r in rows])
 
 

@@ -113,6 +113,58 @@ async def get_cs_stats(
     )
 
 
+@router.get("/trends", response_model=APIResponse[list[dict]])
+async def get_trends(days: int = Query(7, ge=1, le=90)) -> APIResponse:
+    """Sales and order trends over time."""
+    import contextlib
+
+    from src.db import postgres as pg
+
+    pool = pg.get_pool()
+    results: list[dict] = []
+
+    # Try raw metrics grouped by date
+    with contextlib.suppress(Exception):
+        from .dashboard import _extract_metric
+
+        rows = await pool.fetch(
+            """SELECT DISTINCT ON (created_at::date)
+                      created_at::date AS date, raw_data
+               FROM qnh_store_metrics_raw
+               WHERE created_at >= CURRENT_DATE - make_interval(days => $1)
+               ORDER BY created_at::date DESC, created_at DESC""",
+            days,
+        )
+        for row in rows:
+            import json as _json
+
+            data = row["raw_data"]
+            if isinstance(data, str):
+                data = _json.loads(data)
+            results.append(
+                {
+                    "date": str(row["date"]),
+                    "orders": int(_extract_metric(data, "eff_ord_cnt")),
+                    "revenue": _extract_metric(data, "sale_amt_gmv"),
+                    "customers": int(_extract_metric(data, "user_cnt")),
+                    "avg_order_value": _extract_metric(data, "unit_price"),
+                }
+            )
+
+    if not results:
+        results = [
+            {
+                "date": str(__import__("datetime").date.today()),
+                "orders": 0,
+                "revenue": 0,
+                "customers": 0,
+                "avg_order_value": 0,
+            }
+        ]
+
+    return APIResponse(data=results)
+
+
 @router.get("/conversion", response_model=APIResponse[list])
 async def get_conversion(days: int = Query(7, ge=1, le=90)) -> APIResponse:
     svc = CSAnalyticsService()

@@ -134,10 +134,19 @@ class PricingService:
         """单品价格分析（融合实际结算费率）"""
         pool = pg.get_pool()
 
+        # Try products table first
         product = await pool.fetchrow(
             "SELECT product_id, name, retail_price, cost_price FROM products WHERE product_id = $1",
             product_id,
         )
+
+        # Fallback to qnh_products table with spu_id
+        if not product:
+            product = await pool.fetchrow(
+                "SELECT spu_id as product_id, name, retail_price, NULL as cost_price FROM qnh_products WHERE spu_id = $1",
+                product_id,
+            )
+
         if not product:
             raise ValueError(f"Product {product_id} not found")
 
@@ -152,11 +161,13 @@ class PricingService:
         real_cost = cost + price * total_fee_rate + fee_rates["delivery_per_order"]
         margin = (price - real_cost) / price if price > 0 else 0
 
-        # 竞品价格
+        # 竞品价格 - try both tables
         comp_rows = await pool.fetch(
             """SELECT price FROM competitor_products
-               WHERE category = (SELECT category FROM products WHERE product_id = $1)
-                 AND price > 0""",
+               WHERE category = COALESCE(
+                   (SELECT category FROM products WHERE product_id = $1),
+                   (SELECT category FROM qnh_products WHERE spu_id = $1)
+               ) AND price > 0""",
             product_id,
         )
         comp_prices = [float(r["price"]) for r in comp_rows]

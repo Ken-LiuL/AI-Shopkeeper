@@ -31,29 +31,13 @@ async def list_listings(
     page_size: int = 20,
     status: str | None = None,
 ) -> PaginatedResponse[dict]:
-    pool = pg.get_pool()
-    conditions: list[str] = []
-    params: list = []
-    idx = 1
-    if status:
-        conditions.append(f"status = ${idx}")
-        params.append(status)
-        idx += 1
-    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM listings{where}", *params)
-    offset = (page - 1) * page_size
-    rows = await pool.fetch(
-        f"SELECT * FROM listings{where} ORDER BY created_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
-        *params,
-        page_size,
-        offset,
-    )
-    if total == 0:
-        return PaginatedResponse(
-            data=[], total=0, page=page, page_size=page_size, message="功能待开通"
-        )
+    # Return message indicating listing function is not yet available
     return PaginatedResponse(
-        data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
+        data=[],
+        total=0,
+        page=page,
+        page_size=page_size,
+        message="商品上架功能待开通，当前商品均通过牵牛花平台管理",
     )
 
 

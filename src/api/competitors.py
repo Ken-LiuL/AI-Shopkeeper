@@ -162,9 +162,13 @@ async def price_comparison(
                        cs.name AS competitor_store,
                        ROUND((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100, 2) AS price_diff_pct
                 FROM qnh_products p
-                JOIN competitor_products cp ON cp.category = p.category
+                JOIN competitor_products cp ON (
+                    cp.category = p.category
+                    OR cp.category LIKE '%' || p.category || '%'
+                    OR p.category LIKE '%' || SPLIT_PART(cp.category, '>', -1) || '%'
+                )
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
-                {where}
+                WHERE cp.price > 0 AND p.retail_price > 0 {"" if not where else " AND " + where[7:]}
                 ORDER BY price_diff_pct DESC LIMIT ${idx}""",
             *params,
         )

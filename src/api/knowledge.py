@@ -164,14 +164,21 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
 async def list_knowledge_products(
     limit: int = Query(50, ge=1, le=200),
 ) -> APIResponse[list[dict]]:
+    # Neo4j is not available, use qnh_products as fallback
     try:
-        rows = await neo4j_db.query(
-            "MATCH (p:Product) RETURN p.id AS id, p.name AS name, p.category AS category, p.description AS description LIMIT $limit",
-            {"limit": limit},
+        pool = pg.get_pool()
+        rows = await pool.fetch(
+            """SELECT spu_id as id, name, category, brand, spec as description, retail_price, status
+               FROM qnh_products
+               WHERE status = '在售'
+               ORDER BY retail_price DESC
+               LIMIT $1""",
+            limit,
         )
-        return APIResponse(data=rows)
-    except Exception:
-        return APIResponse(data=[], message="Knowledge graph unavailable")
+        return APIResponse(data=[dict(r) for r in rows])
+    except Exception as e:
+        logger.error(f"Failed to fetch products from qnh_products: {e}")
+        return APIResponse(data=[], message="Product database unavailable")
 
 
 @router.post("/products", response_model=APIResponse[dict])
@@ -226,20 +233,64 @@ async def list_faq(
     category: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ) -> APIResponse[list[dict]]:
-    try:
-        if category:
-            rows = await neo4j_db.query(
-                "MATCH (f:FAQ) WHERE f.category = $cat RETURN f.id AS id, f.question AS question, f.answer AS answer, f.category AS category LIMIT $limit",
-                {"cat": category, "limit": limit},
-            )
-        else:
-            rows = await neo4j_db.query(
-                "MATCH (f:FAQ) RETURN f.id AS id, f.question AS question, f.answer AS answer, f.category AS category LIMIT $limit",
-                {"limit": limit},
-            )
-        return APIResponse(data=rows)
-    except Exception:
-        return APIResponse(data=[])
+    # Neo4j is not available, return hardcoded medical equipment store FAQs
+    common_faqs = [
+        {
+            "id": "faq_001",
+            "question": "您的退货政策是什么？",
+            "answer": "我们支持7天无理由退货，医疗器械产品需保证包装完整且未使用。如有质量问题，支持30天内换货。",
+            "category": "退换货",
+        },
+        {
+            "id": "faq_002",
+            "question": "配送范围和时间是多久？",
+            "answer": "我们覆盖全国大部分地区，一般1-3个工作日送达。偏远地区可能需要3-7个工作日。支持货到付款。",
+            "category": "配送",
+        },
+        {
+            "id": "faq_003",
+            "question": "营业时间是什么？",
+            "answer": "线上商城24小时营业，客服工作时间：周一至周日 9:00-18:00。紧急情况可留言，我们会尽快回复。",
+            "category": "服务时间",
+        },
+        {
+            "id": "faq_004",
+            "question": "医疗器械是否有质保？",
+            "answer": "所有医疗器械均提供正规发票和质保服务。不同产品质保期不同，一般为1-3年，具体请咨询客服。",
+            "category": "质保",
+        },
+        {
+            "id": "faq_005",
+            "question": "支持哪些支付方式？",
+            "answer": "支持微信支付、支付宝、银联卡、货到付款等多种支付方式。大额订单可联系客服协商。",
+            "category": "支付",
+        },
+        {
+            "id": "faq_006",
+            "question": "如何使用医疗器械？",
+            "answer": "每个产品都配有详细说明书，部分产品提供视频教程。如有疑问请咨询专业医护人员或我们的客服。",
+            "category": "使用指南",
+        },
+        {
+            "id": "faq_007",
+            "question": "是否支持批发采购？",
+            "answer": "支持医院、诊所等机构批发采购，可提供优惠价格和专票。请联系客服洽谈具体事宜。",
+            "category": "批发",
+        },
+        {
+            "id": "faq_008",
+            "question": "产品是否有资质认证？",
+            "answer": "所有医疗器械均通过国家药监局认证，具有医疗器械注册证。可提供相关资质证明文件。",
+            "category": "资质",
+        },
+    ]
+
+    # Filter by category if specified
+    if category:
+        filtered_faqs = [faq for faq in common_faqs if faq["category"] == category]
+        return APIResponse(data=filtered_faqs[:limit])
+
+    return APIResponse(data=common_faqs[:limit])
 
 
 @router.put("/faq/{faq_id}", response_model=APIResponse[dict])

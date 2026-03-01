@@ -80,6 +80,11 @@ async def list_runs() -> APIResponse[list[SelectionRunSummary]]:
         "SELECT run_id, status, keywords, categories, result_count, created_at FROM selection_runs ORDER BY created_at DESC LIMIT 50"
     )
     items = [SelectionRunSummary(**dict(r)) for r in rows]
+
+    # If no runs exist, add helpful message
+    if not items:
+        return APIResponse(data=[], message="暂无选品运行记录")
+
     return APIResponse(data=items)
 
 
