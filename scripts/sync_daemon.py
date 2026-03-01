@@ -250,6 +250,7 @@ async def main() -> None:
     # 启动 Chrome
     browser = await nodriver.start(
         headless=os.environ.get("HEADLESS", "false").lower() == "true",
+        no_sandbox=True,
         browser_args=["--no-first-run", "--no-default-browser-check"],
     )
 

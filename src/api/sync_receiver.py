@@ -131,6 +131,16 @@ async def _insert_records(
 
     count = 0
     async with pool.acquire() as conn:
+        # Auto-create raw table if not exists
+        await conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS {table}_raw (
+                id SERIAL PRIMARY KEY,
+                source VARCHAR(50),
+                raw_data JSONB,
+                synced_at TEXT,
+                created_at TIMESTAMP DEFAULT NOW()
+            )
+        """)
         for row in data:
             await conn.execute(
                 f"""
