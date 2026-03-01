@@ -316,8 +316,8 @@ async def push_sync_data(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/status", response_model=SyncStatusResponse)
-async def sync_status() -> SyncStatusResponse:
+@router.get("/ingest-status", response_model=SyncStatusResponse)
+async def sync_ingest_status() -> SyncStatusResponse:
     """同步状态：最近同步时间和记录数。"""
     pool = await get_pool()
     async with pool.acquire() as conn:

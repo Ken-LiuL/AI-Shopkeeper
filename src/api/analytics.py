@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from datetime import date
 
@@ -25,7 +26,7 @@ async def get_overview() -> APIResponse:
         await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
     )
     total_orders = 0
-    total_revenue = 0
+    total_revenue = 0.0
     try:
         total_orders = await pool.fetchval("SELECT COUNT(*) FROM qnh_orders") or 0
         total_revenue = float(
@@ -33,6 +34,23 @@ async def get_overview() -> APIResponse:
         )
     except Exception:
         pass
+    # Fallback: raw metrics
+    if total_orders == 0:
+        try:
+            row = await pool.fetchrow("""
+                SELECT COUNT(*) AS cnt,
+                       COALESCE(SUM((raw_data->>'revenue')::numeric), 0) AS rev
+                FROM qnh_store_metrics_raw
+            """)
+            if row:
+                total_orders = row["cnt"] or 0
+                total_revenue = float(row["rev"] or 0)
+        except Exception:
+            pass
+    # Fallback: raw orders
+    if total_orders == 0:
+        with contextlib.suppress(Exception):
+            total_orders = await pool.fetchval("SELECT COUNT(*) FROM qnh_orders_raw") or 0
     return APIResponse(
         data={
             "total_products": total_products,
