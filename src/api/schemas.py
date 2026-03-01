@@ -26,6 +26,7 @@ class PaginatedResponse(BaseModel, Generic[T]):
     total: int = 0
     page: int = 1
     page_size: int = 20
+    message: str = ""
 
 
 class TaskCreatedResponse(BaseModel):
