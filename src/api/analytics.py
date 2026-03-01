@@ -34,19 +34,47 @@ async def get_overview() -> APIResponse:
         )
     except Exception:
         pass
-    # Fallback: raw metrics
+    # Fallback: raw metrics with complex JSON structure
     if total_orders == 0:
         try:
+            # Try to extract from complex JSON structure
             row = await pool.fetchrow("""
-                SELECT COUNT(*) AS cnt,
-                       COALESCE(SUM((raw_data->>'revenue')::numeric), 0) AS rev
-                FROM qnh_store_metrics_raw
+                SELECT raw_data FROM qnh_store_metrics_raw
+                ORDER BY created_at DESC LIMIT 1
             """)
-            if row:
-                total_orders = row["cnt"] or 0
-                total_revenue = float(row["rev"] or 0)
-        except Exception:
-            pass
+            if row and row["raw_data"]:
+                data = row["raw_data"]
+                if isinstance(data, dict):
+                    # Extract from current values or fallback to lastPeriodValue
+                    eff_ord_cnt = data.get("eff_ord_cnt", {})
+                    if eff_ord_cnt and isinstance(eff_ord_cnt, dict):
+                        current_val = eff_ord_cnt.get("indicValue", {}).get("originValue", 0)
+                        if current_val == 0:
+                            # Use reference data as fallback
+                            ref_val = (
+                                eff_ord_cnt.get("reference", {})
+                                .get("lastPeriodValue", {})
+                                .get("originValue", 0)
+                            )
+                            total_orders = int(ref_val) if ref_val else 0
+                        else:
+                            total_orders = int(current_val)
+
+                    # Extract revenue from sale_amt_gmv or actual_pay_amt
+                    sale_amt = data.get("sale_amt_gmv", {})
+                    if sale_amt and isinstance(sale_amt, dict):
+                        current_val = sale_amt.get("indicValue", {}).get("originValue", 0)
+                        if current_val == 0:
+                            ref_val = (
+                                sale_amt.get("reference", {})
+                                .get("lastPeriodValue", {})
+                                .get("originValue", 0)
+                            )
+                            total_revenue = float(ref_val) if ref_val else 0
+                        else:
+                            total_revenue = float(current_val)
+        except Exception as e:
+            logger.warning("Failed to parse complex raw metrics: %s", e)
     # Fallback: raw orders
     if total_orders == 0:
         with contextlib.suppress(Exception):

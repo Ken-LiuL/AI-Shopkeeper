@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+
 from fastapi import APIRouter, Query
 
 from src.db import postgres as pg
@@ -18,16 +20,46 @@ async def order_stats(
 ) -> APIResponse[dict]:
     """Order statistics: total amount, average price, refund rate."""
     pool = pg.get_pool()
-    row = await pool.fetchrow(
-        """SELECT COUNT(*)::int AS total_orders,
-                  COALESCE(SUM(total_amount), 0) AS total_amount,
-                  COALESCE(AVG(total_amount), 0) AS avg_amount,
-                  COUNT(*) FILTER (WHERE status = 'refunded')::int AS refunded_count
-           FROM orders
-           WHERE order_time >= CURRENT_DATE - make_interval(days => $1)""",
-        days,
+
+    # Try structured orders table first
+    row = None
+    with contextlib.suppress(Exception):
+        row = await pool.fetchrow(
+            """SELECT COUNT(*)::int AS total_orders,
+                      COALESCE(SUM(total_amount), 0) AS total_amount,
+                      COALESCE(AVG(total_amount), 0) AS avg_amount,
+                      COUNT(*) FILTER (WHERE status = 'refunded')::int AS refunded_count
+               FROM orders
+               WHERE order_time >= CURRENT_DATE - make_interval(days => $1)""",
+            days,
+        )
+
+    # Fallback: extract from raw metrics (complex nested JSON)
+    if not row or row["total_orders"] == 0:
+        with contextlib.suppress(Exception):
+            from .dashboard import _extract_metric, _get_latest_metrics
+
+            metrics = await _get_latest_metrics(pool)
+            if metrics:
+                total_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
+                total_revenue = _extract_metric(metrics, "sale_amt_gmv")
+                avg_amount = _extract_metric(metrics, "unit_price")
+
+                d = {
+                    "total_orders": total_orders,
+                    "total_amount": total_revenue,
+                    "avg_amount": avg_amount,
+                    "refunded_count": 0,
+                    "refund_rate": 0.0,
+                }
+                return APIResponse(data=d)
+
+    # Use structured data
+    d = (
+        dict(row)
+        if row
+        else {"total_orders": 0, "total_amount": 0, "avg_amount": 0, "refunded_count": 0}
     )
-    d = dict(row)
     d["refund_rate"] = round(d["refunded_count"] / max(d["total_orders"], 1), 4)
     return APIResponse(data=d)
 
