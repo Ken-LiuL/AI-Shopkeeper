@@ -3,8 +3,11 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import { getDashboardOverview, getSalesTrend, getAlerts } from '@/lib/api';
-import type { DashboardOverview, SalesTrendData, Alert } from '@/lib/api';
+import { withErrorBoundary } from '@/components/error-boundary';
+import { getDashboardOverview, getSalesTrend, getAlerts, getDailyInsights } from '@/lib/api';
+import type { DashboardOverview, SalesTrendData, Alert, DailyInsight } from '@/lib/api';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 function StatCard({ title, value, icon, trend }: { title: string; value: number | string; icon: string; trend?: string }) {
   return (
@@ -27,25 +30,31 @@ function StatCard({ title, value, icon, trend }: { title: string; value: number 
   );
 }
 
-export default function DashboardPage() {
+function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
   const [trend, setTrend] = useState<SalesTrendData[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
+  const [insights, setInsights] = useState<DailyInsight | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [overviewData, trendData, alertsData] = await Promise.all([
+        setError(null);
+        const [overviewData, trendData, alertsData, insightsData] = await Promise.all([
           getDashboardOverview(),
           getSalesTrend(),
           getAlerts(),
+          getDailyInsights(),
         ]);
         setOverview(overviewData);
         setTrend(trendData);
         setAlerts(alertsData.slice(0, 5)); // Show only latest 5 alerts
+        setInsights(insightsData);
       } catch (error) {
         console.error('Error fetching dashboard data:', error);
+        setError('加载数据失败，请稍后重试');
       } finally {
         setLoading(false);
       }
@@ -70,30 +79,50 @@ export default function DashboardPage() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">仪表盘</h1>
+          <p className="text-muted-foreground">欢迎回到 AI 店长智能管理后台</p>
+        </div>
+        <Card className="border-red-200">
+          <CardContent className="p-6 text-center">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
+            <p className="text-red-600 mb-4">{error}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+            >
+              重新加载
+            </button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const stats = [
     {
       title: '今日 GMV',
-      value: overview?.today_gmv ? `¥${overview.today_gmv.toLocaleString()}` : '-',
-      icon: '💰',
-      trend: '+12.5%'
+      value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '-',
+      icon: '💰'
     },
     {
       title: '今日订单',
-      value: overview?.orders ?? '-',
-      icon: '📋',
-      trend: '+8.2%'
+      value: overview?.today_orders ? Number(overview.today_orders).toLocaleString() : '-',
+      icon: '📋'
     },
     {
       title: '客单价',
-      value: overview?.avg_order_value ? `¥${overview.avg_order_value.toFixed(2)}` : '-',
-      icon: '🛒',
-      trend: '+5.1%'
+      value: overview?.avg_order_value ? `¥${Number(overview.avg_order_value).toFixed(2)}` : '-',
+      icon: '🛒'
     },
     {
       title: '客户总数',
-      value: overview?.total_customers ?? '-',
-      icon: '👥',
-      trend: '+15.3%'
+      value: overview?.total_customers ? Number(overview.total_customers).toLocaleString() : '-',
+      icon: '👥'
     },
   ];
 
@@ -129,7 +158,11 @@ export default function DashboardPage() {
         <CardContent>
           {trend.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={trend}>
+              <LineChart data={trend.map(item => ({ 
+                date: item.date, 
+                gmv: Number(item.revenue || 0), 
+                orders: Number(item.quantity || 0)
+              }))}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
@@ -185,8 +218,8 @@ export default function DashboardPage() {
                 {alerts.map((alert, index) => (
                   <div key={index} className="flex items-start justify-between p-3 bg-muted/50 rounded-lg">
                     <div className="space-y-1">
-                      <p className="text-sm font-medium">{alert.type}</p>
-                      <p className="text-sm text-muted-foreground">{alert.message}</p>
+                      <p className="text-sm font-medium">{alert.title || alert.type}</p>
+                      <p className="text-sm text-muted-foreground">{alert.description || alert.message}</p>
                     </div>
                     <Badge variant={getSeverityColor(alert.severity)}>
                       {alert.severity === 'high' ? '严重' : alert.severity === 'medium' ? '中等' : '轻微'}
@@ -235,6 +268,78 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* AI 经营洞察面板 */}
+      {insights && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>🤖</span>
+              AI 经营洞察
+              <Badge variant="outline">每日更新</Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                      📊 销售异常
+                    </h4>
+                    <div className="text-sm text-gray-700 bg-blue-50 p-3 rounded-lg">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {insights.sales_anomalies}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                      🔥 热销变化
+                    </h4>
+                    <div className="text-sm text-gray-700 bg-green-50 p-3 rounded-lg">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {insights.hot_products_changes}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                      🏪 竞品动态
+                    </h4>
+                    <div className="text-sm text-gray-700 bg-yellow-50 p-3 rounded-lg">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {insights.competitor_dynamics}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                  
+                  <div>
+                    <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
+                      💡 可操作建议
+                    </h4>
+                    <div className="text-sm text-gray-700 bg-purple-50 p-3 rounded-lg">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {insights.actionable_suggestions}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="text-xs text-gray-500 text-center border-t pt-4">
+                📅 数据更新时间: {new Date(insights.date).toLocaleString('zh-CN')}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
+
+export default withErrorBoundary(DashboardPage);

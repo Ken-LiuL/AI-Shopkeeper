@@ -115,7 +115,16 @@ class BrowserClient:
         # 优先从配置文件加载
         if COOKIE_CONFIG_FILE.exists():
             try:
-                cookies_dict = json.loads(COOKIE_CONFIG_FILE.read_text())
+                raw = json.loads(COOKIE_CONFIG_FILE.read_text())
+                if isinstance(raw, list):
+                    # nodriver format: [{name, value, ...}, ...]
+                    cookies_dict = {
+                        str(item["name"]): str(item["value"])
+                        for item in raw
+                        if "name" in item and "value" in item
+                    }
+                elif isinstance(raw, dict):
+                    cookies_dict = raw
                 logger.info("从 %s 加载了 %d 个 cookies", COOKIE_CONFIG_FILE, len(cookies_dict))
             except Exception as e:
                 logger.warning("加载 cookie 配置文件失败: %s", e)

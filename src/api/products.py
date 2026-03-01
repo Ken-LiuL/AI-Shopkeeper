@@ -24,6 +24,81 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/products", tags=["products"])
 
+# V1 API compatibility router
+v1_router = APIRouter(prefix="/api/v1/products", tags=["products_v1"])
+
+
+@v1_router.get("/list", response_model=PaginatedResponse[dict])
+async def list_products_v1(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    status: str | None = Query(None),
+) -> PaginatedResponse[dict]:
+    """V1 API compatibility endpoint for products list."""
+    pool = pg.get_pool()
+    conditions: list[str] = []
+    params: list = []
+    idx = 1
+
+    if search:
+        conditions.append(f"(name ILIKE ${idx} OR brand ILIKE ${idx})")
+        params.append(f"%{search}%")
+        idx += 1
+    if status:
+        # Map v1 status to qnh_products status
+        qnh_status = "在售" if status == "active" else "下架"
+        conditions.append(f"status = ${idx}")
+        params.append(qnh_status)
+        idx += 1
+
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    try:
+        # Read from qnh_products (synced from QNH platform)
+        total = await pool.fetchval(f"SELECT COUNT(*) FROM qnh_products{where}", *params) or 0
+
+        offset = (page - 1) * page_size
+        params_page = params + [page_size, offset]
+        rows = await pool.fetch(
+            f"""SELECT
+                spu_id AS product_id,
+                name,
+                brand,
+                category,
+                retail_price,
+                channel_price,
+                cost_price,
+                status,
+                synced_at AS created_at,
+                synced_at AS updated_at
+            FROM qnh_products{where}
+            ORDER BY synced_at DESC
+            LIMIT ${idx} OFFSET ${idx + 1}""",
+            *params_page,
+        )
+
+        # Convert to expected format and handle data types
+        processed_rows = []
+        for row in rows:
+            try:
+                row_dict = dict(row)
+                # Ensure numeric fields are properly converted
+                for price_field in ["retail_price", "channel_price", "cost_price"]:
+                    if row_dict.get(price_field) is not None:
+                        row_dict[price_field] = float(row_dict[price_field])
+                processed_rows.append(row_dict)
+            except Exception as e:
+                logger.error(f"Error processing product row: {e}, row: {dict(row)}")
+                continue
+
+        return PaginatedResponse(data=processed_rows, total=total, page=page, page_size=page_size)
+
+    except Exception as e:
+        logger.error(f"Error in list_products_v1: {e}")
+        # Return empty result on error
+        return PaginatedResponse(data=[], total=0, page=page, page_size=page_size)
+
 
 # ── Fixed-path routes MUST be defined before /{product_id} ──
 

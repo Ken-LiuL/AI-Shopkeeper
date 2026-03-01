@@ -108,8 +108,17 @@ class QNHAuth:
                 return {}
             data = json.loads(COOKIE_CONFIG_FILE.read_text())
             if isinstance(data, dict) and data:
-                logger.debug("Found %d cookies in config file", len(data))
+                logger.debug("Found %d cookies in config file (dict)", len(data))
                 return {str(k): str(v) for k, v in data.items()}
+            if isinstance(data, list) and data:
+                # nodriver format: [{name, value, domain, ...}, ...]
+                cookies = {}
+                for item in data:
+                    if isinstance(item, dict) and "name" in item and "value" in item:
+                        cookies[str(item["name"])] = str(item["value"])
+                if cookies:
+                    logger.debug("Found %d cookies in config file (list)", len(cookies))
+                    return cookies
             return {}
         except Exception as e:
             logger.warning("Failed to load config file cookies: %s", e)

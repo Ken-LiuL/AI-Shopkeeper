@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { withErrorBoundary } from '@/components/error-boundary';
 import { sendChatMessage } from '@/lib/api';
 import type { ChatMessage, ChatResponse } from '@/lib/api';
 
@@ -12,14 +13,22 @@ interface Message {
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
-  sources?: string[];
+  sources?: Array<{
+    id: string;
+    name: string;
+    category: string;
+    price: number;
+    description: string;
+  }>;
+  intent?: string;
+  needsHuman?: boolean;
 }
 
 function generateSessionId() {
   return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 }
 
-export default function ChatPage() {
+function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome',
@@ -68,9 +77,11 @@ export default function ChatPage() {
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: response.response,
+        content: response.reply,
         timestamp: new Date(),
         sources: response.sources,
+        intent: response.intent,
+        needsHuman: response.needs_human,
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -183,13 +194,24 @@ export default function ChatPage() {
                       </div>
                       {message.sources && message.sources.length > 0 && (
                         <div className="mt-2 pt-2 border-t border-white/20">
-                          <div className="text-xs opacity-70 mb-1">参考来源：</div>
-                          <div className="flex flex-wrap gap-1">
-                            {message.sources.map((source, index) => (
-                              <Badge key={index} variant="secondary" className="text-xs">
-                                {source}
-                              </Badge>
+                          <div className="text-xs opacity-70 mb-1">相关商品：</div>
+                          <div className="space-y-1">
+                            {message.sources.slice(0, 3).map((source, index) => (
+                              <div key={index} className="text-xs bg-white/10 rounded p-2">
+                                <div className="font-medium">{source.name}</div>
+                                <div className="text-xs opacity-70">
+                                  {source.category} | ¥{Number(source.price).toFixed(2)}
+                                </div>
+                              </div>
                             ))}
+                          </div>
+                        </div>
+                      )}
+                      {message.needsHuman && (
+                        <div className="mt-2 pt-2 border-t border-white/20">
+                          <div className="text-xs text-yellow-200 flex items-center gap-1">
+                            <span>⚠️</span>
+                            建议转人工客服
                           </div>
                         </div>
                       )}
@@ -241,3 +263,5 @@ export default function ChatPage() {
     </div>
   );
 }
+
+export default withErrorBoundary(ChatPage);

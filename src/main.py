@@ -14,19 +14,24 @@ from fastapi.middleware.cors import CORSMiddleware
 from src.api.alerts import router as alerts_router
 from src.api.analytics import router as analytics_router
 from src.api.bundles import router as bundles_router
+from src.api.chat import router as chat_router
 from src.api.competitors import router as competitors_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
+from src.api.insights import router as insights_router
+from src.api.inventory import router as inventory_router
 from src.api.knowledge import router as knowledge_router
 from src.api.listing import router as listing_router
 from src.api.metrics_api import router as metrics_router
 from src.api.orders import router as orders_router
 from src.api.pricing import router as pricing_router
 from src.api.products import router as products_router
+from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
 from src.api.selection import router as selection_router
+from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.system import router as system_router
@@ -604,12 +609,14 @@ async def readiness_check():
 
 
 # ─── Register API routers ───────────────────────────────────
+app.include_router(chat_router)
 app.include_router(selection_router)
 app.include_router(cs_router)
 app.include_router(alerts_router)
 app.include_router(bundles_router)
 app.include_router(listing_router)
 app.include_router(products_router)
+app.include_router(products_v1_router)
 app.include_router(dashboard_router)
 app.include_router(sync_router)
 app.include_router(sync_receiver_router)
@@ -622,6 +629,9 @@ app.include_router(competitors_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
 app.include_router(analytics_router)
+app.include_router(inventory_router)
+app.include_router(insights_router)
+app.include_router(stores_router)
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)

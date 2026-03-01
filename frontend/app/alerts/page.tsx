@@ -12,21 +12,25 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { withErrorBoundary } from '@/components/error-boundary';
 import { getAlerts } from '@/lib/api';
 import type { Alert } from '@/lib/api';
 
-export default function AlertsPage() {
+function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [severityFilter, setSeverityFilter] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchAlerts = async () => {
       try {
+        setError(null);
         const data = await getAlerts();
         setAlerts(data);
       } catch (error) {
         console.error('Error fetching alerts:', error);
+        setError('加载预警数据失败，请稍后重试');
       } finally {
         setLoading(false);
       }
@@ -56,10 +60,24 @@ export default function AlertsPage() {
   const getAlertIcon = (type: string) => {
     switch (type.toLowerCase()) {
       case 'inventory': return '📦';
-      case 'price': return '💰';
-      case 'sales': return '📈';
+      case 'pricing': return '💰';
+      case 'stockout': return '📦';
+      case 'performance': return '📈';
+      case 'system': return '⚙️';
       case 'customer': return '👥';
       default: return '⚠️';
+    }
+  };
+
+  const getTypeText = (type: string) => {
+    switch (type.toLowerCase()) {
+      case 'inventory': return '库存';
+      case 'pricing': return '价格';
+      case 'stockout': return '缺货';
+      case 'performance': return '性能';
+      case 'system': return '系统';
+      case 'customer': return '客户';
+      default: return type;
     }
   };
 
@@ -76,6 +94,13 @@ export default function AlertsPage() {
   if (loading) {
     return (
       <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">预警中心</h1>
+            <p className="text-muted-foreground">监控系统异常和重要提醒</p>
+          </div>
+          <Button disabled>设置预警规则</Button>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[1, 2, 3].map((i) => (
             <Card key={i}>
@@ -85,6 +110,33 @@ export default function AlertsPage() {
             </Card>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold tracking-tight">预警中心</h1>
+            <p className="text-muted-foreground">监控系统异常和重要提醒</p>
+          </div>
+          <Button disabled>设置预警规则</Button>
+        </div>
+        <Card className="border-red-200">
+          <CardContent className="p-6 text-center">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
+            <p className="text-red-600 mb-4">{error}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+            >
+              重新加载
+            </button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -189,17 +241,19 @@ export default function AlertsPage() {
                 <TableRow>
                   <TableHead>类型</TableHead>
                   <TableHead>严重度</TableHead>
-                  <TableHead>消息</TableHead>
+                  <TableHead>标题</TableHead>
+                  <TableHead>描述</TableHead>
+                  <TableHead>状态</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredAlerts.map((alert, index) => (
-                  <TableRow key={index}>
+                  <TableRow key={alert.alert_id || index}>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <span className="text-lg">{getAlertIcon(alert.type)}</span>
-                        <span className="capitalize">{alert.type}</span>
+                        <span className="capitalize">{getTypeText(alert.type)}</span>
                       </div>
                     </TableCell>
                     <TableCell>
@@ -207,17 +261,27 @@ export default function AlertsPage() {
                         {getSeverityText(alert.severity)}
                       </Badge>
                     </TableCell>
+                    <TableCell className="max-w-xs">
+                      <div className="font-medium">{alert.title}</div>
+                    </TableCell>
                     <TableCell className="max-w-md">
-                      <div className="truncate">{alert.message}</div>
+                      <div className="text-sm text-muted-foreground truncate">{alert.description}</div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={alert.status === 'resolved' ? 'default' : 'secondary'}>
+                        {alert.status === 'pending' ? '待处理' : alert.status === 'resolved' ? '已解决' : alert.status}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex gap-2 justify-end">
                         <Button variant="ghost" size="sm">
                           查看详情
                         </Button>
-                        <Button variant="outline" size="sm">
-                          标记已读
-                        </Button>
+                        {alert.status === 'pending' && (
+                          <Button variant="outline" size="sm">
+                            标记已解决
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -257,3 +321,5 @@ export default function AlertsPage() {
     </div>
   );
 }
+
+export default withErrorBoundary(AlertsPage);

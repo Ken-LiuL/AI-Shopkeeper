@@ -18,10 +18,12 @@ export default function CompetitorsPage() {
   const [overview, setOverview] = useState<CompetitorOverview | null>(null);
   const [priceComparison, setPriceComparison] = useState<PriceComparison[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
+        setError(null);
         const [overviewData, priceData] = await Promise.all([
           getCompetitorOverview(),
           getPriceComparison(20),
@@ -30,6 +32,7 @@ export default function CompetitorsPage() {
         setPriceComparison(priceData);
       } catch (error) {
         console.error('Error fetching competitor data:', error);
+        setError('加载竞品数据失败，请稍后重试');
       } finally {
         setLoading(false);
       }
@@ -54,6 +57,10 @@ export default function CompetitorsPage() {
   if (loading) {
     return (
       <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">竞品监控</h1>
+          <p className="text-muted-foreground">实时监控竞争对手价格和产品策略</p>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {[1, 2].map((i) => (
             <Card key={i}>
@@ -63,6 +70,30 @@ export default function CompetitorsPage() {
             </Card>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">竞品监控</h1>
+          <p className="text-muted-foreground">实时监控竞争对手价格和产品策略</p>
+        </div>
+        <Card className="border-red-200">
+          <CardContent className="p-6 text-center">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
+            <p className="text-red-600 mb-4">{error}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+            >
+              重新加载
+            </button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -81,7 +112,7 @@ export default function CompetitorsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">监控店铺</p>
-                <p className="text-3xl font-bold text-blue-600">9</p>
+                <p className="text-3xl font-bold text-blue-600">{Number(overview?.summary.total_stores || 0).toLocaleString()}</p>
                 <p className="text-sm text-muted-foreground mt-1">个竞争对手</p>
               </div>
               <div className="text-4xl">🏪</div>
@@ -94,7 +125,7 @@ export default function CompetitorsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">监控商品</p>
-                <p className="text-3xl font-bold text-green-600">78</p>
+                <p className="text-3xl font-bold text-green-600">{Number(overview?.summary.total_products || 0).toLocaleString()}</p>
                 <p className="text-sm text-muted-foreground mt-1">个产品</p>
               </div>
               <div className="text-4xl">📦</div>
@@ -107,7 +138,10 @@ export default function CompetitorsPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-muted-foreground">价格优势</p>
-                <p className="text-3xl font-bold text-purple-600">62%</p>
+                <p className="text-3xl font-bold text-purple-600">
+                  {priceComparison.length > 0 ? 
+                    Math.round((priceComparison.filter(item => Number(item.price_diff_pct || 0) <= 0).length / priceComparison.length) * 100) : 0}%
+                </p>
                 <p className="text-sm text-muted-foreground mt-1">商品更有优势</p>
               </div>
               <div className="text-4xl">💰</div>
@@ -129,15 +163,18 @@ export default function CompetitorsPage() {
             <div className="space-y-4">
               <div>
                 <h4 className="font-medium mb-2">总体情况</h4>
-                <p className="text-muted-foreground">{overview.summary}</p>
+                <p className="text-muted-foreground">
+                  监控 {Number(overview.summary.total_stores)} 家竞品店铺，{Number(overview.summary.total_products)} 个商品，{Number(overview.summary.total_keywords)} 个品类。
+                  平均商品价格 ¥{Number(overview.summary.avg_product_price).toFixed(2)}。
+                </p>
               </div>
 
               <div>
                 <h4 className="font-medium mb-2">主要竞争品类</h4>
                 <div className="flex flex-wrap gap-2">
-                  {overview.top_categories.map((category, index) => (
+                  {overview.top_categories.map((cat, index) => (
                     <Badge key={index} variant="secondary">
-                      {category}
+                      {cat.category} ({Number(cat.product_count)} 个商品, 均价¥{Number(cat.avg_price).toFixed(0)})
                     </Badge>
                   ))}
                 </div>
@@ -174,23 +211,23 @@ export default function CompetitorsPage() {
                   <TableRow key={index}>
                     <TableCell className="font-medium">{item.name}</TableCell>
                     <TableCell className="text-right font-semibold">
-                      ¥{item.our_price.toFixed(2)}
+                      ¥{Number(item.our_price).toFixed(2)}
                     </TableCell>
                     <TableCell className="text-right">
-                      ¥{item.competitor_price.toFixed(2)}
+                      ¥{Number(item.competitor_price).toFixed(2)}
                     </TableCell>
                     <TableCell>
                       <Badge variant="outline">{item.competitor_store}</Badge>
                     </TableCell>
-                    <TableCell className={`text-right font-medium ${getPriceDiffColor(item.price_diff_pct)}`}>
-                      {item.price_diff_pct.toFixed(1)}%
+                    <TableCell className={`text-right font-medium ${getPriceDiffColor(Number(item.price_diff_pct))}`}>
+                      {Number(item.price_diff_pct).toFixed(1)}%
                     </TableCell>
                     <TableCell>
                       <Badge
-                        variant={item.price_diff_pct <= 0 ? "default" : "secondary"}
-                        className={item.price_diff_pct <= 0 ? "bg-green-100 text-green-800" : ""}
+                        variant={Number(item.price_diff_pct) <= 0 ? "default" : "secondary"}
+                        className={Number(item.price_diff_pct) <= 0 ? "bg-green-100 text-green-800" : ""}
                       >
-                        {getPriceDiffText(item.price_diff_pct)}
+                        {getPriceDiffText(Number(item.price_diff_pct))}
                       </Badge>
                     </TableCell>
                   </TableRow>

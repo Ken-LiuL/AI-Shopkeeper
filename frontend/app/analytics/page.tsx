@@ -15,27 +15,33 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getSalesTrend, getProductPerformance } from '@/lib/api';
-import type { SalesTrendData, ProductPerformance } from '@/lib/api';
+import { getSalesTrend, getProductPerformance, getCategoryAnalysis } from '@/lib/api';
+import type { SalesTrendData, ProductPerformance, CategoryAnalysis } from '@/lib/api';
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
 export default function AnalyticsPage() {
   const [trend, setTrend] = useState<SalesTrendData[]>([]);
   const [products, setProducts] = useState<ProductPerformance[]>([]);
+  const [categories, setCategories] = useState<CategoryAnalysis[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [trendData, productsData] = await Promise.all([
+        setError(null);
+        const [trendData, productsData, categoriesData] = await Promise.all([
           getSalesTrend(),
           getProductPerformance(),
+          getCategoryAnalysis(),
         ]);
         setTrend(trendData);
         setProducts(productsData);
+        setCategories(categoriesData);
       } catch (error) {
         console.error('Error fetching analytics data:', error);
+        setError('加载分析数据失败，请稍后重试');
       } finally {
         setLoading(false);
       }
@@ -44,20 +50,21 @@ export default function AnalyticsPage() {
     fetchData();
   }, []);
 
-  // Group products by category for pie chart
-  const categoryData = products.reduce((acc, product) => {
-    const existing = acc.find(item => item.name === product.category);
-    if (existing) {
-      existing.value += product.revenue;
-    } else {
-      acc.push({ name: product.category, value: product.revenue });
-    }
-    return acc;
-  }, [] as { name: string; value: number }[]);
+  // Use real category analysis data for pie chart
+  const categoryData = categories.slice(0, 6).map(category => ({
+    name: category.category.split('>').pop() || category.category,
+    value: Number(category.avg_price) * Number(category.product_count),
+    productCount: Number(category.product_count),
+    avgPrice: Number(category.avg_price)
+  }));
 
   if (loading) {
     return (
       <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">数据分析</h1>
+          <p className="text-muted-foreground">深入了解您的业务表现和趋势</p>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {[1, 2, 3, 4].map((i) => (
             <Card key={i}>
@@ -67,6 +74,30 @@ export default function AnalyticsPage() {
             </Card>
           ))}
         </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">数据分析</h1>
+          <p className="text-muted-foreground">深入了解您的业务表现和趋势</p>
+        </div>
+        <Card className="border-red-200">
+          <CardContent className="p-6 text-center">
+            <div className="text-red-500 text-4xl mb-4">⚠️</div>
+            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
+            <p className="text-red-600 mb-4">{error}</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+            >
+              重新加载
+            </button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -89,7 +120,11 @@ export default function AnalyticsPage() {
         <CardContent>
           {trend.length > 0 ? (
             <ResponsiveContainer width="100%" height={400}>
-              <LineChart data={trend}>
+              <LineChart data={trend.map(item => ({ 
+                date: item.date, 
+                gmv: Number(item.revenue || 0), 
+                orders: Number(item.quantity || 0)
+              }))}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis
                   dataKey="date"
@@ -143,7 +178,10 @@ export default function AnalyticsPage() {
           <CardContent>
             {products.length > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={products.slice(0, 10)}>
+                <BarChart data={products.slice(0, 10).map(product => ({
+                  name: product.name.length > 20 ? product.name.substring(0, 20) + '...' : product.name,
+                  revenue: Number(product.performance_score)
+                }))}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis
                     dataKey="name"
@@ -153,7 +191,7 @@ export default function AnalyticsPage() {
                     height={60}
                   />
                   <YAxis tick={{ fontSize: 12 }} />
-                  <Tooltip formatter={(value: number) => [`¥${value.toLocaleString()}`, '收入']} />
+                  <Tooltip formatter={(value: number) => [`¥${value.toLocaleString()}`, '评分']} />
                   <Bar dataKey="revenue" fill="#3b82f6" />
                 </BarChart>
               </ResponsiveContainer>
@@ -220,14 +258,14 @@ export default function AnalyticsPage() {
                   <TableHead className="w-[100px]">排名</TableHead>
                   <TableHead>商品名称</TableHead>
                   <TableHead>品类</TableHead>
-                  <TableHead className="text-right">订单数</TableHead>
-                  <TableHead className="text-right">收入</TableHead>
-                  <TableHead className="text-right">平均客单价</TableHead>
+                  <TableHead className="text-right">零售价</TableHead>
+                  <TableHead className="text-right">表现评分</TableHead>
+                  <TableHead className="text-right">状态</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {products.map((product, index) => (
-                  <TableRow key={`${product.name}-${index}`}>
+                {products.slice(0, 20).map((product, index) => (
+                  <TableRow key={`${product.product_id}-${index}`}>
                     <TableCell className="font-medium">
                       <Badge variant="secondary">#{index + 1}</Badge>
                     </TableCell>
@@ -235,12 +273,16 @@ export default function AnalyticsPage() {
                     <TableCell>
                       <Badge variant="outline">{product.category}</Badge>
                     </TableCell>
-                    <TableCell className="text-right">{product.orders}</TableCell>
+                    <TableCell className="text-right font-semibold">
+                      ¥{Number(product.retail_price).toFixed(2)}
+                    </TableCell>
                     <TableCell className="text-right font-semibold text-green-600">
-                      ¥{product.revenue.toLocaleString()}
+                      {Number(product.performance_score).toLocaleString()}
                     </TableCell>
                     <TableCell className="text-right">
-                      ¥{(product.revenue / product.orders).toFixed(2)}
+                      <Badge variant={product.status === '在售' ? 'default' : 'secondary'}>
+                        {product.status}
+                      </Badge>
                     </TableCell>
                   </TableRow>
                 ))}

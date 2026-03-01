@@ -209,7 +209,7 @@ class APIAuditor:
                 print("⚠️  /api/dashboard/overview: Zero orders today - might be expected")
 
             # Check for proper numeric types
-            if not isinstance(gmv, (int, float)) and gmv != "0":
+            if not isinstance(gmv, int | float) and gmv != "0":
                 self.log_issue(
                     "/api/dashboard/overview",
                     "data_quality",
@@ -243,7 +243,7 @@ class APIAuditor:
                         if isinstance(price_diff_pct, str):
                             try:
                                 price_diff_pct = float(price_diff_pct)
-                            except:
+                            except (ValueError, TypeError):
                                 price_diff_pct = 0
                         if abs(price_diff_pct) > 0.1:  # More than 0.1% difference
                             has_real_differences = True
