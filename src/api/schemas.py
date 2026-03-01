@@ -190,6 +190,13 @@ class SalesRecord(BaseModel):
 # ── Dashboard ────────────────────────────────────────────────
 
 
+class ActionItem(BaseModel):
+    priority: str = Field(..., pattern="^(high|medium|low)$")
+    action: str
+    detail: str
+    link: str
+
+
 class DashboardOverview(BaseModel):
     total_products: int = 0
     today_orders: int = 0
@@ -199,12 +206,15 @@ class DashboardOverview(BaseModel):
     conversion_rate: float = 0.0
     pending_alerts: int = 0
     pending_tasks: int = 0
+    action_items: list[ActionItem] = Field(default_factory=list)
 
 
 class SalesTrendPoint(BaseModel):
     date: str
     quantity: int
     revenue: Decimal
+    simulated: bool = False
+    growth_rate: float | None = None
 
 
 class TopProduct(BaseModel):

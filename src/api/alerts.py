@@ -52,6 +52,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                         "status": "pending",
                         "created_at": now_str,
                         "resolved_at": None,
+                        "actionable": True,
                     }
                 )
 
@@ -69,6 +70,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                         "status": "pending",
                         "created_at": now_str,
                         "resolved_at": None,
+                        "actionable": True,
                     }
                 )
 
@@ -86,15 +88,16 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                         "status": "pending",
                         "created_at": now_str,
                         "resolved_at": None,
+                        "actionable": refund_rate > 0.05,  # Only actionable if > 5%
                     }
                 )
 
-    # 2. Product alerts - low revenue products
+    # 2. Product alerts - low revenue products (filter out promotional items < ¥1)
     with contextlib.suppress(Exception):
         low_revenue_products = await pool.fetch(
             """SELECT spu_id, name, retail_price FROM qnh_products
-               WHERE status = '在售' AND retail_price < 10 AND retail_price > 0
-               ORDER BY retail_price ASC LIMIT 5"""
+               WHERE status = '在售' AND retail_price BETWEEN 1 AND 10
+               ORDER BY retail_price ASC LIMIT 3"""
         )
         for product in low_revenue_products:
             alerts.append(
@@ -108,15 +111,23 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "status": "pending",
                     "created_at": "2026-03-01T06:00:00Z",
                     "resolved_at": None,
+                    "actionable": True,
                 }
             )
 
-    # 3. High price alerts - products with unusually high prices
+    # 3. High price alerts - products with unusually high prices (only if significantly higher than category average)
     with contextlib.suppress(Exception):
         high_price_products = await pool.fetch(
-            """SELECT spu_id, name, retail_price FROM qnh_products
-               WHERE status = '在售' AND retail_price > 200
-               ORDER BY retail_price DESC LIMIT 3"""
+            """SELECT p.spu_id, p.name, p.retail_price,
+                      AVG(p2.retail_price) as category_avg_price
+               FROM qnh_products p
+               JOIN qnh_products p2 ON p.category = p2.category
+               WHERE p.status = '在售' AND p.retail_price > 200
+                     AND p2.status = '在售' AND p2.retail_price > 0
+               GROUP BY p.spu_id, p.name, p.retail_price
+               HAVING p.retail_price > AVG(p2.retail_price) * 1.5
+               ORDER BY p.retail_price / AVG(p2.retail_price) DESC
+               LIMIT 2"""
         )
         for product in high_price_products:
             alerts.append(
@@ -125,11 +136,12 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "type": "pricing",
                     "severity": "medium",
                     "title": "高价商品提醒",
-                    "description": f"商品 {product['name']} 售价较高 (¥{product['retail_price']}), 请关注销售情况",
+                    "description": f"商品 {product['name']} 售价¥{product['retail_price']}，高于同类均价{product['retail_price'] / product['category_avg_price']:.1f}倍",
                     "product_id": product["spu_id"],
                     "status": "pending",
                     "created_at": "2026-03-01T06:30:00Z",
                     "resolved_at": None,
+                    "actionable": True,
                 }
             )
 
@@ -148,6 +160,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "status": "pending",
                     "created_at": now_str,
                     "resolved_at": None,
+                    "actionable": True,
                 }
             )
 
@@ -159,7 +172,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                GROUP BY category ORDER BY cnt DESC LIMIT 1"""
         )
         total = await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 1
-        if top_cat and top_cat["cnt"] > total * 0.3:
+        if top_cat and top_cat["cnt"] > total * 0.4:  # Raised threshold to 40% to reduce noise
             alerts.append(
                 {
                     "alert_id": f"category_concentration_{top_cat['cnt']}",
@@ -171,27 +184,36 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "status": "pending",
                     "created_at": now_str,
                     "resolved_at": None,
+                    "actionable": True,
                 }
             )
 
-    # 6. System alerts
+    # 6. System alerts (only show if actionable)
     product_count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
-    if product_count > 1500:
+    if product_count < 50:  # Only alert if too few products (actionable)
         alerts.append(
             {
-                "alert_id": "inventory_scale",
+                "alert_id": "low_inventory_scale",
                 "type": "system",
-                "severity": "low",
-                "title": "商品数量提醒",
-                "description": f"当前共有 {product_count} 个商品，库存管理良好",
+                "severity": "medium",
+                "title": "商品数量不足",
+                "description": f"当前仅有 {product_count} 个商品，建议增加商品丰富度",
                 "product_id": None,
-                "status": "resolved",
-                "created_at": "2026-03-01T05:00:00Z",
-                "resolved_at": "2026-03-01T06:00:00Z",
+                "status": "pending",
+                "created_at": now_str,
+                "resolved_at": None,
+                "actionable": True,
             }
         )
 
-    return alerts
+    # Sort alerts by severity (high -> medium -> low) and actionable status
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    alerts.sort(
+        key=lambda x: (severity_order.get(x["severity"], 3), not x.get("actionable", False))
+    )
+
+    # Limit to top 10 alerts to reduce noise
+    return alerts[:10]
 
 
 @router.get("", response_model=APIResponse[list[dict]])
