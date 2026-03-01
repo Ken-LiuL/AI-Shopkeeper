@@ -44,6 +44,10 @@ async def get_overview() -> APIResponse:
             """)
             if row and row["raw_data"]:
                 data = row["raw_data"]
+                if isinstance(data, str):
+                    import json
+
+                    data = json.loads(data)
                 if isinstance(data, dict):
                     # Extract from current values or fallback to lastPeriodValue
                     eff_ord_cnt = data.get("eff_ord_cnt", {})
