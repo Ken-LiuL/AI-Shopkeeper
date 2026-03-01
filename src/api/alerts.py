@@ -98,7 +98,76 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                 }
             )
 
-    # 3. System alerts
+    # 3. High price alerts - products with unusually high prices
+    with contextlib.suppress(Exception):
+        high_price_products = await pool.fetch(
+            """SELECT spu_id, name, retail_price FROM qnh_products
+               WHERE status = '在售' AND retail_price > 200
+               ORDER BY retail_price DESC LIMIT 3"""
+        )
+        for product in high_price_products:
+            alerts.append(
+                {
+                    "alert_id": f"high_price_{product['spu_id']}",
+                    "type": "pricing",
+                    "severity": "medium",
+                    "title": "高价商品提醒",
+                    "description": f"商品 {product['name']} 售价较高 (¥{product['retail_price']}), 请关注销售情况",
+                    "product_id": product["spu_id"],
+                    "status": "pending",
+                    "created_at": "2026-03-01T06:30:00Z",
+                    "resolved_at": None,
+                }
+            )
+
+    # 4. Sales volume anomaly alerts - products with low sales numbers
+    with contextlib.suppress(Exception):
+        low_sales_products = await pool.fetch(
+            """SELECT spu_id, name, sale_num, retail_price FROM qnh_products
+               WHERE status = '在售' AND sale_num IS NOT NULL AND sale_num < 5
+               AND retail_price > 50
+               ORDER BY sale_num ASC LIMIT 3"""
+        )
+        for product in low_sales_products:
+            alerts.append(
+                {
+                    "alert_id": f"low_sales_{product['spu_id']}",
+                    "type": "sales",
+                    "severity": "medium",
+                    "title": "销量异常提醒",
+                    "description": f"商品 {product['name']} 销量偏低 ({product['sale_num']}件), 可能需要调整价格或推广策略",
+                    "product_id": product["spu_id"],
+                    "status": "pending",
+                    "created_at": "2026-03-01T06:20:00Z",
+                    "resolved_at": None,
+                }
+            )
+
+    # 5. Zero stock/inventory alerts
+    with contextlib.suppress(Exception):
+        zero_stock_count = (
+            await pool.fetchval(
+                """SELECT COUNT(*) FROM qnh_products
+               WHERE status = '在售' AND (sale_num IS NULL OR sale_num = 0)"""
+            )
+            or 0
+        )
+        if zero_stock_count > 0:
+            alerts.append(
+                {
+                    "alert_id": f"zero_stock_count_{zero_stock_count}",
+                    "type": "inventory",
+                    "severity": "high",
+                    "title": "零库存商品提醒",
+                    "description": f"发现 {zero_stock_count} 个商品可能缺货，请及时补货",
+                    "product_id": None,
+                    "status": "pending",
+                    "created_at": "2026-03-01T06:15:00Z",
+                    "resolved_at": None,
+                }
+            )
+
+    # 6. System alerts
     product_count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
     if product_count > 1500:
         alerts.append(

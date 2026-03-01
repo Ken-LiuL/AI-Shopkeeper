@@ -30,7 +30,48 @@ async def search_product_knowledge_v1(
     pk = get_product_knowledge()
     if not pk:
         return APIResponse(success=False, data=[], message="Product knowledge not initialized")
+
     results = await pk.search_product(query=q, limit=limit, hybrid=hybrid)
+
+    # Fallback: if knowledge base is empty, search products directly
+    if not results:
+        pool = pg.get_pool()
+        try:
+            # Search products by name/category/brand
+            fallback_results = await pool.fetch(
+                """SELECT spu_id, name, category, brand, spec, retail_price, status
+                   FROM qnh_products
+                   WHERE (name ILIKE $1 OR category ILIKE $1 OR brand ILIKE $1 OR spec ILIKE $1)
+                   AND status = '在售'
+                   ORDER BY
+                     CASE WHEN name ILIKE $1 THEN 1
+                          WHEN category ILIKE $1 THEN 2
+                          WHEN brand ILIKE $1 THEN 3
+                          ELSE 4 END,
+                     retail_price DESC
+                   LIMIT $2""",
+                f"%{q}%",
+                limit,
+            )
+
+            # Convert to knowledge format
+            results = [
+                {
+                    "product_id": str(r["spu_id"]),
+                    "name": r["name"],
+                    "category": r.get("category", ""),
+                    "brand": r.get("brand", ""),
+                    "spec": r.get("spec", ""),
+                    "price": float(r.get("retail_price", 0)),
+                    "content": f"{r['name']} - {r.get('category', '')} - {r.get('brand', '')}",
+                    "score": 0.8,  # Default relevance score
+                    "source": "product_database",
+                }
+                for r in fallback_results
+            ]
+        except Exception as e:
+            logger.error(f"Knowledge fallback search failed: {e}")
+
     return APIResponse(data=results)
 
 

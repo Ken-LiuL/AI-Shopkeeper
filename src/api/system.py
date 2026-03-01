@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from fastapi import APIRouter, Query
 
@@ -12,6 +13,60 @@ from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/system", tags=["system"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/health", response_model=APIResponse[dict])
+async def health() -> APIResponse[dict]:
+    """System health check."""
+    try:
+        pool = pg.get_pool()
+
+        # Test database connection
+        db_ok = False
+        try:
+            await pool.fetchval("SELECT 1")
+            db_ok = True
+        except Exception:
+            db_ok = False
+
+        # Test Redis connection
+        redis_ok = False
+        try:
+            from src.db import redis as redis_db
+
+            redis_client = redis_db.get_redis()
+            if redis_client:
+                await redis_client.ping()
+                redis_ok = True
+        except Exception:
+            redis_ok = False
+
+        # Check disk space (basic check)
+        import shutil
+
+        disk_usage = shutil.disk_usage("/")
+        disk_free_gb = disk_usage.free / (1024**3)
+        disk_ok = disk_free_gb > 1.0  # At least 1GB free
+
+        # Overall health status
+        overall_healthy = db_ok and disk_ok  # Redis is optional
+
+        return APIResponse(
+            data={
+                "status": "healthy" if overall_healthy else "unhealthy",
+                "database": "ok" if db_ok else "error",
+                "redis": "ok" if redis_ok else "error",
+                "disk_free_gb": round(disk_free_gb, 2),
+                "disk_status": "ok" if disk_ok else "low",
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return APIResponse(
+            success=False, data={"status": "error", "error": str(e)}, message="Health check failed"
+        )
 
 
 @router.get("/config", response_model=APIResponse[dict])

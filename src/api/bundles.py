@@ -57,6 +57,8 @@ async def list_bundles() -> APIResponse[list[dict]]:
     rows = await pool.fetch(
         "SELECT * FROM bundles WHERE status != 'deleted' ORDER BY created_at DESC"
     )
+    if not rows:
+        return APIResponse(data=[], message="功能待开通")
     return APIResponse(data=[dict(r) for r in rows])
 
 

@@ -77,10 +77,11 @@ async def overview() -> APIResponse[DashboardOverview]:
         if metrics:
             today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
 
+    # Get pending alerts count from alerts table
     pending_alerts = 0
     with contextlib.suppress(Exception):
         pending_alerts = (
-            await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
+            await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE resolved_at IS NULL") or 0
         )
 
     pending_tasks = 0
@@ -116,32 +117,27 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
                GROUP BY sale_date ORDER BY sale_date"""
         )
 
-    # Fallback: aggregate from raw metrics per day
+    # Fallback: aggregate from raw metrics per day (use latest record per day to avoid double-counting)
     if not rows:
         with contextlib.suppress(Exception):
             raw_rows = await pool.fetch("""
-                SELECT created_at::date AS date, raw_data
+                SELECT DISTINCT ON (created_at::date)
+                       created_at::date AS date,
+                       raw_data
                 FROM qnh_store_metrics_raw
                 WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
-                ORDER BY created_at::date
+                ORDER BY created_at::date, created_at DESC
             """)
-            # Group by date and extract metrics
-            daily: dict = {}
+            # Extract metrics from latest daily record to avoid multi-store duplication
             for r in raw_rows:
                 d = str(r["date"])
                 data = r["raw_data"]
                 if isinstance(data, str):
                     data = json.loads(data)
-                orders = _extract_metric(data, "eff_ord_cnt")
+                orders = int(_extract_metric(data, "eff_ord_cnt"))
                 revenue = _extract_metric(data, "sale_amt_gmv")
-                if d not in daily:
-                    daily[d] = {"quantity": 0, "revenue": 0.0}
-                daily[d]["quantity"] += int(orders)
-                daily[d]["revenue"] += revenue
-            rows = [
-                {"date": d, "quantity": v["quantity"], "revenue": v["revenue"]}
-                for d, v in sorted(daily.items())
-            ]
+                rows.append({"date": d, "quantity": orders, "revenue": revenue})
+            rows = sorted(rows, key=lambda x: x["date"])
 
     return APIResponse(
         data=[

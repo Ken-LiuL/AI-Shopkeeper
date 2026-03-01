@@ -107,8 +107,11 @@ async def get_recommendations() -> APIResponse[list[dict]]:
            WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1"""
     )
     if not row or not row["result"]:
-        return APIResponse(data=[])
+        return APIResponse(data=[], message="功能待开通")
     import json
 
     result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
-    return APIResponse(data=result.get("recommendations", []))
+    recommendations = result.get("recommendations", [])
+    if not recommendations:
+        return APIResponse(data=[], message="功能待开通")
+    return APIResponse(data=recommendations)

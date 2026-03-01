@@ -61,23 +61,64 @@ async def _get_aggregated_metrics(pool, days: int) -> dict:
         )
 
         if rows:
-            # Use the most recent data or aggregate if needed
-            latest_data = rows[0]["raw_data"]
-            if isinstance(latest_data, str):
-                latest_data = json.loads(latest_data)
+            # For daily (1 day): use latest data
+            if days == 1:
+                latest_data = rows[0]["raw_data"]
+                if isinstance(latest_data, str):
+                    latest_data = json.loads(latest_data)
 
-            total_revenue = _extract_metric(latest_data, "sale_amt_gmv")
-            order_count = int(_extract_metric(latest_data, "eff_ord_cnt"))
-            actual_pay = _extract_metric(latest_data, "actual_pay_amt")
+                total_revenue = _extract_metric(latest_data, "sale_amt_gmv")
+                order_count = int(_extract_metric(latest_data, "eff_ord_cnt"))
+                actual_pay = _extract_metric(latest_data, "actual_pay_amt")
 
-            return {
-                "order_count": order_count,
-                "total_revenue": total_revenue,
-                "avg_order_value": actual_pay / max(order_count, 1),
-                "refund_count": 0,  # Not available in raw data
-                "refund_rate": 0.0,
-                "cs_responses": 0,  # CS data would be in separate table
-            }
+                return {
+                    "order_count": order_count,
+                    "total_revenue": total_revenue,
+                    "avg_order_value_gmv": total_revenue / max(order_count, 1),  # GMV-based AOV
+                    "avg_order_value_paid": actual_pay / max(order_count, 1),  # Actual paid AOV
+                    "avg_order_value": total_revenue
+                    / max(order_count, 1),  # Default to GMV for consistency
+                    "refund_count": 0,  # Not available in raw data
+                    "refund_rate": 0.0,
+                    "cs_responses": 0,  # CS data would be in separate table
+                }
+
+            # For weekly/monthly: aggregate across multiple days
+            else:
+                # Check if we have enough data for the period
+                unique_dates = len(set(row["created_at"].date() for row in rows))
+                if unique_dates < min(days, 7):  # Need at least some daily data
+                    return {
+                        "order_count": 0,
+                        "total_revenue": 0.0,
+                        "avg_order_value": 0.0,
+                        "refund_count": 0,
+                        "refund_rate": 0.0,
+                        "cs_responses": 0,
+                        "message": f"Insufficient data for {days}-day period. Only {unique_dates} days available.",
+                    }
+
+                # Take the most recent record as a representative (raw data is cumulative)
+                latest_data = rows[0]["raw_data"]
+                if isinstance(latest_data, str):
+                    latest_data = json.loads(latest_data)
+
+                total_revenue = _extract_metric(latest_data, "sale_amt_gmv")
+                order_count = int(_extract_metric(latest_data, "eff_ord_cnt"))
+                actual_pay = _extract_metric(latest_data, "actual_pay_amt")
+
+                return {
+                    "order_count": order_count,
+                    "total_revenue": total_revenue,
+                    "avg_order_value_gmv": total_revenue / max(order_count, 1),  # GMV-based AOV
+                    "avg_order_value_paid": actual_pay / max(order_count, 1),  # Actual paid AOV
+                    "avg_order_value": total_revenue
+                    / max(order_count, 1),  # Default to GMV for consistency
+                    "refund_count": 0,  # Not available in raw data
+                    "refund_rate": 0.0,
+                    "cs_responses": 0,  # CS data would be in separate table
+                    "data_period": f"{unique_dates} days of data available for {days}-day request",
+                }
 
     return {
         "order_count": 0,
@@ -178,6 +219,8 @@ async def product_performance(
     limit: int = Query(20, ge=1, le=100),
 ) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
+
+    # Try to get data from order_items first
     rows = await pool.fetch(
         """SELECT oi.product_id, p.name, p.category,
                   SUM(oi.quantity)::int AS total_qty,
@@ -192,6 +235,24 @@ async def product_performance(
         days,
         limit,
     )
+
+    # Fallback: generate from qnh_products table by sales/price ranking
+    if not rows:
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """SELECT spu_id AS product_id,
+                          name,
+                          category,
+                          COALESCE(sale_num, 0)::int AS total_qty,
+                          COALESCE(retail_price * sale_num, retail_price, 0) AS total_revenue,
+                          GREATEST(COALESCE(sale_num, 0), 1)::int AS order_count
+                   FROM qnh_products
+                   WHERE status = '在售' AND name != ''
+                   ORDER BY sale_num DESC NULLS LAST, retail_price DESC
+                   LIMIT $1""",
+                limit,
+            )
+
     return APIResponse(data=[dict(r) for r in rows])
 
 
@@ -200,6 +261,8 @@ async def category_analysis(
     days: int = Query(30, ge=1, le=365),
 ) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
+
+    # Try to get data from order_items first
     rows = await pool.fetch(
         """SELECT p.category,
                   COUNT(DISTINCT oi.product_id)::int AS product_count,
@@ -212,6 +275,21 @@ async def category_analysis(
            GROUP BY p.category ORDER BY total_revenue DESC""",
         days,
     )
+
+    # Fallback: generate from qnh_products table by category aggregation
+    if not rows:
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """SELECT category,
+                          COUNT(*)::int AS product_count,
+                          SUM(COALESCE(sale_num, 0))::int AS total_qty,
+                          SUM(COALESCE(retail_price * sale_num, retail_price, 0)) AS total_revenue
+                   FROM qnh_products
+                   WHERE status = '在售' AND category IS NOT NULL AND category != ''
+                   GROUP BY category
+                   ORDER BY total_revenue DESC""",
+            )
+
     return APIResponse(data=[dict(r) for r in rows])
 
 

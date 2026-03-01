@@ -48,6 +48,10 @@ async def list_listings(
         page_size,
         offset,
     )
+    if total == 0:
+        return PaginatedResponse(
+            data=[], total=0, page=page, page_size=page_size, message="功能待开通"
+        )
     return PaginatedResponse(
         data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
     )

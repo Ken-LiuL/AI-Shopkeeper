@@ -153,16 +153,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         _asyncio2.create_task(_bg_build_embeddings())
         logger.info("Background embedding build task started")
-        
+
         # Initialize product memory for new customer service
         async def _init_product_memory():
             try:
                 from src.agents.customer_service.product_memory import init_product_memory
+
                 await init_product_memory(pg_db.get_pool())
                 logger.info("Product memory initialized ✓")
             except Exception as e:
                 logger.error("Product memory initialization failed: %s", e)
-        
+
         _asyncio2.create_task(_init_product_memory())
     except Exception:
         logger.warning("Failed to register customer service skills", exc_info=True)

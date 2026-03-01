@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 
 from fastapi import APIRouter, Query
 
@@ -12,6 +13,80 @@ from .errors import NotFoundError
 from .schemas import APIResponse, PaginatedResponse
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
+
+
+@router.get("/recent", response_model=APIResponse[list[dict]])
+async def recent_orders(
+    limit: int = Query(10, ge=1, le=100),
+) -> APIResponse[list[dict]]:
+    """Get recent orders from raw data or structured table."""
+    pool = pg.get_pool()
+
+    # Try structured orders table first
+    rows = []
+    with contextlib.suppress(Exception):
+        rows = await pool.fetch(
+            """SELECT order_id, order_time, total_amount, status, customer_id
+               FROM orders
+               ORDER BY order_time DESC
+               LIMIT $1""",
+            limit,
+        )
+
+    # Fallback: extract from raw orders data
+    if not rows:
+        with contextlib.suppress(Exception):
+            raw_rows = await pool.fetch(
+                """SELECT raw_data FROM qnh_orders_raw
+                   ORDER BY synced_at DESC LIMIT 50"""
+            )
+
+            orders_data = []
+            for r in raw_rows:
+                data = r["raw_data"]
+                if isinstance(data, str):
+                    data = json.loads(data)
+
+                # Extract order information from raw data structure
+                if isinstance(data, list):
+                    for order in data[:limit]:
+                        if isinstance(order, dict):
+                            orders_data.append(
+                                {
+                                    "order_id": order.get("order_id", ""),
+                                    "order_time": order.get("order_time", ""),
+                                    "total_amount": float(order.get("total_amount", 0)),
+                                    "status": order.get("status", "unknown"),
+                                    "customer_id": order.get("customer_id", ""),
+                                }
+                            )
+                elif isinstance(data, dict) and "orders" in data:
+                    for order in data["orders"][:limit]:
+                        orders_data.append(
+                            {
+                                "order_id": order.get("order_id", ""),
+                                "order_time": order.get("order_time", ""),
+                                "total_amount": float(order.get("total_amount", 0)),
+                                "status": order.get("status", "unknown"),
+                                "customer_id": order.get("customer_id", ""),
+                            }
+                        )
+
+                if len(orders_data) >= limit:
+                    break
+
+            rows = [
+                {
+                    "order_id": o["order_id"],
+                    "order_time": o["order_time"],
+                    "total_amount": o["total_amount"],
+                    "status": o["status"],
+                    "customer_id": o["customer_id"],
+                }
+                for o in orders_data[:limit]
+            ]
+
+    return APIResponse(data=[dict(r) for r in rows])
 
 
 @router.get("/stats", response_model=APIResponse[dict])

@@ -22,13 +22,31 @@ async def list_stores(
     total = 0
     rows = []
     with contextlib.suppress(Exception):
-        total = await pool.fetchval("SELECT COUNT(*) FROM competitor_stores") or 0
+        # Filter out test data stores
+        total = (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM competitor_stores WHERE name NOT LIKE '测试药店%'"
+            )
+            or 0
+        )
         offset = (page - 1) * page_size
         rows = await pool.fetch(
-            "SELECT * FROM competitor_stores ORDER BY last_synced DESC LIMIT $1 OFFSET $2",
+            """SELECT * FROM competitor_stores
+               WHERE name NOT LIKE '测试药店%'
+               ORDER BY last_synced DESC LIMIT $1 OFFSET $2""",
             page_size,
             offset,
         )
+
+        # If no real competitor data, provide helpful message
+        if total == 0:
+            return PaginatedResponse(
+                data=[],
+                total=0,
+                page=page,
+                page_size=page_size,
+                message="暂无竞品数据，需配置竞品店铺",
+            )
     return PaginatedResponse(
         data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
     )

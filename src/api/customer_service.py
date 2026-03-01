@@ -223,6 +223,81 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
 # ── Analytics ─────────────────────────────────────────────
 
 
+@router.get("/stats", response_model=APIResponse[dict])
+async def get_stats() -> APIResponse[dict]:
+    """Get customer service statistics."""
+    from src.db import postgres as pg_db
+
+    pool = pg_db.get_pool()
+    if not pool:
+        raise AppError("Database connection unavailable", status_code=503)
+
+    try:
+        # Get session statistics
+        total_sessions = await pool.fetchval("SELECT COUNT(*) FROM cs_sessions") or 0
+
+        # Get today's sessions
+        today_sessions = (
+            await pool.fetchval("SELECT COUNT(*) FROM cs_sessions WHERE created_at >= CURRENT_DATE")
+            or 0
+        )
+
+        # Get average session length (in messages)
+        avg_session_length = (
+            await pool.fetchval(
+                """SELECT AVG(message_count) FROM (
+                SELECT session_id, COUNT(*) as message_count
+                FROM cs_messages
+                GROUP BY session_id
+            ) sub"""
+            )
+            or 0
+        )
+
+        # Get feedback statistics
+        total_feedback = await pool.fetchval("SELECT COUNT(*) FROM cs_feedback") or 0
+        avg_rating = await pool.fetchval("SELECT AVG(rating) FROM cs_feedback") or 0
+
+        # Get resolution rate (estimated based on session completion)
+        resolved_sessions = (
+            await pool.fetchval("SELECT COUNT(*) FROM cs_sessions WHERE status = 'completed'") or 0
+        )
+        resolution_rate = (resolved_sessions / max(total_sessions, 1)) * 100
+
+        # Get human transfer rate (estimated)
+        human_transfers = (
+            await pool.fetchval("SELECT COUNT(*) FROM cs_sessions WHERE needs_human = true") or 0
+        )
+        transfer_rate = (human_transfers / max(total_sessions, 1)) * 100
+
+        return APIResponse(
+            data={
+                "total_sessions": total_sessions,
+                "today_sessions": today_sessions,
+                "avg_session_length": round(float(avg_session_length), 2),
+                "total_feedback": total_feedback,
+                "avg_rating": round(float(avg_rating), 2) if avg_rating else 0,
+                "resolution_rate": round(resolution_rate, 2),
+                "human_transfer_rate": round(transfer_rate, 2),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to get customer service stats: {e}")
+        # Return default stats if database queries fail
+        return APIResponse(
+            data={
+                "total_sessions": 0,
+                "today_sessions": 0,
+                "avg_session_length": 0,
+                "total_feedback": 0,
+                "avg_rating": 0,
+                "resolution_rate": 0,
+                "human_transfer_rate": 0,
+            }
+        )
+
+
 @router.get("/analytics", response_model=APIResponse[dict])
 async def get_analytics() -> APIResponse[dict]:
     """Get customer service analytics data."""
