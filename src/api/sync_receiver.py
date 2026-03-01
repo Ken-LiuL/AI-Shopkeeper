@@ -129,9 +129,8 @@ async def _insert_records(
     if source == "products":
         return await _upsert_products(pool, data)
 
-    count = 0
+    # First ensure the table exists in a separate transaction
     async with pool.acquire() as conn:
-        # Auto-create raw table if not exists
         await conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {table}_raw (
                 id SERIAL PRIMARY KEY,
@@ -141,17 +140,22 @@ async def _insert_records(
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
-        for row in data:
-            await conn.execute(
-                f"""
-                INSERT INTO {table}_raw (source, raw_data, synced_at)
-                VALUES ($1, $2::jsonb, $3)
-                """,
-                source,
-                json.dumps(row, ensure_ascii=False),
-                synced_at,
-            )
-            count += 1
+
+    # Now insert data in a separate transaction
+    count = 0
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            for row in data:
+                await conn.execute(
+                    f"""
+                    INSERT INTO {table}_raw (source, raw_data, synced_at)
+                    VALUES ($1, $2::jsonb, $3)
+                    """,
+                    source,
+                    json.dumps(row, ensure_ascii=False),
+                    synced_at,
+                )
+                count += 1
 
     return count
 
