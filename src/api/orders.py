@@ -35,7 +35,7 @@ async def recent_orders(
 
     # Fallback: return snapshots from raw orders summary data
     if not rows:
-        with contextlib.suppress(Exception):
+        try:
             raw_rows = await pool.fetch(
                 """SELECT raw_data, synced_at FROM qnh_orders_raw
                    ORDER BY synced_at DESC LIMIT $1""",
@@ -83,6 +83,10 @@ async def recent_orders(
                         )
 
             rows = snapshots[:limit]
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).error(f"orders/recent fallback error: {e}")
 
     return APIResponse(data=[dict(r) for r in rows])
 
