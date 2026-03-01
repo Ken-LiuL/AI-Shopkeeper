@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
-import logging
 import json
-from typing import Dict, List, Any
+import logging
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel
 
-from src.services.pricing import PricingService
+from src.agents.llm import MODEL_DEEPSEEK, call_tool
 from src.db import postgres as pg
-from src.agents.llm import call_tool, MODEL_DEEPSEEK
+from src.services.pricing import PricingService
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
+
+# 创建一个专门的路由来处理 /api/products/pricing
+products_pricing_router = APIRouter(prefix="/api/products", tags=["pricing"])
 logger = logging.getLogger(__name__)
 
 
@@ -34,44 +37,46 @@ class PricingRule(BaseModel):
     name: str
     description: str
     rule_type: str  # "margin_floor", "competitor_match", "demand_based"
-    parameters: Dict[str, Any]
+    parameters: dict[str, Any]
     is_active: bool
 
 
 async def _get_products_with_pricing_data():
     """获取商品及其定价相关数据"""
     pool = pg.get_pool()
-    
+
     # 获取商品基础信息
     products = await pool.fetch("""
         SELECT product_id, name, cost_price, retail_price, category, brand, monthly_sales
-        FROM products 
+        FROM products
         WHERE status = 'active' AND retail_price > 0
         ORDER BY monthly_sales DESC NULLS LAST
         LIMIT 50
     """)
-    
+
     # 获取竞品价格数据 (假设有competitor_products表)
     competitor_data = {}
     try:
         competitors = await pool.fetch("""
             SELECT product_name, competitor_name, price, updated_at
-            FROM competitor_products 
+            FROM competitor_products
             WHERE updated_at >= CURRENT_DATE - INTERVAL '7 days'
         """)
-        
+
         for comp in competitors:
             product_key = comp["product_name"].lower()
             if product_key not in competitor_data:
                 competitor_data[product_key] = []
-            competitor_data[product_key].append({
-                "competitor": comp["competitor_name"],
-                "price": float(comp["price"]),
-                "updated_at": comp["updated_at"]
-            })
+            competitor_data[product_key].append(
+                {
+                    "competitor": comp["competitor_name"],
+                    "price": float(comp["price"]),
+                    "updated_at": comp["updated_at"],
+                }
+            )
     except Exception as e:
         logger.warning(f"Failed to fetch competitor data: {e}")
-    
+
     # 获取销量数据
     sales_data = {}
     try:
@@ -82,59 +87,59 @@ async def _get_products_with_pricing_data():
             WHERE o.order_time >= CURRENT_DATE - INTERVAL '30 days'
             GROUP BY oi.product_id
         """)
-        
+
         for sale in sales:
             sales_data[sale["product_id"]] = {
                 "monthly_sales": int(sale["total_sales"]),
-                "avg_selling_price": float(sale["avg_price"])
+                "avg_selling_price": float(sale["avg_price"]),
             }
     except Exception as e:
         logger.warning(f"Failed to fetch sales data: {e}")
-    
+
     return products, competitor_data, sales_data
 
 
 async def _calculate_category_margins():
     """计算品类平均毛利率"""
     pool = pg.get_pool()
-    
+
     try:
         margins = await pool.fetch("""
-            SELECT 
+            SELECT
                 category,
                 AVG(CASE WHEN cost_price > 0 THEN (retail_price - cost_price) / retail_price * 100 ELSE NULL END) as avg_margin
-            FROM products 
+            FROM products
             WHERE status = 'active' AND cost_price > 0 AND retail_price > 0
             GROUP BY category
             HAVING COUNT(*) >= 3
         """)
-        
+
         return {row["category"]: float(row["avg_margin"]) for row in margins}
     except Exception as e:
         logger.warning(f"Failed to calculate category margins: {e}")
         return {}
 
 
-async def _generate_ai_pricing_analysis(product_data: List[Dict]) -> List[Dict]:
+async def _generate_ai_pricing_analysis(product_data: list[dict]) -> list[dict]:
     """使用AI分析定价策略"""
-    
+
     prompt = f"""
     分析以下商品的定价策略，为每个商品生成调价建议。考虑因素：
     1. 成本价和当前毛利率
     2. 竞品价格对比
     3. 销量表现
     4. 品类平均毛利率
-    
+
     商品数据：
     {json.dumps(product_data, ensure_ascii=False, indent=2)}
-    
+
     为每个商品生成具体的定价建议，包括：
     - 建议价格（基于市场竞争力和盈利能力）
     - 调价理由（详细说明）
     - 信心度(0-1)
     - 预期影响（销量/利润变化预测）
     """
-    
+
     tool = {
         "name": "analyze_pricing",
         "description": "生成商品定价建议",
@@ -150,40 +155,46 @@ async def _generate_ai_pricing_analysis(product_data: List[Dict]) -> List[Dict]:
                             "suggested_price": {"type": "number"},
                             "reason": {"type": "string"},
                             "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                            "potential_impact": {"type": "string"}
+                            "potential_impact": {"type": "string"},
                         },
-                        "required": ["product_id", "suggested_price", "reason", "confidence", "potential_impact"]
-                    }
+                        "required": [
+                            "product_id",
+                            "suggested_price",
+                            "reason",
+                            "confidence",
+                            "potential_impact",
+                        ],
+                    },
                 }
             },
-            "required": ["suggestions"]
-        }
+            "required": ["suggestions"],
+        },
     }
-    
+
     try:
         result = await call_tool(
             prompt=prompt,
             tool=tool,
             model=MODEL_DEEPSEEK,
             max_tokens=4000,
-            trace_name="pricing_analysis"
+            trace_name="pricing_analysis",
         )
-        
+
         return result.get("suggestions", [])
     except Exception as e:
         logger.error(f"AI pricing analysis failed: {e}")
         return []
 
 
-@router.post("/suggestions", response_model=APIResponse[List[PricingSuggestion]])
-async def get_pricing_suggestions() -> APIResponse[List[PricingSuggestion]]:
+@router.post("/suggestions", response_model=APIResponse[list[PricingSuggestion]])
+async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
     """基于多因素生成智能调价建议"""
-    
+
     try:
         # 获取商品和相关数据
         products, competitor_data, sales_data = await _get_products_with_pricing_data()
         category_margins = await _calculate_category_margins()
-        
+
         # 准备AI分析的数据
         product_analysis_data = []
         for product in products:
@@ -191,101 +202,112 @@ async def get_pricing_suggestions() -> APIResponse[List[PricingSuggestion]]:
             product_name = product["name"]
             current_price = float(product["retail_price"]) if product["retail_price"] else 0
             cost_price = float(product["cost_price"]) if product["cost_price"] else 0
-            
+
             # 当前毛利率
             current_margin = 0
             if cost_price > 0 and current_price > 0:
                 current_margin = (current_price - cost_price) / current_price * 100
-            
+
             # 竞品价格
             competitor_prices = competitor_data.get(product_name.lower(), [])
             avg_competitor_price = 0
             if competitor_prices:
-                avg_competitor_price = sum(c["price"] for c in competitor_prices) / len(competitor_prices)
-            
+                avg_competitor_price = sum(c["price"] for c in competitor_prices) / len(
+                    competitor_prices
+                )
+
             # 销量数据
             sales_info = sales_data.get(product_id, {})
             monthly_sales = sales_info.get("monthly_sales", product.get("monthly_sales", 0))
-            
+
             # 品类平均毛利率
             category = product["category"]
             category_avg_margin = category_margins.get(category, 25.0)  # 默认25%
-            
-            product_analysis_data.append({
-                "product_id": product_id,
-                "name": product_name,
-                "current_price": current_price,
-                "cost_price": cost_price,
-                "current_margin": current_margin,
-                "category": category,
-                "category_avg_margin": category_avg_margin,
-                "monthly_sales": monthly_sales,
-                "competitor_prices": competitor_prices,
-                "avg_competitor_price": avg_competitor_price
-            })
-        
+
+            product_analysis_data.append(
+                {
+                    "product_id": product_id,
+                    "name": product_name,
+                    "current_price": current_price,
+                    "cost_price": cost_price,
+                    "current_margin": current_margin,
+                    "category": category,
+                    "category_avg_margin": category_avg_margin,
+                    "monthly_sales": monthly_sales,
+                    "competitor_prices": competitor_prices,
+                    "avg_competitor_price": avg_competitor_price,
+                }
+            )
+
         # 使用AI生成建议
         ai_suggestions = await _generate_ai_pricing_analysis(product_analysis_data)
-        
+
         # 转换为API响应格式
         suggestions = []
         for i, product in enumerate(product_analysis_data):
             # 寻找对应的AI建议
-            ai_suggestion = next((s for s in ai_suggestions if s["product_id"] == product["product_id"]), None)
-            
+            ai_suggestion = next(
+                (s for s in ai_suggestions if s["product_id"] == product["product_id"]), None
+            )
+
             if ai_suggestion:
-                suggestions.append(PricingSuggestion(
-                    product_id=product["product_id"],
-                    name=product["name"],
-                    current_price=product["current_price"],
-                    suggested_price=ai_suggestion["suggested_price"],
-                    reason=ai_suggestion["reason"],
-                    confidence=ai_suggestion["confidence"],
-                    potential_impact=ai_suggestion["potential_impact"]
-                ))
+                suggestions.append(
+                    PricingSuggestion(
+                        product_id=product["product_id"],
+                        name=product["name"],
+                        current_price=product["current_price"],
+                        suggested_price=ai_suggestion["suggested_price"],
+                        reason=ai_suggestion["reason"],
+                        confidence=ai_suggestion["confidence"],
+                        potential_impact=ai_suggestion["potential_impact"],
+                    )
+                )
             else:
                 # 基础规则建议
                 suggested_price = product["current_price"]
                 reason = "维持当前价格"
                 confidence = 0.6
-                
+
                 # 简单逻辑：如果毛利率过低，建议提价
                 if product["current_margin"] < 15 and product["cost_price"] > 0:
                     suggested_price = product["cost_price"] * 1.25  # 25%毛利率
                     reason = f"当前毛利率{product['current_margin']:.1f}%偏低，建议提价至25%毛利率"
                     confidence = 0.7
-                
+
                 # 如果有竞品数据且价格偏高
-                elif product["avg_competitor_price"] > 0 and product["current_price"] > product["avg_competitor_price"] * 1.2:
+                elif (
+                    product["avg_competitor_price"] > 0
+                    and product["current_price"] > product["avg_competitor_price"] * 1.2
+                ):
                     suggested_price = product["avg_competitor_price"] * 1.1  # 略高于竞品10%
-                    reason = f"当前价格比竞品均价高{((product['current_price']/product['avg_competitor_price']-1)*100):.1f}%，建议降价提高竞争力"
+                    reason = f"当前价格比竞品均价高{((product['current_price'] / product['avg_competitor_price'] - 1) * 100):.1f}%，建议降价提高竞争力"
                     confidence = 0.8
-                
-                suggestions.append(PricingSuggestion(
-                    product_id=product["product_id"],
-                    name=product["name"],
-                    current_price=product["current_price"],
-                    suggested_price=round(suggested_price, 2),
-                    reason=reason,
-                    confidence=confidence,
-                    potential_impact="预期影响分析中"
-                ))
-        
+
+                suggestions.append(
+                    PricingSuggestion(
+                        product_id=product["product_id"],
+                        name=product["name"],
+                        current_price=product["current_price"],
+                        suggested_price=round(suggested_price, 2),
+                        reason=reason,
+                        confidence=confidence,
+                        potential_impact="预期影响分析中",
+                    )
+                )
+
         return APIResponse(data=suggestions)
-        
+
     except Exception as e:
         logger.error(f"Failed to generate pricing suggestions: {e}")
         return APIResponse(
-            success=False,
-            message=f"Failed to generate suggestions: {str(e)}",
-            data=[]
+            success=False, message=f"Failed to generate suggestions: {str(e)}", data=[]
         )
 
 
-@router.get("/rules", response_model=APIResponse[List[PricingRule]])
-async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
+@router.get("/rules", response_model=APIResponse[list[PricingRule]])
+async def get_pricing_rules() -> APIResponse[list[PricingRule]]:
     """获取定价规则列表"""
-    
+
     # 默认定价规则
     default_rules = [
         PricingRule(
@@ -295,13 +317,9 @@ async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
             rule_type="margin_floor",
             parameters={
                 "min_margin_percent": 15.0,
-                "category_overrides": {
-                    "医疗器械": 20.0,
-                    "保健品": 25.0,
-                    "药品": 18.0
-                }
+                "category_overrides": {"医疗器械": 20.0, "保健品": 25.0, "药品": 18.0},
             },
-            is_active=True
+            is_active=True,
         ),
         PricingRule(
             rule_id="competitor_match",
@@ -311,9 +329,9 @@ async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
             parameters={
                 "price_position": "slightly_below",  # "below", "match", "slightly_below", "premium"
                 "max_discount_percent": 15.0,
-                "min_premium_percent": 5.0
+                "min_premium_percent": 5.0,
             },
-            is_active=True
+            is_active=True,
         ),
         PricingRule(
             rule_id="demand_based",
@@ -323,10 +341,10 @@ async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
             parameters={
                 "high_demand_threshold": 100,  # 月销量阈值
                 "low_demand_threshold": 10,
-                "high_demand_markup": 1.1,    # 高需求加价10%
-                "low_demand_discount": 0.95   # 低需求降价5%
+                "high_demand_markup": 1.1,  # 高需求加价10%
+                "low_demand_discount": 0.95,  # 低需求降价5%
             },
-            is_active=True
+            is_active=True,
         ),
         PricingRule(
             rule_id="seasonal_adjustment",
@@ -336,9 +354,9 @@ async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
             parameters={
                 "seasonal_categories": ["保温用品", "夏季用品"],
                 "peak_season_markup": 1.15,
-                "off_season_discount": 0.90
+                "off_season_discount": 0.90,
             },
-            is_active=False
+            is_active=False,
         ),
         PricingRule(
             rule_id="inventory_clearance",
@@ -349,33 +367,35 @@ async def get_pricing_rules() -> APIResponse[List[PricingRule]]:
                 "high_inventory_threshold": 90,  # 库存天数
                 "clearance_discount_percent": 20.0,
                 "deep_clearance_threshold": 120,
-                "deep_discount_percent": 35.0
+                "deep_discount_percent": 35.0,
             },
-            is_active=True
-        )
+            is_active=True,
+        ),
     ]
-    
+
     # 从数据库获取自定义规则（如果有的话）
     pool = pg.get_pool()
     try:
         custom_rules = await pool.fetch("""
             SELECT rule_id, name, description, rule_type, parameters, is_active
-            FROM pricing_rules 
+            FROM pricing_rules
             ORDER BY created_at DESC
         """)
-        
+
         for rule in custom_rules:
-            default_rules.append(PricingRule(
-                rule_id=rule["rule_id"],
-                name=rule["name"],
-                description=rule["description"],
-                rule_type=rule["rule_type"],
-                parameters=rule["parameters"],
-                is_active=rule["is_active"]
-            ))
+            default_rules.append(
+                PricingRule(
+                    rule_id=rule["rule_id"],
+                    name=rule["name"],
+                    description=rule["description"],
+                    rule_type=rule["rule_type"],
+                    parameters=rule["parameters"],
+                    is_active=rule["is_active"],
+                )
+            )
     except Exception as e:
         logger.warning(f"Failed to fetch custom pricing rules: {e}")
-    
+
     return APIResponse(data=default_rules)
 
 
@@ -431,11 +451,7 @@ async def get_analysis(product_id: str) -> APIResponse:
         )
     except Exception as e:
         logger.error(f"Failed to analyze pricing for {product_id}: {e}")
-        return APIResponse(
-            success=False,
-            message=f"Failed to analyze: {str(e)}",
-            data={}
-        )
+        return APIResponse(success=False, message=f"Failed to analyze: {str(e)}", data={})
 
 
 class ApplyPriceRequest(BaseModel):
@@ -451,8 +467,133 @@ async def apply_prices(req: ApplyPriceRequest) -> APIResponse:
         return APIResponse(data=results)
     except Exception as e:
         logger.error(f"Failed to apply price changes: {e}")
-        return APIResponse(
-            success=False,
-            message=f"Failed to apply changes: {str(e)}",
-            data=[]
-        )
+        return APIResponse(success=False, message=f"Failed to apply changes: {str(e)}", data=[])
+
+
+# 专门的 /api/products/pricing 端点
+@products_pricing_router.get("/pricing", response_model=APIResponse[dict])
+async def get_products_pricing_analysis() -> APIResponse[dict]:
+    """专门的商品定价分析端点 - 从 qnh_products 表分析各品类价格分布和利润率"""
+    from src.db import postgres as pg
+
+    try:
+        pool = pg.get_pool()
+
+        # 获取价格分布数据（从qnh_products表）
+        price_distribution = await pool.fetch("""
+            SELECT
+                category,
+                COUNT(*) as product_count,
+                AVG(retail_price) as avg_retail_price,
+                AVG(channel_price) as avg_channel_price,
+                AVG(cost_price) as avg_cost_price,
+                AVG(CASE
+                    WHEN cost_price > 0 AND retail_price > 0
+                    THEN (retail_price - cost_price) / retail_price * 100
+                    ELSE NULL
+                END) as avg_margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0 AND category IS NOT NULL AND category != ''
+            GROUP BY category
+            HAVING COUNT(*) >= 3
+            ORDER BY avg_margin_percent DESC NULLS LAST
+        """)
+
+        # 价格区间分析
+        price_ranges = await pool.fetch("""
+            SELECT
+                CASE
+                    WHEN retail_price <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    ELSE '超高价(>500元)'
+                END as price_range,
+                COUNT(*) as product_count,
+                AVG(CASE
+                    WHEN cost_price > 0 AND retail_price > 0
+                    THEN (retail_price - cost_price) / retail_price * 100
+                    ELSE NULL
+                END) as avg_margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0
+            GROUP BY
+                CASE
+                    WHEN retail_price <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    ELSE '超高价(>500元)'
+                END
+            ORDER BY avg_margin_percent DESC NULLS LAST
+        """)
+
+        # 定价建议
+        pricing_suggestions = []
+
+        # 低利润率商品（利润率<15%）
+        low_margin_products = await pool.fetch("""
+            SELECT spu_id, name, category, retail_price, cost_price,
+                   CASE
+                       WHEN cost_price > 0 AND retail_price > 0
+                       THEN (retail_price - cost_price) / retail_price * 100
+                       ELSE 0
+                   END as margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0 AND cost_price > 0
+            AND (retail_price - cost_price) / retail_price * 100 < 15
+            ORDER BY margin_percent ASC
+            LIMIT 20
+        """)
+
+        # 构建定价建议
+        for product in low_margin_products:
+            suggested_price = float(product["cost_price"]) * 1.25  # 25%利润率
+            pricing_suggestions.append(
+                {
+                    "product_id": product["spu_id"],
+                    "name": product["name"],
+                    "current_price": float(product["retail_price"]),
+                    "suggested_price": round(suggested_price, 2),
+                    "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
+                    "action": "涨价",
+                }
+            )
+
+        result = {
+            "category_analysis": [
+                {
+                    "category": row["category"],
+                    "product_count": int(row["product_count"]),
+                    "avg_retail_price": round(float(row["avg_retail_price"] or 0), 2),
+                    "avg_channel_price": round(float(row["avg_channel_price"] or 0), 2),
+                    "avg_cost_price": round(float(row["avg_cost_price"] or 0), 2),
+                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
+                }
+                for row in price_distribution
+            ],
+            "price_range_analysis": [
+                {
+                    "price_range": row["price_range"],
+                    "product_count": int(row["product_count"]),
+                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
+                }
+                for row in price_ranges
+            ],
+            "pricing_suggestions": pricing_suggestions[:10],  # 限制返回数量
+            "summary": {
+                "total_categories": len(price_distribution),
+                "low_margin_count": len(low_margin_products),
+                "avg_margin": round(
+                    sum(float(row["avg_margin_percent"] or 0) for row in price_distribution)
+                    / len(price_distribution)
+                    if price_distribution
+                    else 0,
+                    2,
+                ),
+            },
+        }
+
+        return APIResponse(data=result)
+
+    except Exception as e:
+        logger.error(f"Failed to get products pricing analysis: {e}")
+        return APIResponse(success=False, message=f"获取定价分析失败: {str(e)}", data={})

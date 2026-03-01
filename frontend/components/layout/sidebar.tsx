@@ -26,15 +26,15 @@ export function Sidebar() {
   const pathname = usePathname();
   const [selectedStoreId, setSelectedStoreId] = useState('1232550');
   const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
-  
+
   const selectedStore = stores.find(s => s.id === selectedStoreId) || stores[0];
-  
+
   return (
     <aside className="w-60 bg-background border-r border-border flex flex-col">
       <div className="px-6 py-6 border-b border-border">
         <h1 className="text-lg font-bold text-blue-600">🤖 AI 店长</h1>
         <p className="text-sm text-muted-foreground mt-1">智能管理后台</p>
-        
+
         {/* 店铺切换器 */}
         <div className="mt-4 relative">
           <button
@@ -49,7 +49,7 @@ export function Sidebar() {
               ▼
             </span>
           </button>
-          
+
           {isStoreDropdownOpen && (
             <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg z-50">
               {stores.map((store) => (

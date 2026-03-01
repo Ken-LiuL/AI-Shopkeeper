@@ -86,8 +86,8 @@ export default function CompetitorsPage() {
             <div className="text-red-500 text-4xl mb-4">⚠️</div>
             <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
             <p className="text-red-600 mb-4">{error}</p>
-            <button 
-              onClick={() => window.location.reload()} 
+            <button
+              onClick={() => window.location.reload()}
               className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
             >
               重新加载
@@ -139,7 +139,7 @@ export default function CompetitorsPage() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground">价格优势</p>
                 <p className="text-3xl font-bold text-purple-600">
-                  {priceComparison.length > 0 ? 
+                  {priceComparison.length > 0 ?
                     Math.round((priceComparison.filter(item => Number(item.price_diff_pct || 0) <= 0).length / priceComparison.length) * 100) : 0}%
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">商品更有优势</p>

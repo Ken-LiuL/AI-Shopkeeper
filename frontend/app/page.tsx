@@ -91,8 +91,8 @@ function DashboardPage() {
             <div className="text-red-500 text-4xl mb-4">⚠️</div>
             <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
             <p className="text-red-600 mb-4">{error}</p>
-            <button 
-              onClick={() => window.location.reload()} 
+            <button
+              onClick={() => window.location.reload()}
               className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
             >
               重新加载
@@ -158,9 +158,9 @@ function DashboardPage() {
         <CardContent>
           {trend.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={trend.map(item => ({ 
-                date: item.date, 
-                gmv: Number(item.revenue || 0), 
+              <LineChart data={trend.map(item => ({
+                date: item.date,
+                gmv: Number(item.revenue || 0),
                 orders: Number(item.quantity || 0)
               }))}>
                 <CartesianGrid strokeDasharray="3 3" />
@@ -293,7 +293,7 @@ function DashboardPage() {
                       </ReactMarkdown>
                     </div>
                   </div>
-                  
+
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                       🔥 热销变化
@@ -305,7 +305,7 @@ function DashboardPage() {
                     </div>
                   </div>
                 </div>
-                
+
                 <div className="space-y-4">
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
@@ -317,7 +317,7 @@ function DashboardPage() {
                       </ReactMarkdown>
                     </div>
                   </div>
-                  
+
                   <div>
                     <h4 className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-2">
                       💡 可操作建议
@@ -330,7 +330,7 @@ function DashboardPage() {
                   </div>
                 </div>
               </div>
-              
+
               <div className="text-xs text-gray-500 text-center border-t pt-4">
                 📅 数据更新时间: {new Date(insights.date).toLocaleString('zh-CN')}
               </div>

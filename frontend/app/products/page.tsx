@@ -235,7 +235,7 @@ function ProductsPage() {
           className="max-w-sm"
         />
         <div className="text-sm text-muted-foreground flex items-center">
-          当前显示 {filteredProducts.length} 件商品 
+          当前显示 {filteredProducts.length} 件商品
           {data?.summary && ` (共 ${Number(data.summary.total_products).toLocaleString()} 件)`}
         </div>
       </div>

@@ -13,7 +13,7 @@ const statusOptions = [
 
 const statusLabels: Record<string, string> = {
   pending: '待处理',
-  processing: '配送中', 
+  processing: '配送中',
   completed: '已完成',
   refunded: '已退单',
 };
@@ -34,7 +34,7 @@ export default function OrdersPage() {
   const [selectedStatus, setSelectedStatus] = useState('all');
   const [selectedDate, setSelectedDate] = useState('');
   const [total, setTotal] = useState(0);
-  
+
   const limit = 20;
   const totalPages = Math.ceil(total / limit);
 
@@ -49,7 +49,7 @@ export default function OrdersPage() {
         getOrders(currentPage, limit, selectedStatus),
         getOrderStats(),
       ]);
-      
+
       setOrders(ordersResponse.orders);
       setTotal(ordersResponse.total);
       setStats(statsData);
@@ -120,7 +120,7 @@ export default function OrdersPage() {
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white p-6 rounded-lg shadow-sm border">
             <div className="flex items-center">
               <div className="p-3 rounded-full bg-green-100">
@@ -132,7 +132,7 @@ export default function OrdersPage() {
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white p-6 rounded-lg shadow-sm border">
             <div className="flex items-center">
               <div className="p-3 rounded-full bg-red-100">
@@ -144,7 +144,7 @@ export default function OrdersPage() {
               </div>
             </div>
           </div>
-          
+
           <div className="bg-white p-6 rounded-lg shadow-sm border">
             <div className="flex items-center">
               <div className="p-3 rounded-full bg-yellow-100">
@@ -179,7 +179,7 @@ export default function OrdersPage() {
               ))}
             </select>
           </div>
-          
+
           <div className="flex gap-2">
             <label className="text-sm font-medium text-gray-700">日期:</label>
             <input

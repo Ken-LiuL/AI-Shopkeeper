@@ -259,7 +259,12 @@ async def main() -> None:
     page = await browser.get("https://qnh.meituan.com")
     await page.sleep(2)
     with open(cookies_path) as f:
-        cookies = json.load(f)
+        raw_cookies = json.load(f)
+    # Support both dict format and nodriver list format
+    if isinstance(raw_cookies, list):
+        cookies = {item["name"]: item["value"] for item in raw_cookies if "name" in item}
+    else:
+        cookies = raw_cookies
     for name, value in cookies.items():
         await page.send(
             nodriver.cdp.network.set_cookie(

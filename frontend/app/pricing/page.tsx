@@ -22,7 +22,7 @@ export default function PricingPage() {
         getPricingSuggestions(),
         getPricingRules(),
       ]);
-      
+
       setSuggestions(suggestionsData);
       setRules(rulesData);
       setError(null);
@@ -37,11 +37,11 @@ export default function PricingPage() {
     try {
       setAdoptingIds(prev => new Set([...prev, suggestionId]));
       await adoptPricingSuggestion(suggestionId);
-      
+
       // 更新建议状态
-      setSuggestions(prev => 
-        prev.map(s => 
-          s.product_id === suggestionId 
+      setSuggestions(prev =>
+        prev.map(s =>
+          s.product_id === suggestionId
             ? { ...s, status: 'adopted' as const }
             : s
         )
@@ -144,7 +144,7 @@ export default function PricingPage() {
               基于市场分析和销售数据生成的智能调价建议
             </p>
           </div>
-          
+
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
@@ -183,8 +183,8 @@ export default function PricingPage() {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                       <span className={`font-medium ${
-                        suggestion.suggested_price > suggestion.current_price 
-                          ? 'text-green-600' 
+                        suggestion.suggested_price > suggestion.current_price
+                          ? 'text-green-600'
                           : 'text-red-600'
                       }`}>
                         {formatCurrency(suggestion.suggested_price)}
@@ -227,7 +227,7 @@ export default function PricingPage() {
               </tbody>
             </table>
           </div>
-          
+
           {suggestions.length === 0 && (
             <div className="text-center py-12">
               <p className="text-gray-500">暂无调价建议</p>
@@ -244,7 +244,7 @@ export default function PricingPage() {
               配置智能定价的规则和策略
             </p>
           </div>
-          
+
           <div className="p-6 space-y-4">
             {rules.map((rule) => (
               <div key={rule.rule_id} className="border border-gray-200 rounded-lg p-4">
@@ -270,7 +270,7 @@ export default function PricingPage() {
                 </div>
               </div>
             ))}
-            
+
             {rules.length === 0 && (
               <div className="text-center py-8">
                 <p className="text-gray-500">暂无定价规则</p>

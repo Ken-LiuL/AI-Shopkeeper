@@ -359,7 +359,7 @@ export async function adoptPricingSuggestion(suggestionId: string): Promise<void
   });
 }
 
-// Inventory Restock API  
+// Inventory Restock API
 export interface RestockSuggestion {
   product_id: string;
   product_name: string;

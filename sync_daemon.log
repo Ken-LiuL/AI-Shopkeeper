@@ -1,0 +1,56 @@
+2026-03-02 01:38:59,598 [INFO] sync_daemon: 🚀 启动同步 daemon
+2026-03-02 01:38:59,598 [INFO] sync_daemon:    Backend: https://ai-shopkeeper-1dl4.onrender.com
+2026-03-02 01:38:59,598 [INFO] sync_daemon:    Interval: 300s
+2026-03-02 01:38:59,603 [INFO] nodriver.core.browser: starting
+	executable :/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+
+arguments:
+--remote-allow-origins=*
+	--no-first-run
+	--no-service-autorun
+	--no-default-browser-check
+	--homepage=about:blank
+	--no-pings
+	--password-store=basic
+	--disable-infobars
+	--disable-breakpad
+	--disable-dev-shm-usage
+	--disable-session-crashed-bubble
+	--disable-search-engine-choice-screen
+	--user-data-dir=/var/folders/00/fsn5lkm97yg9hkfnvh9yzth80000gq/T/uc_9kkm1us0
+	--disable-session-crashed-bubble
+	--disable-features=IsolateOrigins,site-per-process
+	--remote-debugging-host=127.0.0.1
+	--remote-debugging-port=59367
+2026-03-02 01:39:00,574 [INFO] nodriver.core.browser: enabling autodiscover targets
+2026-03-02 01:39:03,485 [INFO] sync_daemon: 已加载 11 个 cookies
+2026-03-02 01:39:03,998 [INFO] sync_daemon: 等待页面加载和 h5guard 初始化...
+2026-03-02 01:39:19,013 [INFO] sync_daemon: 页面标题: 牵牛花
+2026-03-02 01:39:22,021 [INFO] sync_daemon: 登录检查: {"code":1,"msg":"Request method 'GET' not supported","success":false}
+2026-03-02 01:39:22,022 [INFO] sync_daemon: ✅ 浏览器就绪
+2026-03-02 01:39:22,023 [INFO] sync_daemon: ==================================================
+2026-03-02 01:39:22,023 [INFO] sync_daemon: 开始同步轮次 01:39:22
+2026-03-02 01:39:57,249 [ERROR] sync_daemon: ❌ homepage_hotsale_goods_rank_ta:
+2026-03-02 01:40:19,802 [INFO] sync_daemon: ✅ customer_consume_rank_table_vi (customers): pushed 1 records → {'ok': True, 'records': 1, 'source': 'customers', 'message': ''}
+2026-03-02 01:40:25,371 [INFO] sync_daemon: ✅ homepage_not_erp_poi_rank_tabl (metrics): pushed 3 records → {'ok': True, 'records': 3, 'source': 'metrics', 'message': ''}
+2026-03-02 01:40:30,764 [INFO] sync_daemon: ✅ homepage_date_trend_list_new (traffic): pushed 1 records → {'ok': True, 'records': 1, 'source': 'traffic', 'message': ''}
+2026-03-02 01:40:36,185 [INFO] sync_daemon: ✅ homepage_channel_distribute_ta (channels): pushed 1 records → {'ok': True, 'records': 1, 'source': 'channels', 'message': ''}
+2026-03-02 01:40:41,645 [INFO] sync_daemon: ✅ overview → metrics: 1 records → {'ok': True, 'records': 1, 'source': 'metrics', 'message': ''}
+2026-03-02 01:40:45,298 [INFO] sync_daemon: ✅ products_category → products: pushed → {'ok': True, 'records': 0, 'source': 'products', 'message': ''}
+2026-03-02 01:40:48,775 [INFO] sync_daemon: ✅ channels_list → channels: pushed → {'ok': True, 'records': 1, 'source': 'channels', 'message': ''}
+2026-03-02 01:40:52,175 [INFO] sync_daemon: ✅ workbench → orders: pushed → {'ok': True, 'records': 1, 'source': 'orders', 'message': ''}
+2026-03-02 01:40:52,176 [INFO] sync_daemon: 同步轮次完成
+2026-03-02 01:40:52,176 [INFO] sync_daemon: 等待 300 秒...
+2026-03-02 01:45:52,188 [INFO] sync_daemon: ==================================================
+2026-03-02 01:45:52,196 [INFO] sync_daemon: 开始同步轮次 01:45:52
+2026-03-02 01:45:57,612 [INFO] sync_daemon: ✅ homepage_hotsale_goods_rank_ta (products): pushed 1 records → {'ok': True, 'records': 0, 'source': 'products', 'message': ''}
+2026-03-02 01:46:03,084 [INFO] sync_daemon: ✅ customer_consume_rank_table_vi (customers): pushed 1 records → {'ok': True, 'records': 1, 'source': 'customers', 'message': ''}
+2026-03-02 01:46:09,035 [INFO] sync_daemon: ✅ homepage_not_erp_poi_rank_tabl (metrics): pushed 3 records → {'ok': True, 'records': 3, 'source': 'metrics', 'message': ''}
+2026-03-02 01:46:14,445 [INFO] sync_daemon: ✅ homepage_date_trend_list_new (traffic): pushed 1 records → {'ok': True, 'records': 1, 'source': 'traffic', 'message': ''}
+2026-03-02 01:46:20,006 [INFO] sync_daemon: ✅ homepage_channel_distribute_ta (channels): pushed 1 records → {'ok': True, 'records': 1, 'source': 'channels', 'message': ''}
+2026-03-02 01:46:25,429 [INFO] sync_daemon: ✅ overview → metrics: 1 records → {'ok': True, 'records': 1, 'source': 'metrics', 'message': ''}
+2026-03-02 01:46:28,946 [INFO] sync_daemon: ✅ products_category → products: pushed → {'ok': True, 'records': 0, 'source': 'products', 'message': ''}
+2026-03-02 01:46:32,365 [INFO] sync_daemon: ✅ channels_list → channels: pushed → {'ok': True, 'records': 1, 'source': 'channels', 'message': ''}
+2026-03-02 01:46:35,761 [INFO] sync_daemon: ✅ workbench → orders: pushed → {'ok': True, 'records': 1, 'source': 'orders', 'message': ''}
+2026-03-02 01:46:35,761 [INFO] sync_daemon: 同步轮次完成
+2026-03-02 01:46:35,761 [INFO] sync_daemon: 等待 300 秒...

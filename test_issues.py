@@ -2,7 +2,6 @@
 """Quick test script to verify the 3 issues are fixed."""
 
 import asyncio
-import json
 import logging
 
 import httpx
@@ -10,13 +9,14 @@ import httpx
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def test_issues():
     """Test the 3 issues that should be fixed."""
-    
+
     # Start the server in background
     import subprocess
     import time
-    
+
     try:
         logger.info("Starting server...")
         proc = subprocess.Popen(
@@ -26,17 +26,16 @@ async def test_issues():
             stderr=subprocess.PIPE,
         )
         time.sleep(5)  # Give server time to start
-        
+
         base_url = "http://localhost:8001"
-        
+
         async with httpx.AsyncClient(timeout=10.0) as client:
-            
             # Test 1: Chat endpoint
             logger.info("Testing chat endpoint...")
             try:
                 response = await client.post(
                     f"{base_url}/api/v1/chat",
-                    json={"message": "今天销售怎么样", "session_id": "test-session"}
+                    json={"message": "今天销售怎么样", "session_id": "test-session"},
                 )
                 logger.info(f"Chat endpoint status: {response.status_code}")
                 if response.status_code != 200:
@@ -45,7 +44,7 @@ async def test_issues():
                     logger.info("✓ Chat endpoint working")
             except Exception as e:
                 logger.error(f"Chat endpoint error: {e}")
-            
+
             # Test 2: Products list endpoint
             logger.info("Testing products list endpoint...")
             try:
@@ -55,10 +54,12 @@ async def test_issues():
                     logger.error(f"Products list failed: {response.text}")
                 else:
                     data = response.json()
-                    logger.info(f"✓ Products list working, got {len(data.get('data', []))} products")
+                    logger.info(
+                        f"✓ Products list working, got {len(data.get('data', []))} products"
+                    )
             except Exception as e:
                 logger.error(f"Products list error: {e}")
-            
+
             # Test 3: Alerts endpoint
             logger.info("Testing alerts endpoint...")
             try:
@@ -68,14 +69,17 @@ async def test_issues():
                     logger.error(f"Alerts endpoint failed: {response.text}")
                 else:
                     data = response.json()
-                    logger.info(f"✓ Alerts endpoint working, got {len(data.get('data', []))} alerts")
+                    logger.info(
+                        f"✓ Alerts endpoint working, got {len(data.get('data', []))} alerts"
+                    )
             except Exception as e:
                 logger.error(f"Alerts endpoint error: {e}")
-        
+
     finally:
-        if 'proc' in locals():
+        if "proc" in locals():
             proc.terminate()
             proc.wait(timeout=5)
+
 
 if __name__ == "__main__":
     asyncio.run(test_issues())

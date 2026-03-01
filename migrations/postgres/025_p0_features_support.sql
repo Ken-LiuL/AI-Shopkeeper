@@ -131,15 +131,15 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS actual_delivery_time TIMESTAMPTZ;
 
 -- 商品销量排行视图
 CREATE OR REPLACE VIEW product_sales_ranking AS
-SELECT 
+SELECT
     p.product_id,
     p.name,
     p.category,
     p.retail_price,
     p.cost_price,
-    CASE 
+    CASE
         WHEN p.cost_price > 0 THEN ROUND((p.retail_price - p.cost_price) / p.retail_price * 100, 2)
-        ELSE NULL 
+        ELSE NULL
     END as margin_percent,
     COALESCE(SUM(oi.quantity), 0) as total_sold_30d,
     COALESCE(COUNT(DISTINCT oi.order_id), 0) as order_count_30d,
@@ -153,7 +153,7 @@ ORDER BY total_sold_30d DESC;
 
 -- 门店表现视图
 CREATE OR REPLACE VIEW store_performance_daily AS
-SELECT 
+SELECT
     s.poi_id,
     s.store_name,
     DATE(o.order_time) as date,
