@@ -21,10 +21,14 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     """Generate real-time alerts based on actual business data."""
     import contextlib
     import json
+    from datetime import UTC, datetime
 
+    from .dashboard import _extract_metric
+
+    now_str = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     alerts = []
 
-    # 1. Stock-out alerts based on metrics data
+    # 1. Stock-out and performance alerts from store metrics
     with contextlib.suppress(Exception):
         row = await pool.fetchrow(
             "SELECT raw_data FROM qnh_store_metrics_raw ORDER BY created_at DESC LIMIT 1"
@@ -34,47 +38,56 @@ async def _generate_smart_alerts(pool) -> list[dict]:
             if isinstance(data, str):
                 data = json.loads(data)
 
-            # Extract stockout loss amount
-            stockout_loss = data.get("stockout_loss_amt", {})
-            if isinstance(stockout_loss, dict):
-                indic = stockout_loss.get("indicValue", {})
-                if isinstance(indic, dict):
-                    loss_amount = float(indic.get("originValue", 0) or 0)
-                    if loss_amount > 0:
-                        alerts.append(
-                            {
-                                "alert_id": f"stockout_loss_{int(loss_amount)}",
-                                "type": "stockout",
-                                "severity": "high",
-                                "title": "缺货损失警告",
-                                "description": f"当前缺货造成损失: ¥{loss_amount:.2f}",
-                                "product_id": None,
-                                "status": "pending",
-                                "created_at": "2026-03-01T06:45:00Z",
-                                "resolved_at": None,
-                            }
-                        )
+            # Stockout loss (uses _extract_metric to handle nested + lastPeriodValue fallback)
+            loss_amount = _extract_metric(data, "stockout_loss_amt")
+            if loss_amount > 0:
+                alerts.append(
+                    {
+                        "alert_id": f"stockout_loss_{int(loss_amount)}",
+                        "type": "stockout",
+                        "severity": "high",
+                        "title": "缺货损失警告",
+                        "description": f"缺货造成损失: ¥{loss_amount:.2f}，请及时补货",
+                        "product_id": None,
+                        "status": "pending",
+                        "created_at": now_str,
+                        "resolved_at": None,
+                    }
+                )
 
-            # Check overtime order rate
-            overtime_rate = data.get("overtime_ord_rate", {})
-            if isinstance(overtime_rate, dict):
-                indic = overtime_rate.get("indicValue", {})
-                if isinstance(indic, dict):
-                    rate = float(indic.get("originValue", 0) or 0)
-                    if rate > 0.2:  # > 20%
-                        alerts.append(
-                            {
-                                "alert_id": f"overtime_rate_{int(rate * 100)}",
-                                "type": "performance",
-                                "severity": "medium",
-                                "title": "超时订单率过高",
-                                "description": f"当前超时订单率: {rate * 100:.1f}%，建议优化配送",
-                                "product_id": None,
-                                "status": "pending",
-                                "created_at": "2026-03-01T06:45:00Z",
-                                "resolved_at": None,
-                            }
-                        )
+            # Overtime order rate
+            rate = _extract_metric(data, "overtime_ord_rate")
+            if rate > 0.05:  # > 5%
+                alerts.append(
+                    {
+                        "alert_id": f"overtime_rate_{int(rate * 100)}",
+                        "type": "performance",
+                        "severity": "high" if rate > 0.2 else "medium",
+                        "title": "超时订单率偏高",
+                        "description": f"超时订单率: {rate * 100:.1f}%，建议优化配送流程",
+                        "product_id": None,
+                        "status": "pending",
+                        "created_at": now_str,
+                        "resolved_at": None,
+                    }
+                )
+
+            # Stockout refund rate
+            refund_rate = _extract_metric(data, "stockout_refund_rate")
+            if refund_rate > 0:
+                alerts.append(
+                    {
+                        "alert_id": f"stockout_refund_{int(refund_rate * 10000)}",
+                        "type": "inventory",
+                        "severity": "medium",
+                        "title": "缺货退款提醒",
+                        "description": f"缺货退款率: {refund_rate * 100:.2f}%",
+                        "product_id": None,
+                        "status": "pending",
+                        "created_at": now_str,
+                        "resolved_at": None,
+                    }
+                )
 
     # 2. Product alerts - low revenue products
     with contextlib.suppress(Exception):

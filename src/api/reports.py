@@ -87,18 +87,8 @@ async def _get_aggregated_metrics(pool, days: int) -> dict:
             else:
                 # Check if we have enough data for the period
                 unique_dates = len(set(row["created_at"].date() for row in rows))
-                if unique_dates < min(days, 7):  # Need at least some daily data
-                    return {
-                        "order_count": 0,
-                        "total_revenue": 0.0,
-                        "avg_order_value": 0.0,
-                        "refund_count": 0,
-                        "refund_rate": 0.0,
-                        "cs_responses": 0,
-                        "message": f"Insufficient data for {days}-day period. Only {unique_dates} days available.",
-                    }
 
-                # Take the most recent record as a representative (raw data is cumulative)
+                # Use whatever data we have, add note if incomplete
                 latest_data = rows[0]["raw_data"]
                 if isinstance(latest_data, str):
                     latest_data = json.loads(latest_data)
