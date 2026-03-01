@@ -151,3 +151,116 @@ async def price_comparison(
             *params,
         )
     return APIResponse(data=[dict(r) for r in rows])
+
+
+@router.post("/fix-schema")
+async def fix_competitor_schema() -> APIResponse[dict]:
+    """Manually apply competitor table schema fixes."""
+    pool = pg.get_pool()
+
+    migration_sql = """
+    -- Drop old tables if they have wrong schema
+    DROP TABLE IF EXISTS competitor_products CASCADE;
+    DROP TABLE IF EXISTS competitor_stores CASCADE;
+    DROP TABLE IF EXISTS competitor_keywords CASCADE;
+
+    -- Recreate with correct schema
+    CREATE TABLE IF NOT EXISTS competitor_stores (
+        store_id    TEXT PRIMARY KEY,
+        name        TEXT NOT NULL,
+        rating      REAL DEFAULT 0,
+        monthly_sales INTEGER DEFAULT 0,
+        distance_km REAL DEFAULT 0,
+        lat         REAL DEFAULT 0,
+        lng         REAL DEFAULT 0,
+        category    TEXT DEFAULT '',
+        last_synced TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_competitor_stores_category ON competitor_stores(category);
+    CREATE INDEX IF NOT EXISTS idx_competitor_stores_distance ON competitor_stores(distance_km);
+    CREATE INDEX IF NOT EXISTS idx_competitor_stores_synced ON competitor_stores(last_synced);
+
+    -- Recreate competitor_products with correct schema
+    CREATE TABLE IF NOT EXISTS competitor_products (
+        product_id  TEXT PRIMARY KEY,
+        store_id    TEXT DEFAULT '' REFERENCES competitor_stores(store_id) ON DELETE SET DEFAULT,
+        name        TEXT NOT NULL,
+        price       REAL DEFAULT 0,
+        monthly_sales INTEGER DEFAULT 0,
+        rating      REAL DEFAULT 0,
+        category    TEXT DEFAULT '',
+        last_synced TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_competitor_products_store ON competitor_products(store_id);
+    CREATE INDEX IF NOT EXISTS idx_competitor_products_category ON competitor_products(category);
+    CREATE INDEX IF NOT EXISTS idx_competitor_products_sales ON competitor_products(monthly_sales DESC);
+    CREATE INDEX IF NOT EXISTS idx_competitor_products_synced ON competitor_products(last_synced);
+
+    -- Create competitor_keywords table
+    CREATE TABLE IF NOT EXISTS competitor_keywords (
+        keyword      TEXT PRIMARY KEY,
+        search_volume INTEGER DEFAULT 0,
+        result_count INTEGER DEFAULT 0,
+        avg_price    REAL DEFAULT 0,
+        last_synced  TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_competitor_keywords_volume ON competitor_keywords(search_volume DESC);
+    CREATE INDEX IF NOT EXISTS idx_competitor_keywords_synced ON competitor_keywords(last_synced);
+
+    -- Add sample data for testing
+    INSERT INTO competitor_keywords (keyword, search_volume, result_count, avg_price)
+    VALUES
+        ('感冒药', 1200, 45, 25.5),
+        ('维生素', 800, 32, 15.8),
+        ('创可贴', 600, 28, 8.9)
+    ON CONFLICT (keyword) DO NOTHING;
+
+    -- Add sample competitor stores if they don't exist
+    INSERT INTO competitor_stores (store_id, name, rating, monthly_sales, category)
+    VALUES
+        ('test_store_1', '测试药店A', 4.5, 1500, 'pharmacy'),
+        ('test_store_2', '测试药店B', 4.2, 1200, 'pharmacy')
+    ON CONFLICT (store_id) DO NOTHING;
+
+    -- Add sample competitor products if they don't exist
+    INSERT INTO competitor_products (product_id, store_id, name, price, monthly_sales, rating, category)
+    VALUES
+        ('cp_1', 'test_store_1', '感冒灵颗粒', 18.5, 200, 4.3, 'cold_medicine'),
+        ('cp_2', 'test_store_2', '维生素C片', 12.8, 150, 4.1, 'vitamins')
+    ON CONFLICT (product_id) DO NOTHING;
+    """
+
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # Split and execute statements
+                statements = [s.strip() for s in migration_sql.split(";") if s.strip()]
+                for stmt in statements:
+                    if stmt:
+                        await conn.execute(stmt)
+
+        # Mark migration as applied
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "INSERT INTO _migrations (filename) VALUES ($1) ON CONFLICT (filename) DO NOTHING",
+                "022_fix_competitor_keywords.sql",
+            )
+
+        return APIResponse(
+            data={
+                "message": "Schema fixed successfully",
+                "tables_created": [
+                    "competitor_stores",
+                    "competitor_products",
+                    "competitor_keywords",
+                ],
+            }
+        )
+    except Exception as e:
+        return APIResponse(data={"error": f"Migration failed: {str(e)}"}, success=False)
+
+
+# deploy 1772344622
