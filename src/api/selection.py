@@ -106,12 +106,59 @@ async def get_recommendations() -> APIResponse[list[dict]]:
         """SELECT result FROM selection_runs
            WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1"""
     )
-    if not row or not row["result"]:
-        return APIResponse(data=[], message="功能待开通")
-    import json
+    if row and row["result"]:
+        import json
 
-    result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
-    recommendations = result.get("recommendations", [])
-    if not recommendations:
-        return APIResponse(data=[], message="功能待开通")
-    return APIResponse(data=recommendations)
+        result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
+        recommendations = result.get("recommendations", [])
+        if recommendations:
+            return APIResponse(data=recommendations)
+
+    # Fallback: generate basic recommendations from product data
+    import contextlib
+
+    recs: list[dict] = []
+    with contextlib.suppress(Exception):
+        # High-margin products with good categories
+        high_value = await pool.fetch(
+            """SELECT spu_id, name, category, brand, retail_price
+               FROM qnh_products
+               WHERE status = '在售' AND retail_price > 100 AND category != ''
+               ORDER BY retail_price DESC LIMIT 10"""
+        )
+        for p in high_value:
+            recs.append(
+                {
+                    "product_id": p["spu_id"],
+                    "name": p["name"],
+                    "category": p.get("category", ""),
+                    "brand": p.get("brand", ""),
+                    "price": float(p["retail_price"]),
+                    "reason": "高客单价商品，利润空间大",
+                    "score": 0.85,
+                }
+            )
+
+        # Low-price high-frequency candidates
+        low_price = await pool.fetch(
+            """SELECT spu_id, name, category, brand, retail_price
+               FROM qnh_products
+               WHERE status = '在售' AND retail_price BETWEEN 10 AND 50 AND category != ''
+               ORDER BY retail_price ASC LIMIT 10"""
+        )
+        for p in low_price:
+            recs.append(
+                {
+                    "product_id": p["spu_id"],
+                    "name": p["name"],
+                    "category": p.get("category", ""),
+                    "brand": p.get("brand", ""),
+                    "price": float(p["retail_price"]),
+                    "reason": "低价引流商品，提升订单量",
+                    "score": 0.75,
+                }
+            )
+
+    if recs:
+        return APIResponse(data=recs)
+    return APIResponse(data=[], message="功能待开通")

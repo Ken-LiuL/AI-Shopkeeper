@@ -322,4 +322,30 @@ async def search_knowledge(
     except Exception:
         logger.debug("Fallback search failed", exc_info=True)
 
+    # Final fallback: search products in PostgreSQL if Neo4j returned nothing
+    if not results:
+        try:
+            pool = pg.get_pool()
+            rows = await pool.fetch(
+                """SELECT spu_id, name, category, brand, spec, retail_price
+                   FROM qnh_products
+                   WHERE (name ILIKE $1 OR category ILIKE $1 OR brand ILIKE $1)
+                   AND status = '在售'
+                   ORDER BY retail_price DESC
+                   LIMIT $2""",
+                f"%{q}%",
+                limit,
+            )
+            results.extend(
+                {
+                    "name": r["name"],
+                    "description": f"{r.get('brand', '')} {r.get('spec', '')} ¥{r.get('retail_price', 0)}",
+                    "category": r.get("category", ""),
+                    "source": "product_database",
+                }
+                for r in rows
+            )
+        except Exception:
+            logger.debug("Postgres product search fallback failed", exc_info=True)
+
     return APIResponse(data=results)
