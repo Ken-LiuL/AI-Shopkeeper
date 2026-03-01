@@ -105,3 +105,41 @@ async def get_logs(
         *params,
     )
     return APIResponse(data=[dict(r) for r in rows])
+
+
+@router.post("/debug/fix-competitor-keywords", response_model=APIResponse[dict])
+async def fix_competitor_keywords() -> APIResponse[dict]:
+    """TEMPORARY: Fix the missing competitor_keywords table."""
+    pool = pg.get_pool()
+    try:
+        # Create the missing table
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS competitor_keywords (
+                keyword      TEXT PRIMARY KEY,
+                search_volume INTEGER DEFAULT 0,
+                result_count INTEGER DEFAULT 0,
+                avg_price    REAL DEFAULT 0,
+                last_synced  TIMESTAMPTZ DEFAULT NOW()
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_competitor_keywords_volume ON competitor_keywords(search_volume DESC);
+            CREATE INDEX IF NOT EXISTS idx_competitor_keywords_synced ON competitor_keywords(last_synced);
+        """)
+
+        # Add sample data
+        await pool.execute("""
+            INSERT INTO competitor_keywords (keyword, search_volume, result_count, avg_price)
+            VALUES
+                ('感冒药', 1200, 45, 25.5),
+                ('维生素', 800, 32, 15.8),
+                ('创可贴', 600, 28, 8.9)
+            ON CONFLICT (keyword) DO NOTHING;
+        """)
+
+        count = await pool.fetchval("SELECT COUNT(*) FROM competitor_keywords")
+        return APIResponse(
+            data={"table_created": True, "rows": count}, message="competitor_keywords table fixed"
+        )
+
+    except Exception as e:
+        return APIResponse(success=False, data={"error": str(e)}, message="Failed to fix table")
