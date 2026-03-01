@@ -1,144 +1,237 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
-import { Header } from '@/components/layout/header';
-import { Card } from '@/components/ui/card';
-import { StatsCard } from '@/components/ui/stats-card';
-import { LineChart } from '@/components/charts/line-chart';
-import { getDailyReport, getWeeklyReport, getMonthlyReport, getSalesTrend } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { getDailyReport, getSalesTrend } from '@/lib/api';
+import type { ReportData, SalesTrendData } from '@/lib/api';
 
 type Period = 'daily' | 'weekly' | 'monthly';
 
 export default function ReportsPage() {
   const [period, setPeriod] = useState<Period>('daily');
-  const [report, setReport] = useState<any>(null);
-  const [trend, setTrend] = useState<any[]>([]);
-  const [dateInput, setDateInput] = useState(new Date().toISOString().split('T')[0]);
+  const [report, setReport] = useState<ReportData | null>(null);
+  const [trend, setTrend] = useState<SalesTrendData[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    try {
-      let res;
-      if (period === 'daily') {
-        res = await getDailyReport(dateInput);
-      } else if (period === 'weekly') {
-        res = await getWeeklyReport();
-      } else {
-        res = await getMonthlyReport();
+  useEffect(() => {
+    const fetchData = async () => {
+      setLoading(true);
+      try {
+        const [reportData, trendData] = await Promise.all([
+          getDailyReport(),
+          getSalesTrend(),
+        ]);
+        setReport(reportData);
+        setTrend(trendData);
+      } catch (error) {
+        console.error('Error fetching report data:', error);
+      } finally {
+        setLoading(false);
       }
-      setReport(res.data);
-    } catch {}
-    try {
-      const t = await getSalesTrend();
-      setTrend(t.data || []);
-    } catch {}
-  }, [period, dateInput]);
+    };
 
-  useEffect(() => { load(); }, [load]);
+    fetchData();
+  }, [period]);
+
+  const tabs = [
+    { key: 'daily' as const, label: '日报', icon: '📅' },
+    { key: 'weekly' as const, label: '周报', icon: '📊' },
+    { key: 'monthly' as const, label: '月报', icon: '📈' },
+  ];
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {[1, 2, 3].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-6">
+                <div className="h-20 bg-muted animate-pulse rounded"></div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div>
-      <Header title="经营报表" />
-      <div className="p-6 space-y-4">
-        {/* Period switcher */}
-        <div className="flex gap-2 items-center">
-          {(['daily', 'weekly', 'monthly'] as Period[]).map(p => (
-            <button key={p} onClick={() => setPeriod(p)}
-              className={`px-4 py-2 rounded-lg text-sm ${period === p ? 'bg-amber-500 text-black font-medium' : 'bg-white/5 text-gray-400 hover:text-white'}`}>
-              {{ daily: '日报', weekly: '周报', monthly: '月报' }[p]}
-            </button>
-          ))}
-          {period === 'daily' && (
-            <input type="date" value={dateInput} onChange={e => setDateInput(e.target.value)}
-              className="ml-4 bg-white/5 border border-white/[0.08] rounded-lg px-3 py-2 text-sm text-gray-300 outline-none" />
-          )}
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">经营报表</h1>
+          <p className="text-muted-foreground">查看详细的业务数据和表现指标</p>
         </div>
-
-        {/* KPI Cards */}
-        {report && (
-          <div className="grid grid-cols-4 gap-4">
-            <StatsCard title="销售额" value={`¥${(report.revenue ?? report.total_revenue ?? 0).toLocaleString()}`} icon="💰" />
-            <StatsCard title="订单数" value={report.order_count ?? 0} icon="📋" />
-            <StatsCard title="客单价" value={`¥${(report.avg_order_value ?? report.avg_order_value ?? 0).toLocaleString()}`} icon="🛒" />
-            <StatsCard
-              title={period === 'daily' ? '环比昨日' : '退款率'}
-              value={period === 'daily' ? `${report.revenue_vs_yesterday > 0 ? '+' : ''}${report.revenue_vs_yesterday?.toFixed(1) ?? 0}%` : `${((report.refund_rate ?? 0) * 100).toFixed(1)}%`}
-              icon={period === 'daily' ? '📊' : '↩️'}
-            />
-          </div>
-        )}
-
-        {/* Trend Chart */}
-        {trend.length > 0 && (
-          <Card>
-            <div className="p-4">
-              <h3 className="text-white font-medium mb-4">销售趋势 (近30天)</h3>
-              <LineChart data={trend.map(t => ({ name: t.date?.slice(5), value: Number(t.revenue) }))} xKey="name" yKey="value" />
-            </div>
-          </Card>
-        )}
-
-        {/* Daily report details */}
-        {period === 'daily' && report?.top_products && (
-          <div className="grid grid-cols-2 gap-4">
-            <Card>
-              <div className="p-4">
-                <h3 className="text-white font-medium mb-3">🔥 热销 Top 3</h3>
-                {report.top_products.map((p: any, i: number) => (
-                  <div key={i} className="flex justify-between py-2 border-b border-white/[0.04] text-sm">
-                    <span className="text-gray-300">{i + 1}. {p.name}</span>
-                    <span className="text-amber-400">销量{p.qty} · ¥{Number(p.revenue).toLocaleString()}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-            <Card>
-              <div className="p-4">
-                <h3 className="text-white font-medium mb-3">🐌 滞销 Top 3</h3>
-                {report.slow_products?.map((p: any, i: number) => (
-                  <div key={i} className="flex justify-between py-2 border-b border-white/[0.04] text-sm">
-                    <span className="text-gray-300">{i + 1}. {p.name}</span>
-                    <span className="text-red-400">库存{p.stock} · 7日售{p.daily_sales}</span>
-                  </div>
-                ))}
-              </div>
-            </Card>
-          </div>
-        )}
-
-        {/* Todo items */}
-        {period === 'daily' && report?.todo_items?.length > 0 && (
-          <Card>
-            <div className="p-4">
-              <h3 className="text-white font-medium mb-3">📋 明日待办</h3>
-              {report.todo_items.map((item: string, i: number) => (
-                <div key={i} className="py-1.5 text-sm text-gray-300">• {item}</div>
-              ))}
-            </div>
-          </Card>
-        )}
-
-        {/* CS Stats */}
-        {period === 'daily' && report?.cs_total !== undefined && (
-          <Card>
-            <div className="p-4">
-              <h3 className="text-white font-medium mb-3">💬 客服统计</h3>
-              <div className="grid grid-cols-3 gap-4 text-sm">
-                <div>
-                  <span className="text-gray-500">总咨询</span>
-                  <p className="text-white text-lg">{report.cs_total}</p>
-                </div>
-                <div>
-                  <span className="text-gray-500">AI处理率</span>
-                  <p className="text-white text-lg">{(report.cs_ai_ratio * 100).toFixed(0)}%</p>
-                </div>
-                <div>
-                  <span className="text-gray-500">转人工</span>
-                  <p className="text-white text-lg">{report.cs_human_transfer}</p>
-                </div>
-              </div>
-            </div>
-          </Card>
-        )}
+        <Button>导出报表</Button>
       </div>
+
+      {/* Period Tabs */}
+      <div className="flex gap-2">
+        {tabs.map((tab) => (
+          <Button
+            key={tab.key}
+            variant={period === tab.key ? "default" : "outline"}
+            onClick={() => setPeriod(tab.key)}
+            className="flex items-center gap-2"
+          >
+            <span>{tab.icon}</span>
+            {tab.label}
+          </Button>
+        ))}
+      </div>
+
+      {/* Metrics Cards */}
+      {report && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {Object.entries(report.metrics).map(([key, value]) => (
+            <Card key={key}>
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground capitalize">
+                      {key.replace('_', ' ')}
+                    </p>
+                    <p className="text-2xl font-bold">
+                      {typeof value === 'number' && key.includes('revenue')
+                        ? `¥${value.toLocaleString()}`
+                        : String(value)}
+                    </p>
+                  </div>
+                  <div className="text-3xl opacity-80">
+                    {key.includes('revenue') ? '💰' : key.includes('order') ? '📋' : '📊'}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Sales Trend Chart */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>📈</span>
+            销售趋势
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {trend.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={trend}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 12 }}
+                  tickFormatter={(value) => new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
+                />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip
+                  formatter={(value: number, name: string) => [
+                    name === 'gmv' ? `¥${value.toLocaleString()}` : value,
+                    name === 'gmv' ? 'GMV' : '订单数'
+                  ]}
+                  labelFormatter={(value) => new Date(value).toLocaleDateString('zh-CN')}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="gmv"
+                  stroke="#3b82f6"
+                  strokeWidth={2}
+                  name="gmv"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="orders"
+                  stroke="#10b981"
+                  strokeWidth={2}
+                  name="orders"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-muted-foreground">
+              暂无数据
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Top Products */}
+      {report?.top_products && report.top_products.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>🏆</span>
+              热销商品排行
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableCaption>本期热销商品排行榜</TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[100px]">排名</TableHead>
+                  <TableHead>商品名称</TableHead>
+                  <TableHead className="text-right">销售额/数量</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.top_products.map((product, index) => (
+                  <TableRow key={index}>
+                    <TableCell>
+                      <Badge variant={index < 3 ? "default" : "secondary"}>
+                        #{index + 1}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-medium">{product.name}</TableCell>
+                    <TableCell className="text-right font-semibold">
+                      {typeof product.value === 'number' && product.value > 1000
+                        ? `¥${product.value.toLocaleString()}`
+                        : product.value}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Report Summary */}
+      {report && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <span>📋</span>
+              报表总结
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="font-medium">报表周期</span>
+                <Badge variant="outline">{report.period}</Badge>
+              </div>
+              <div className="text-sm text-muted-foreground">
+                本报表反映了{period === 'daily' ? '当日' : period === 'weekly' ? '本周' : '本月'}的经营状况。
+                通过分析销售趋势和商品表现，帮助您制定更好的经营策略。
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
