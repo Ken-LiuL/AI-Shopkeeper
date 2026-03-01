@@ -485,8 +485,8 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
                 category,
                 COUNT(*) as product_count,
                 AVG(retail_price) as avg_retail_price,
-                AVG(channel_price) as avg_channel_price,
-                AVG(cost_price) as avg_cost_price,
+                AVG((channel_price->>'meituan')::numeric) as avg_channel_price,
+                AVG(cost_price::numeric) as avg_cost_price,
                 AVG(CASE
                     WHEN cost_price > 0 AND retail_price > 0
                     THEN (retail_price - cost_price) / retail_price * 100
