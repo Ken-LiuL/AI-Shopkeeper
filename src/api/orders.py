@@ -50,7 +50,8 @@ async def recent_orders(
                     data = json.loads(data)
 
                 if isinstance(data, dict):
-                    snapshot_time = r["synced_at"].isoformat() if r["synced_at"] else ""
+                    sa = r["synced_at"]
+                    snapshot_time = sa.isoformat() if hasattr(sa, "isoformat") else str(sa or "")
                     pending_orders = data.get("upcomingOrderCount", 0)
                     pending_im_tasks = data.get("upcomingIMTaskCount", 0)
                     # pending_call_tasks = data.get("upcomingCallTaskCount", 0)  # Not used currently
