@@ -30,12 +30,13 @@ class RestockSuggestion(BaseModel):
     safety_stock_days: int
 
 
-async def _get_current_inventory():
-    """从qnh_products表获取当前库存数据"""
+async def _get_current_inventory(limit: int = 50):
+    """从qnh_products表获取当前库存数据（优化性能）"""
     pool = pg.get_pool()
 
-    # 从qnh_products表获取库存（这是真实的商品数据）
-    inventory = await pool.fetch("""
+    # 优化：只获取在售商品，限制数量，添加索引字段
+    inventory = await pool.fetch(
+        """
         SELECT
             spu_id as product_id,
             name,
@@ -45,30 +46,45 @@ async def _get_current_inventory():
             category,
             channel_status
         FROM qnh_products
-        ORDER BY name
-        LIMIT 500
-    """)
+        WHERE retail_price > 0  -- 只查询有价格的商品
+        ORDER BY retail_price DESC  -- 优先返回高价值商品
+        LIMIT $1
+    """,
+        limit,
+    )
 
     # Convert to mutable dicts
     inventory = [dict(row) for row in inventory]
 
-    # 为每个商品估算库存（因为没有真实库存字段）
+    # 为每个商品估算库存（修复JSONB状态判断）
     for item in inventory:
         # 基于商品状态估算库存
-        status = str(item["channel_status"]).strip('"')
-        if status == "在售":
+        channel_status = item["channel_status"]
+        price = item["retail_price"] or 0
+
+        # 判断是否在售（任一平台为"on"）
+        is_active = False
+        if channel_status and isinstance(channel_status, dict):
+            is_active = (
+                channel_status.get("meituan") == "on"
+                or channel_status.get("eleme") == "on"
+                or channel_status.get("jddj") == "on"
+            )
+        elif channel_status is None and price > 0:
+            # 如果没有渠道状态但有价格，认为是在售
+            is_active = True
+
+        if is_active:
             # 在售商品假设有库存，根据价格估算
-            price = item["retail_price"] or 0
-            if price > 100:
+            if price > 500:
                 estimated_stock = 20  # 高价商品库存较少
-            elif price > 50:
+            elif price > 100:
                 estimated_stock = 50  # 中价商品
             else:
                 estimated_stock = 100  # 低价商品库存较多
-        elif status == "缺货":
-            estimated_stock = 0  # 缺货
-        else:  # 停售
-            estimated_stock = 5  # 停售商品少量库存
+        else:
+            # 非在售商品
+            estimated_stock = 5  # 少量库存
 
         item["stock"] = estimated_stock
 
@@ -279,12 +295,13 @@ async def _generate_ai_restock_analysis(inventory_data: list[dict]) -> list[dict
 async def get_restock_suggestions(
     safety_days: int = Query(7, ge=1, le=30, description="安全库存天数"),
     min_urgency: str = Query("low", description="最低紧急程度过滤"),
+    limit: int = Query(20, ge=1, le=50, description="返回建议数量限制"),
 ) -> APIResponse[list[RestockSuggestion]]:
-    """基于销量趋势和安全库存生成补货建议"""
+    """基于销量趋势和安全库存生成补货建议（优化性能）"""
 
     try:
-        # 获取库存数据
-        inventory = await _get_current_inventory()
+        # 获取有限的库存数据以提升性能
+        inventory = await _get_current_inventory(limit=limit)
         sales_velocity = await _calculate_sales_velocity()
         supplier_info, default_suppliers = await _get_supplier_info()
 
@@ -374,21 +391,16 @@ async def get_restock_suggestions(
                     )
                 )
 
-        # 使用AI优化建议
-        if analysis_data:
-            ai_suggestions = await _generate_ai_restock_analysis(analysis_data[:20])  # 限制数量
-
-            # 更新建议
-            for suggestion in suggestions:
-                ai_suggestion = next(
-                    (s for s in ai_suggestions if s["product_id"] == suggestion.product_id), None
-                )
-                if ai_suggestion:
-                    suggestion.suggested_restock_qty = max(
-                        ai_suggestion["suggested_qty"], suggestion.suggested_restock_qty
-                    )
-                    if ai_suggestion["urgency"] in ["high", "medium", "low"]:
-                        suggestion.urgency = ai_suggestion["urgency"]
+        # 简化：移除AI调用以避免超时，使用规则化逻辑
+        # 基于库存天数调整紧急程度
+        for suggestion in suggestions:
+            days_remaining = suggestion.days_remaining
+            if days_remaining <= 3:
+                suggestion.urgency = "high"
+            elif days_remaining <= 7:
+                suggestion.urgency = "medium"
+            else:
+                suggestion.urgency = "low"
 
         # 按紧急程度排序
         urgency_order = {"high": 3, "medium": 2, "low": 1}
@@ -417,13 +429,41 @@ async def get_inventory_overview() -> APIResponse[dict]:
     try:
         pool = pg.get_pool()
 
-        # 从qnh_products表获取基本统计（模拟库存数据）
+        # 从qnh_products表获取基本统计（修复JSONB查询）
         overview = await pool.fetchrow("""
             SELECT
                 COUNT(*) as total_products,
-                COUNT(CASE WHEN channel_status::text LIKE '%在售%' THEN 1 END) as active_products,
-                COUNT(CASE WHEN channel_status::text LIKE '%缺货%' THEN 1 END) as out_of_stock_count,
-                COUNT(CASE WHEN channel_status::text NOT LIKE '%在售%' AND channel_status::text NOT LIKE '%缺货%' THEN 1 END) as inactive_products
+                -- 修复：正确查询JSONB字段，检查任一平台为"on"状态
+                COUNT(CASE
+                    WHEN channel_status IS NOT NULL AND (
+                        channel_status->>'meituan' = 'on' OR
+                        channel_status->>'eleme' = 'on' OR
+                        channel_status->>'jddj' = 'on'
+                    ) THEN 1
+                    -- 如果channel_status为null，用retail_price>0作为在售判断
+                    WHEN channel_status IS NULL AND retail_price > 0 THEN 1
+                END) as active_products,
+                -- 缺货商品：任一平台标记为"off"且没有任何平台"on"
+                COUNT(CASE
+                    WHEN channel_status IS NOT NULL AND (
+                        channel_status->>'meituan' = 'off' OR
+                        channel_status->>'eleme' = 'off' OR
+                        channel_status->>'jddj' = 'off'
+                    ) AND NOT (
+                        channel_status->>'meituan' = 'on' OR
+                        channel_status->>'eleme' = 'on' OR
+                        channel_status->>'jddj' = 'on'
+                    ) THEN 1
+                END) as out_of_stock_count,
+                -- 非活跃：没有任何平台为"on"状态
+                COUNT(CASE
+                    WHEN channel_status IS NOT NULL AND NOT (
+                        channel_status->>'meituan' = 'on' OR
+                        channel_status->>'eleme' = 'on' OR
+                        channel_status->>'jddj' = 'on'
+                    ) THEN 1
+                    WHEN channel_status IS NULL AND (retail_price IS NULL OR retail_price <= 0) THEN 1
+                END) as inactive_products
             FROM qnh_products
             WHERE category IS NOT NULL AND category != ''
         """)

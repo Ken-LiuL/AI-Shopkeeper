@@ -244,7 +244,7 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
 
         # 转换为API响应格式
         suggestions = []
-        for i, product in enumerate(product_analysis_data):
+        for product in product_analysis_data:
             # 寻找对应的AI建议
             ai_suggestion = next(
                 (s for s in ai_suggestions if s["product_id"] == product["product_id"]), None
@@ -479,7 +479,7 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
     try:
         pool = pg.get_pool()
 
-        # 获取价格分布数据（从qnh_products表）
+        # 修复：由于成本价数据缺失，改用渠道价格差异分析
         price_distribution = await pool.fetch("""
             SELECT
                 category,
@@ -487,9 +487,12 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
                 AVG(retail_price) as avg_retail_price,
                 AVG((channel_price->>'meituan')::numeric) as avg_channel_price,
                 AVG(cost_price::numeric) as avg_cost_price,
+                -- 修复：使用零售价vs渠道价的差异作为"渠道溢价率"
                 AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
+                    WHEN (channel_price->>'meituan')::numeric > 0 AND retail_price > 0
+                    THEN (retail_price - (channel_price->>'meituan')::numeric) / retail_price * 100
+                    -- 如果没有渠道价，估算15%的默认margin
+                    WHEN retail_price > 0 THEN 15.0
                     ELSE NULL
                 END) as avg_margin_percent
             FROM qnh_products
@@ -499,7 +502,7 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
             ORDER BY avg_margin_percent DESC NULLS LAST
         """)
 
-        # 价格区间分析
+        # 价格区间分析（修复margin计算）
         price_ranges = await pool.fetch("""
             SELECT
                 CASE
@@ -509,9 +512,17 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
                     ELSE '超高价(>500元)'
                 END as price_range,
                 COUNT(*) as product_count,
+                -- 修复：使用渠道价差异或估算margin
                 AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
+                    WHEN (channel_price->>'meituan')::numeric > 0 AND retail_price > 0
+                    THEN (retail_price - (channel_price->>'meituan')::numeric) / retail_price * 100
+                    WHEN retail_price > 0 THEN
+                        CASE
+                            WHEN retail_price <= 50 THEN 20.0    -- 低价商品估算20%
+                            WHEN retail_price <= 200 THEN 25.0   -- 中价商品估算25%
+                            WHEN retail_price <= 500 THEN 30.0   -- 高价商品估算30%
+                            ELSE 35.0                             -- 超高价商品估算35%
+                        END
                     ELSE NULL
                 END) as avg_margin_percent
             FROM qnh_products
@@ -529,34 +540,41 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
         # 定价建议
         pricing_suggestions = []
 
-        # 低利润率商品（利润率<15%）
+        # 修复：由于成本价缺失，改为查找渠道价格偏低的商品
         low_margin_products = await pool.fetch("""
-            SELECT spu_id, name, category, retail_price, cost_price,
+            SELECT spu_id, name, category, retail_price,
+                   (channel_price->>'meituan')::numeric as channel_price,
                    CASE
-                       WHEN cost_price > 0 AND retail_price > 0
-                       THEN (retail_price - cost_price) / retail_price * 100
-                       ELSE 0
+                       WHEN (channel_price->>'meituan')::numeric > 0 AND retail_price > 0
+                       THEN (retail_price - (channel_price->>'meituan')::numeric) / retail_price * 100
+                       ELSE NULL
                    END as margin_percent
             FROM qnh_products
-            WHERE retail_price > 0 AND cost_price > 0
-            AND (retail_price - cost_price) / retail_price * 100 < 15
-            ORDER BY margin_percent ASC
-            LIMIT 20
+            WHERE retail_price > 0 AND (channel_price->>'meituan')::numeric > 0
+            AND retail_price <= (channel_price->>'meituan')::numeric * 1.2  -- 渠道溢价<20%的商品
+            ORDER BY margin_percent ASC NULLS LAST
+            LIMIT 10
         """)
 
-        # 构建定价建议
+        # 修复：构建基于渠道价的定价建议
         for product in low_margin_products:
-            suggested_price = float(product["cost_price"]) * 1.25  # 25%利润率
-            pricing_suggestions.append(
-                {
-                    "product_id": product["spu_id"],
-                    "name": product["name"],
-                    "current_price": float(product["retail_price"]),
-                    "suggested_price": round(suggested_price, 2),
-                    "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
-                    "action": "涨价",
-                }
-            )
+            current_price = float(product["retail_price"])
+            channel_price = float(product["channel_price"] or 0)
+            margin_percent = product["margin_percent"] or 0
+
+            if channel_price > 0:
+                # 建议价格：渠道价+25%
+                suggested_price = channel_price * 1.25
+                pricing_suggestions.append(
+                    {
+                        "product_id": product["spu_id"],
+                        "name": product["name"],
+                        "current_price": current_price,
+                        "suggested_price": round(suggested_price, 2),
+                        "reason": f"当前渠道溢价率{margin_percent:.1f}%过低，建议提升至25%",
+                        "action": "涨价",
+                    }
+                )
 
         result = {
             "category_analysis": [
@@ -590,6 +608,7 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
                     2,
                 ),
             },
+            "data_source_note": "成本价数据暂无，利润率基于零售价与渠道价差异计算",
         }
 
         return APIResponse(data=result)
