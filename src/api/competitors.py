@@ -104,6 +104,7 @@ async def search_competitor_products(
             params.append(category)
             idx += 1
         where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        # Note: total is approximate for price-comparison since it's a join
         total = (
             await pool.fetchval(f"SELECT COUNT(*) FROM competitor_products{where}", *params) or 0
         )
@@ -162,14 +163,11 @@ async def price_comparison(
                        cs.name AS competitor_store,
                        ROUND(((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100)::numeric, 2) AS price_diff_pct
                 FROM qnh_products p
-                JOIN competitor_products cp ON (
-                    cp.category = p.category
-                    OR cp.category LIKE '%' || p.category || '%'
-                    OR p.category LIKE '%' || SPLIT_PART(cp.category, '>', -1) || '%'
-                )
+                JOIN competitor_products cp ON cp.category = p.category
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
-                WHERE cp.price > 0 AND p.retail_price > 0 {"" if not where else " AND " + where[7:]}
-                ORDER BY price_diff_pct DESC LIMIT ${idx}""",
+                {where + " AND " if where else " WHERE "}
+                    cp.price > 0 AND p.retail_price > 0
+                ORDER BY ABS(p.retail_price - cp.price) DESC LIMIT ${idx}""",
             *params,
         )
     return APIResponse(data=[dict(r) for r in rows])
