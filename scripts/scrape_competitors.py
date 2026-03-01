@@ -24,15 +24,34 @@ logger = logging.getLogger(__name__)
 
 # Search keywords for pharmacy products on Meituan
 SEARCH_KEYWORDS = [
-    "药店", "大药房", "医疗器械", "药房",
+    "药店",
+    "大药房",
+    "医疗器械",
+    "药房",
 ]
 
 # Product search keywords to get competitor product prices
 PRODUCT_KEYWORDS = [
-    "血压计", "制氧机", "轮椅", "雾化器", "体温计",
-    "创可贴", "口罩", "消毒液", "纱布", "棉签",
-    "维生素", "感冒药", "止痛药", "退烧药", "咳嗽药",
-    "血糖仪", "护腰带", "颈椎枕", "拐杖", "助行器",
+    "血压计",
+    "制氧机",
+    "轮椅",
+    "雾化器",
+    "体温计",
+    "创可贴",
+    "口罩",
+    "消毒液",
+    "纱布",
+    "棉签",
+    "维生素",
+    "感冒药",
+    "止痛药",
+    "退烧药",
+    "咳嗽药",
+    "血糖仪",
+    "护腰带",
+    "颈椎枕",
+    "拐杖",
+    "助行器",
 ]
 
 
@@ -57,7 +76,9 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
         # Search for pharmacies
         for keyword in SEARCH_KEYWORDS[:2]:
             try:
-                search_url = f"https://h5.waimai.meituan.com/waimai/mindex/search?searchKey={keyword}"
+                search_url = (
+                    f"https://h5.waimai.meituan.com/waimai/mindex/search?searchKey={keyword}"
+                )
                 page = await browser.get(search_url)
                 await asyncio.sleep(4)
 
@@ -66,14 +87,18 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
 
                 # Look for store data in script tags or API responses
                 # Meituan embeds data in __NEXT_DATA__ or window.__INITIAL_STATE__
-                data_match = re.search(r'window\.__INITIAL_STATE__\s*=\s*({.*?});', page_text)
+                data_match = re.search(r"window\.__INITIAL_STATE__\s*=\s*({.*?});", page_text)
                 if not data_match:
-                    data_match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page_text)
+                    data_match = re.search(
+                        r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', page_text
+                    )
 
                 if data_match:
                     try:
                         data = json.loads(data_match.group(1))
-                        logger.info(f"Found embedded data for '{keyword}', keys: {list(data.keys())[:5]}")
+                        logger.info(
+                            f"Found embedded data for '{keyword}', keys: {list(data.keys())[:5]}"
+                        )
                         # Extract store list from various possible paths
                         _extract_stores_from_data(data, stores, keyword)
                     except json.JSONDecodeError:
@@ -81,7 +106,9 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
 
                 # Also try to intercept XHR responses
                 # Scrape visible store cards from DOM
-                store_elements = await page.query_selector_all("[class*='shopItem'], [class*='store'], [class*='poi']")
+                store_elements = await page.query_selector_all(
+                    "[class*='shopItem'], [class*='store'], [class*='poi']"
+                )
                 for elem in store_elements[:20]:
                     try:
                         text = await elem.text
@@ -100,12 +127,16 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
         # Now scrape product prices from top stores
         for keyword in PRODUCT_KEYWORDS[:10]:
             try:
-                search_url = f"https://h5.waimai.meituan.com/waimai/mindex/search?searchKey={keyword}"
+                search_url = (
+                    f"https://h5.waimai.meituan.com/waimai/mindex/search?searchKey={keyword}"
+                )
                 page = await browser.get(search_url)
                 await asyncio.sleep(3)
 
                 # Extract product cards
-                product_elements = await page.query_selector_all("[class*='product'], [class*='food'], [class*='item']")
+                product_elements = await page.query_selector_all(
+                    "[class*='product'], [class*='food'], [class*='item']"
+                )
                 for elem in product_elements[:10]:
                     try:
                         text = await elem.text
@@ -124,10 +155,8 @@ async def scrape_meituan_pharmacies(headless: bool = True) -> list[dict]:
     except Exception as e:
         logger.error(f"Browser scraping failed: {e}")
     finally:
-        try:
+        with __import__("contextlib").suppress(Exception):
             browser.stop()
-        except Exception:
-            pass
 
     return stores, products
 
@@ -146,20 +175,24 @@ def _extract_stores_from_data(data: dict, stores: list, keyword: str):
         if isinstance(obj, list):
             for shop in obj:
                 if isinstance(shop, dict):
-                    stores.append({
-                        "store_id": f"mt_{shop.get('id', shop.get('poiId', ''))}",
-                        "name": shop.get("name", shop.get("shopName", "")),
-                        "rating": float(shop.get("score", shop.get("rating", 0)) or 0),
-                        "monthly_sales": int(shop.get("monthSaleNum", shop.get("monthlySales", 0)) or 0),
-                        "distance_km": float(shop.get("distance", 0) or 0) / 1000,
-                        "category": keyword,
-                        "source": "meituan",
-                    })
+                    stores.append(
+                        {
+                            "store_id": f"mt_{shop.get('id', shop.get('poiId', ''))}",
+                            "name": shop.get("name", shop.get("shopName", "")),
+                            "rating": float(shop.get("score", shop.get("rating", 0)) or 0),
+                            "monthly_sales": int(
+                                shop.get("monthSaleNum", shop.get("monthlySales", 0)) or 0
+                            ),
+                            "distance_km": float(shop.get("distance", 0) or 0) / 1000,
+                            "category": keyword,
+                            "source": "meituan",
+                        }
+                    )
 
 
 def _parse_store_card(text: str, keyword: str) -> dict | None:
     """Parse a store card's visible text into structured data."""
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     if len(lines) < 2:
         return None
 
@@ -174,23 +207,23 @@ def _parse_store_card(text: str, keyword: str) -> dict | None:
 
     for line in lines:
         # Rating: "4.8分" or "4.8"
-        m = re.search(r'(\d\.\d)\s*分?', line)
+        m = re.search(r"(\d\.\d)\s*分?", line)
         if m and not rating:
             rating = float(m.group(1))
 
         # Monthly sales: "月售1234" or "1234单"
-        m = re.search(r'月售\s*(\d+)', line)
+        m = re.search(r"月售\s*(\d+)", line)
         if m:
             monthly_sales = int(m.group(1))
-        m = re.search(r'(\d+)\s*单', line)
+        m = re.search(r"(\d+)\s*单", line)
         if m and not monthly_sales:
             monthly_sales = int(m.group(1))
 
         # Distance: "1.2km" or "800m"
-        m = re.search(r'(\d+\.?\d*)\s*km', line)
+        m = re.search(r"(\d+\.?\d*)\s*km", line)
         if m:
             distance = float(m.group(1))
-        m = re.search(r'(\d+)\s*m(?![\w])', line)
+        m = re.search(r"(\d+)\s*m(?![\w])", line)
         if m and not distance:
             distance = int(m.group(1)) / 1000
 
@@ -207,7 +240,7 @@ def _parse_store_card(text: str, keyword: str) -> dict | None:
 
 def _parse_product_card(text: str, keyword: str) -> dict | None:
     """Parse a product card's text into structured data."""
-    lines = [l.strip() for l in text.split("\n") if l.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     if len(lines) < 2:
         return None
 
@@ -216,10 +249,10 @@ def _parse_product_card(text: str, keyword: str) -> dict | None:
 
     for line in lines:
         # Price: "¥12.8" or "￥12.8" or "12.80元"
-        m = re.search(r'[¥￥]\s*(\d+\.?\d*)', line)
+        m = re.search(r"[¥￥]\s*(\d+\.?\d*)", line)
         if m:
             price = float(m.group(1))
-        m = re.search(r'(\d+\.?\d+)\s*元', line)
+        m = re.search(r"(\d+\.?\d+)\s*元", line)
         if m and not price:
             price = float(m.group(1))
 
@@ -229,7 +262,7 @@ def _parse_product_card(text: str, keyword: str) -> dict | None:
     # Monthly sales
     monthly_sales = 0
     for line in lines:
-        m = re.search(r'月售\s*(\d+)', line)
+        m = re.search(r"月售\s*(\d+)", line)
         if m:
             monthly_sales = int(m.group(1))
 
@@ -249,8 +282,12 @@ async def save_to_db(stores: list[dict], products: list[dict], db_url: str):
 
     try:
         # Clean old scraped data (keep manually added)
-        await pool.execute("DELETE FROM competitor_products WHERE product_id LIKE 'mt_%' OR product_id LIKE 'cp_%'")
-        await pool.execute("DELETE FROM competitor_stores WHERE store_id LIKE 'mt_%' OR store_id LIKE 'comp_%'")
+        await pool.execute(
+            "DELETE FROM competitor_products WHERE product_id LIKE 'mt_%' OR product_id LIKE 'cp_%'"
+        )
+        await pool.execute(
+            "DELETE FROM competitor_stores WHERE store_id LIKE 'mt_%' OR store_id LIKE 'comp_%'"
+        )
 
         # Insert stores
         seen_names = set()
@@ -264,8 +301,13 @@ async def save_to_db(stores: list[dict], products: list[dict], db_url: str):
                 "VALUES ($1,$2,$3,$4,$5,$6,$7) "
                 "ON CONFLICT (store_id) DO UPDATE SET name=EXCLUDED.name, rating=EXCLUDED.rating, "
                 "monthly_sales=EXCLUDED.monthly_sales, last_synced=EXCLUDED.last_synced",
-                store["store_id"], store["name"], store["rating"],
-                store["monthly_sales"], store["distance_km"], store.get("category", "pharmacy"), now,
+                store["store_id"],
+                store["name"],
+                store["rating"],
+                store["monthly_sales"],
+                store["distance_km"],
+                store.get("category", "pharmacy"),
+                now,
             )
             inserted_stores += 1
 
@@ -274,15 +316,20 @@ async def save_to_db(stores: list[dict], products: list[dict], db_url: str):
         for i, product in enumerate(products):
             if not product["name"] or not product["price"]:
                 continue
-            pid = f"mt_p_{i+1}"
+            pid = f"mt_p_{i + 1}"
             # Assign to a random store if we have stores
             store_id = stores[i % len(stores)]["store_id"] if stores else ""
             await pool.execute(
                 "INSERT INTO competitor_products (product_id, store_id, name, price, monthly_sales, rating, category, last_synced) "
                 "VALUES ($1,$2,$3,$4,$5,0,$6,$7) "
                 "ON CONFLICT (product_id) DO UPDATE SET price=EXCLUDED.price, last_synced=EXCLUDED.last_synced",
-                pid, store_id, product["name"], product["price"],
-                product["monthly_sales"], product.get("category", ""), now,
+                pid,
+                store_id,
+                product["name"],
+                product["price"],
+                product["monthly_sales"],
+                product.get("category", ""),
+                now,
             )
             inserted_products += 1
 
@@ -298,7 +345,11 @@ async def save_to_db(stores: list[dict], products: list[dict], db_url: str):
                 "INSERT INTO competitor_keywords (keyword, search_volume, result_count, avg_price, last_synced) "
                 "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (keyword) DO UPDATE SET "
                 "search_volume=EXCLUDED.search_volume, avg_price=EXCLUDED.avg_price, last_synced=EXCLUDED.last_synced",
-                kw, cnt * 100, cnt, avg_price, now,
+                kw,
+                cnt * 100,
+                cnt,
+                avg_price,
+                now,
             )
 
         logger.info(f"Saved {inserted_stores} stores and {inserted_products} products to DB")
@@ -313,7 +364,9 @@ async def main():
 
     if not db_url:
         # Try to get from Fly
-        logger.error("DATABASE_URL not set. Use: DATABASE_URL=... python scripts/scrape_competitors.py")
+        logger.error(
+            "DATABASE_URL not set. Use: DATABASE_URL=... python scripts/scrape_competitors.py"
+        )
         sys.exit(1)
 
     logger.info(f"Starting Meituan competitor scraping (headless={headless})...")

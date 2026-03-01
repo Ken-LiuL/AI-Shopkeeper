@@ -160,7 +160,7 @@ async def price_comparison(
             f"""SELECT p.spu_id AS product_id, p.name, p.retail_price AS our_price,
                        cp.name AS competitor_name, cp.price AS competitor_price,
                        cs.name AS competitor_store,
-                       ROUND((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100, 2) AS price_diff_pct
+                       ROUND(((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100)::numeric, 2) AS price_diff_pct
                 FROM qnh_products p
                 JOIN competitor_products cp ON (
                     cp.category = p.category

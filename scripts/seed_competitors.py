@@ -5,10 +5,8 @@ Env: DATABASE_URL (or uses Fly proxy)
 """
 
 import asyncio
-import json
 import logging
 import os
-import sys
 from datetime import UTC, datetime
 
 import asyncpg
@@ -25,10 +23,23 @@ STORE_LOCATIONS = [
 ]
 
 # Categories to search for competitor products
-CATEGORIES = ["感冒药", "退烧药", "维生素", "创可贴", "口罩", "血压计", "体温计", "制氧机", "轮椅", "雾化器"]
+CATEGORIES = [
+    "感冒药",
+    "退烧药",
+    "维生素",
+    "创可贴",
+    "口罩",
+    "血压计",
+    "体温计",
+    "制氧机",
+    "轮椅",
+    "雾化器",
+]
 
 
-async def fetch_meituan_search(client: httpx.AsyncClient, keyword: str, lat: float, lng: float) -> list[dict]:
+async def fetch_meituan_search(
+    client: httpx.AsyncClient, keyword: str, lat: float, lng: float
+) -> list[dict]:
     """Search Meituan for nearby pharmacy products."""
     # Use Meituan open search (no auth)
     url = "https://apimobile.meituan.com/group/v4/poi/pcsearch/1"
@@ -71,16 +82,55 @@ async def generate_competitor_data(pool: asyncpg.Pool) -> None:
         return
 
     # Clean old test data
-    await pool.execute("DELETE FROM competitor_products WHERE store_id LIKE 'test_%' OR store_id LIKE 'comp_%'")
-    await pool.execute("DELETE FROM competitor_stores WHERE store_id LIKE 'test_%' OR store_id LIKE 'comp_%'")
+    await pool.execute(
+        "DELETE FROM competitor_products WHERE store_id LIKE 'test_%' OR store_id LIKE 'comp_%'"
+    )
+    await pool.execute(
+        "DELETE FROM competitor_stores WHERE store_id LIKE 'test_%' OR store_id LIKE 'comp_%'"
+    )
 
     # Generate realistic competitor stores (based on common pharmacy chains in China)
     competitor_stores = [
-        {"store_id": "comp_yifeng", "name": "益丰大药房(金牛店)", "rating": 4.6, "monthly_sales": 2800, "distance_km": 0.8, "category": "pharmacy"},
-        {"store_id": "comp_dashenlin", "name": "大参林药房(蜀汉路店)", "rating": 4.4, "monthly_sales": 2200, "distance_km": 1.2, "category": "pharmacy"},
-        {"store_id": "comp_laobaixing", "name": "老百姓大药房(西安路店)", "rating": 4.3, "monthly_sales": 1900, "distance_km": 1.5, "category": "pharmacy"},
-        {"store_id": "comp_hkhealth", "name": "海王星辰健康药房(营门口店)", "rating": 4.5, "monthly_sales": 2500, "distance_km": 2.0, "category": "pharmacy"},
-        {"store_id": "comp_tongrentang", "name": "同仁堂药店(金沙店)", "rating": 4.7, "monthly_sales": 1600, "distance_km": 2.5, "category": "pharmacy"},
+        {
+            "store_id": "comp_yifeng",
+            "name": "益丰大药房(金牛店)",
+            "rating": 4.6,
+            "monthly_sales": 2800,
+            "distance_km": 0.8,
+            "category": "pharmacy",
+        },
+        {
+            "store_id": "comp_dashenlin",
+            "name": "大参林药房(蜀汉路店)",
+            "rating": 4.4,
+            "monthly_sales": 2200,
+            "distance_km": 1.2,
+            "category": "pharmacy",
+        },
+        {
+            "store_id": "comp_laobaixing",
+            "name": "老百姓大药房(西安路店)",
+            "rating": 4.3,
+            "monthly_sales": 1900,
+            "distance_km": 1.5,
+            "category": "pharmacy",
+        },
+        {
+            "store_id": "comp_hkhealth",
+            "name": "海王星辰健康药房(营门口店)",
+            "rating": 4.5,
+            "monthly_sales": 2500,
+            "distance_km": 2.0,
+            "category": "pharmacy",
+        },
+        {
+            "store_id": "comp_tongrentang",
+            "name": "同仁堂药店(金沙店)",
+            "rating": 4.7,
+            "monthly_sales": 1600,
+            "distance_km": 2.5,
+            "category": "pharmacy",
+        },
     ]
 
     for store in competitor_stores:
@@ -90,13 +140,19 @@ async def generate_competitor_data(pool: asyncpg.Pool) -> None:
                ON CONFLICT (store_id) DO UPDATE SET
                  name=EXCLUDED.name, rating=EXCLUDED.rating, monthly_sales=EXCLUDED.monthly_sales,
                  distance_km=EXCLUDED.distance_km, last_synced=EXCLUDED.last_synced""",
-            store["store_id"], store["name"], store["rating"], store["monthly_sales"],
-            store["distance_km"], store["category"], now,
+            store["store_id"],
+            store["name"],
+            store["rating"],
+            store["monthly_sales"],
+            store["distance_km"],
+            store["category"],
+            now,
         )
     logger.info(f"Inserted {len(competitor_stores)} competitor stores")
 
     # Generate competitor products based on our categories with realistic price variations
     import random
+
     random.seed(42)
 
     product_id = 0
@@ -124,8 +180,14 @@ async def generate_competitor_data(pool: asyncpg.Pool) -> None:
                    ON CONFLICT (product_id) DO UPDATE SET
                      price=EXCLUDED.price, monthly_sales=EXCLUDED.monthly_sales,
                      rating=EXCLUDED.rating, last_synced=EXCLUDED.last_synced""",
-                f"cp_{product_id}", store["store_id"], product_name,
-                price, monthly_sales, rating, cat["category"], now,
+                f"cp_{product_id}",
+                store["store_id"],
+                product_name,
+                price,
+                monthly_sales,
+                rating,
+                cat["category"],
+                now,
             )
 
     logger.info(f"Inserted {product_id} competitor products across {len(categories)} categories")
