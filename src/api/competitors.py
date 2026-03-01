@@ -163,11 +163,22 @@ async def price_comparison(
                        cs.name AS competitor_store,
                        ROUND(((p.retail_price - cp.price) / NULLIF(cp.price, 0) * 100)::numeric, 2) AS price_diff_pct
                 FROM qnh_products p
-                JOIN competitor_products cp ON cp.category = p.category
+                JOIN competitor_products cp ON (
+                    -- Better matching: same category AND reasonable price range
+                    cp.category = p.category 
+                    AND cp.price > 0 AND p.retail_price > 0
+                    AND (
+                        -- Only allow price differences within 10x bounds
+                        cp.price <= p.retail_price * 10 
+                        AND cp.price >= p.retail_price * 0.1
+                    )
+                )
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
-                {where + " AND " if where else " WHERE "}
-                    cp.price > 0 AND p.retail_price > 0
-                ORDER BY ABS(p.retail_price - cp.price) DESC LIMIT ${idx}""",
+                {where}
+                ORDER BY 
+                    -- Prioritize similar price ranges
+                    ABS(p.retail_price - cp.price) ASC
+                LIMIT ${idx}""",
             *params,
         )
     return APIResponse(data=[dict(r) for r in rows])
