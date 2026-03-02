@@ -68,7 +68,7 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         low_stock_count = (
             await pool.fetchval("""
             SELECT COUNT(*) FROM qnh_products
-            WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
+            WHERE status = '在售' AND stock IS NOT NULL AND stock < 10
         """)
             or 0
         )
@@ -77,8 +77,8 @@ async def _generate_action_items(pool) -> list[ActionItem]:
             # Get sample product names
             sample_products = await pool.fetch("""
                 SELECT name FROM qnh_products
-                WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
-                ORDER BY stock_num ASC LIMIT 3
+                WHERE status = '在售' AND stock IS NOT NULL AND stock < 10
+                ORDER BY stock ASC LIMIT 3
             """)
             product_names = [row["name"] for row in sample_products]
             detail = f"{low_stock_count}款商品库存不足10件"
