@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, type PricingSuggestion, type PricingRule } from '@/lib/api';
+import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, batchUpdatePrices, type PricingSuggestion, type PricingRule, type BatchPriceUpdateRequest, type BatchPriceUpdateResult } from '@/lib/api';
 
 export default function PricingPage() {
   const [suggestions, setSuggestions] = useState<PricingSuggestion[]>([]);
@@ -10,6 +10,12 @@ export default function PricingPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'suggestions' | 'rules'>('suggestions');
   const [adoptingIds, setAdoptingIds] = useState<Set<string>>(new Set());
+  const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchOperation, setBatchOperation] = useState<'multiply' | 'add' | 'set'>('multiply');
+  const [batchValue, setBatchValue] = useState<string>('');
+  const [batchReason, setBatchReason] = useState<string>('');
+  const [batchProcessing, setBatchProcessing] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -54,6 +60,75 @@ export default function PricingPage() {
         newSet.delete(suggestionId);
         return newSet;
       });
+    }
+  };
+
+  const handleSelectSuggestion = (suggestionId: string, checked: boolean) => {
+    setSelectedSuggestions(prev => {
+      const newSet = new Set(prev);
+      if (checked) {
+        newSet.add(suggestionId);
+      } else {
+        newSet.delete(suggestionId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedSuggestions(new Set(suggestions.map(s => s.product_id)));
+    } else {
+      setSelectedSuggestions(new Set());
+    }
+  };
+
+  const handleBatchUpdate = async () => {
+    if (selectedSuggestions.size === 0) {
+      alert('请选择要调价的商品');
+      return;
+    }
+
+    if (!batchValue || isNaN(Number(batchValue))) {
+      alert('请输入有效的数值');
+      return;
+    }
+
+    setBatchProcessing(true);
+
+    try {
+      const request: BatchPriceUpdateRequest = {
+        product_ids: Array.from(selectedSuggestions),
+        operation: batchOperation,
+        value: Number(batchValue),
+        reason: batchReason || '批量调价操作'
+      };
+
+      const result: BatchPriceUpdateResult = await batchUpdatePrices(request);
+
+      // 显示结果
+      const successCount = result.updated_count;
+      const failedCount = result.failed_count;
+
+      if (successCount > 0) {
+        alert(`批量调价完成！成功更新 ${successCount} 个商品${failedCount > 0 ? `，失败 ${failedCount} 个` : ''}。`);
+
+        // 重新加载数据
+        loadData();
+
+        // 重置选择和对话框
+        setSelectedSuggestions(new Set());
+        setShowBatchModal(false);
+        setBatchValue('');
+        setBatchReason('');
+      } else {
+        alert(`批量调价失败！所有 ${failedCount} 个商品都更新失败。`);
+      }
+
+    } catch (err) {
+      alert('批量调价失败: ' + (err instanceof Error ? err.message : '未知错误'));
+    } finally {
+      setBatchProcessing(false);
     }
   };
 
@@ -139,16 +214,36 @@ export default function PricingPage() {
       {activeTab === 'suggestions' && (
         <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">调价建议</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              基于市场分析和销售数据生成的智能调价建议
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-lg font-medium text-gray-900">调价建议</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  基于市场分析和销售数据生成的智能调价建议
+                </p>
+              </div>
+              {selectedSuggestions.size > 0 && (
+                <button
+                  onClick={() => setShowBatchModal(true)}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
+                >
+                  批量调价 ({selectedSuggestions.size})
+                </button>
+              )}
+            </div>
           </div>
 
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-4 py-3 text-left">
+                    <input
+                      type="checkbox"
+                      checked={selectedSuggestions.size === suggestions.length && suggestions.length > 0}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     商品名称
                   </th>
@@ -175,6 +270,14 @@ export default function PricingPage() {
               <tbody className="bg-white divide-y divide-gray-200">
                 {suggestions.map((suggestion) => (
                   <tr key={suggestion.product_id} className="hover:bg-gray-50">
+                    <td className="px-4 py-4 whitespace-nowrap">
+                      <input
+                        type="checkbox"
+                        checked={selectedSuggestions.has(suggestion.product_id)}
+                        onChange={(e) => handleSelectSuggestion(suggestion.product_id, e.target.checked)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                       {suggestion.product_name}
                     </td>
@@ -276,6 +379,85 @@ export default function PricingPage() {
                 <p className="text-gray-500">暂无定价规则</p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 批量调价模态框 */}
+      {showBatchModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg max-w-md w-full mx-4">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">批量调价</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                已选择 {selectedSuggestions.size} 个商品
+              </p>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  调价方式
+                </label>
+                <select
+                  value={batchOperation}
+                  onChange={(e) => setBatchOperation(e.target.value as 'multiply' | 'add' | 'set')}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="multiply">按比例调价 (乘以)</option>
+                  <option value="add">按数值调价 (加/减)</option>
+                  <option value="set">设置固定价格</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  {batchOperation === 'multiply' ? '调价倍数' : batchOperation === 'add' ? '调价金额' : '新价格'}
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={batchValue}
+                  onChange={(e) => setBatchValue(e.target.value)}
+                  placeholder={
+                    batchOperation === 'multiply' ? '如：1.1 表示涨价10%' :
+                    batchOperation === 'add' ? '如：10 表示涨价10元，-5表示降价5元' :
+                    '输入新的价格'
+                  }
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  调价原因 (可选)
+                </label>
+                <input
+                  type="text"
+                  value={batchReason}
+                  onChange={(e) => setBatchReason(e.target.value)}
+                  placeholder="如：市场竞争调整、促销活动等"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex gap-3 justify-end">
+              <button
+                onClick={() => setShowBatchModal(false)}
+                disabled={batchProcessing}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchUpdate}
+                disabled={batchProcessing || !batchValue}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {batchProcessing ? '处理中...' : '确认调价'}
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -346,6 +346,36 @@ export async function adoptPricingSuggestion(suggestionId: string): Promise<void
   });
 }
 
+// Batch pricing operations
+export interface BatchPriceUpdateRequest {
+  product_ids: string[];
+  operation: 'multiply' | 'add' | 'set';
+  value: number;
+  reason?: string;
+}
+
+export interface BatchPriceUpdateResult {
+  success: boolean;
+  updated_count: number;
+  failed_count: number;
+  results: Array<{
+    product_id: string;
+    product_name?: string;
+    success: boolean;
+    old_price?: number;
+    new_price?: number;
+    change_percent?: number;
+    error?: string;
+  }>;
+}
+
+export async function batchUpdatePrices(request: BatchPriceUpdateRequest): Promise<BatchPriceUpdateResult> {
+  return fetchAPI<BatchPriceUpdateResult>('/pricing/batch-update', {
+    method: 'POST',
+    body: JSON.stringify(request),
+  });
+}
+
 // Inventory Restock API
 export interface RestockSuggestion {
   product_id: string;

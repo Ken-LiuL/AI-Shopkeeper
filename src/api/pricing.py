@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 from typing import Any
@@ -456,6 +457,128 @@ async def get_analysis(product_id: str) -> APIResponse:
 
 class ApplyPriceRequest(BaseModel):
     changes: list[dict]
+
+
+class BatchPriceUpdateRequest(BaseModel):
+    product_ids: list[str]
+    operation: str  # "multiply", "add", "set"
+    value: float
+    reason: str = ""
+
+
+class BatchPriceUpdateResult(BaseModel):
+    success: bool
+    updated_count: int
+    failed_count: int
+    results: list[dict]
+
+
+@router.post("/batch-update", response_model=APIResponse[BatchPriceUpdateResult])
+async def batch_update_prices(req: BatchPriceUpdateRequest) -> APIResponse[BatchPriceUpdateResult]:
+    """批量调价功能"""
+    try:
+        pool = pg.get_pool()
+        updated_count = 0
+        failed_count = 0
+        results = []
+
+        for product_id in req.product_ids:
+            try:
+                # Get current price
+                current_row = await pool.fetchrow(
+                    "SELECT retail_price, name FROM qnh_products WHERE spu_id = $1", product_id
+                )
+
+                if not current_row:
+                    results.append(
+                        {"product_id": product_id, "success": False, "error": "商品不存在"}
+                    )
+                    failed_count += 1
+                    continue
+
+                current_price = float(current_row["retail_price"] or 0)
+                product_name = current_row["name"]
+
+                # Calculate new price
+                new_price = current_price
+                if req.operation == "multiply":
+                    new_price = current_price * req.value
+                elif req.operation == "add":
+                    new_price = current_price + req.value
+                elif req.operation == "set":
+                    new_price = req.value
+                else:
+                    results.append(
+                        {"product_id": product_id, "success": False, "error": "不支持的操作类型"}
+                    )
+                    failed_count += 1
+                    continue
+
+                # Validate new price
+                if new_price <= 0:
+                    results.append(
+                        {"product_id": product_id, "success": False, "error": "新价格必须大于0"}
+                    )
+                    failed_count += 1
+                    continue
+
+                # Update price
+                await pool.execute(
+                    "UPDATE qnh_products SET retail_price = $1 WHERE spu_id = $2",
+                    new_price,
+                    product_id,
+                )
+
+                # Record price change history (if table exists)
+                with contextlib.suppress(Exception):
+                    await pool.execute(
+                        """INSERT INTO price_changes (product_id, old_price, new_price, change_reason, created_at)
+                           VALUES ($1, $2, $3, $4, NOW())""",
+                        product_id,
+                        current_price,
+                        new_price,
+                        req.reason or f"批量{req.operation}操作",
+                    )
+
+                results.append(
+                    {
+                        "product_id": product_id,
+                        "product_name": product_name,
+                        "success": True,
+                        "old_price": round(current_price, 2),
+                        "new_price": round(new_price, 2),
+                        "change_percent": round(
+                            (new_price - current_price) / current_price * 100, 2
+                        )
+                        if current_price > 0
+                        else 0,
+                    }
+                )
+                updated_count += 1
+
+            except Exception as e:
+                logger.error(f"Failed to update price for {product_id}: {e}")
+                results.append({"product_id": product_id, "success": False, "error": str(e)})
+                failed_count += 1
+
+        result = BatchPriceUpdateResult(
+            success=updated_count > 0,
+            updated_count=updated_count,
+            failed_count=failed_count,
+            results=results,
+        )
+
+        return APIResponse(data=result)
+
+    except Exception as e:
+        logger.error(f"Batch price update failed: {e}")
+        return APIResponse(
+            success=False,
+            message=f"批量调价失败: {str(e)}",
+            data=BatchPriceUpdateResult(
+                success=False, updated_count=0, failed_count=len(req.product_ids), results=[]
+            ),
+        )
 
 
 @router.post("/apply", response_model=APIResponse[list])
