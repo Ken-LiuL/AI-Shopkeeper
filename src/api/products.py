@@ -433,16 +433,16 @@ async def get_pricing_analysis() -> APIResponse[dict]:
             SELECT
                 category,
                 COUNT(*) as product_count,
-                AVG(retail_price) as avg_retail_price,
-                AVG(channel_price) as avg_channel_price,
-                AVG(cost_price) as avg_cost_price,
+                AVG(retail_price::numeric) as avg_retail_price,
+                AVG(channel_price::numeric) as avg_channel_price,
+                AVG(cost_price::numeric) as avg_cost_price,
                 AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
+                    WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
+                    THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
                     ELSE NULL
                 END) as avg_margin_percent
             FROM qnh_products
-            WHERE retail_price > 0 AND category IS NOT NULL AND category != ''
+            WHERE retail_price::numeric > 0 AND category IS NOT NULL AND category != ''
             GROUP BY category
             HAVING COUNT(*) >= 3
             ORDER BY avg_margin_percent DESC NULLS LAST
@@ -451,24 +451,24 @@ async def get_pricing_analysis() -> APIResponse[dict]:
         price_ranges = await pool.fetch("""
             SELECT
                 CASE
-                    WHEN retail_price <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    WHEN retail_price::numeric <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price::numeric <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price::numeric <= 500 THEN '高价(201-500元)'
                     ELSE '超高价(>500元)'
                 END as price_range,
                 COUNT(*) as product_count,
                 AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
+                    WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
+                    THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
                     ELSE NULL
                 END) as avg_margin_percent
             FROM qnh_products
-            WHERE retail_price > 0
+            WHERE retail_price::numeric > 0
             GROUP BY
                 CASE
-                    WHEN retail_price <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    WHEN retail_price::numeric <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price::numeric <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price::numeric <= 500 THEN '高价(201-500元)'
                     ELSE '超高价(>500元)'
                 END
             ORDER BY avg_margin_percent DESC NULLS LAST
@@ -479,13 +479,13 @@ async def get_pricing_analysis() -> APIResponse[dict]:
         low_margin_products = await pool.fetch("""
             SELECT spu_id, name, category, retail_price, cost_price,
                    CASE
-                       WHEN cost_price > 0 AND retail_price > 0
-                       THEN (retail_price - cost_price) / retail_price * 100
+                       WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
+                       THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
                        ELSE 0
                    END as margin_percent
             FROM qnh_products
-            WHERE retail_price > 0 AND cost_price > 0
-            AND (retail_price - cost_price) / retail_price * 100 < 15
+            WHERE retail_price::numeric > 0 AND cost_price::numeric > 0
+            AND (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100 < 15
             ORDER BY margin_percent ASC
             LIMIT 20
         """)
@@ -493,13 +493,13 @@ async def get_pricing_analysis() -> APIResponse[dict]:
         high_margin_products = await pool.fetch("""
             SELECT spu_id, name, category, retail_price, cost_price,
                    CASE
-                       WHEN cost_price > 0 AND retail_price > 0
-                       THEN (retail_price - cost_price) / retail_price * 100
+                       WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
+                       THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
                        ELSE 0
                    END as margin_percent
             FROM qnh_products
-            WHERE retail_price > 0 AND cost_price > 0
-            AND (retail_price - cost_price) / retail_price * 100 > 40
+            WHERE retail_price::numeric > 0 AND cost_price::numeric > 0
+            AND (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100 > 40
             ORDER BY margin_percent DESC
             LIMIT 10
         """)
