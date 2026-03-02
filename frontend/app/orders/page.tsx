@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getOrders, getOrderStats, type Order, type OrderStats } from '@/lib/api';
+import { withErrorBoundary } from '@/components/error-boundary';
 
 const statusOptions = [
   { value: 'all', label: '全部' },

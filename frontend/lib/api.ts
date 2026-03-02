@@ -9,6 +9,72 @@ interface APIResponse<T> {
   message: string;
 }
 
+// Error mapping for user-friendly messages
+const getErrorMessage = (error: any, endpoint: string): string => {
+  if (!error) return '未知错误';
+
+  // Network errors
+  if (error.message?.includes('Failed to fetch')) {
+    return '网络连接失败，请检查网络连接后重试';
+  }
+
+  // API-specific error mappings
+  const endpointErrors: Record<string, Record<number, string>> = {
+    '/dashboard/overview': {
+      500: '数据服务暂时不可用，请稍后重试',
+      404: '数据不存在，请联系技术支持',
+    },
+    '/products/inventory': {
+      500: '商品数据加载失败，请稍后重试',
+      403: '没有访问商品数据的权限',
+    },
+    '/pricing/suggestions': {
+      500: '定价分析服务暂时不可用，请稍后重试',
+      429: '请求过于频繁，请稍后重试',
+    },
+    '/customer-service/chat': {
+      500: 'AI 客服暂时不可用，请稍后重试或联系人工客服',
+      429: '请求过于频繁，请稍等片刻后再发送消息',
+    }
+  };
+
+  // Extract status code from error
+  const statusMatch = error.message?.match(/API Error: (\d+)/);
+  const status = statusMatch ? parseInt(statusMatch[1]) : 0;
+
+  // Look for specific endpoint error mapping
+  const specificError = endpointErrors[endpoint]?.[status];
+  if (specificError) {
+    return specificError;
+  }
+
+  // General status code mapping
+  switch (status) {
+    case 400:
+      return '请求参数错误，请检查输入信息';
+    case 401:
+      return '登录已过期，请重新登录';
+    case 403:
+      return '没有访问权限，请联系管理员';
+    case 404:
+      return '请求的数据不存在';
+    case 429:
+      return '请求过于频繁，请稍后重试';
+    case 500:
+      return '服务器内部错误，请稍后重试';
+    case 502:
+    case 503:
+    case 504:
+      return '服务暂时不可用，请稍后重试';
+    default:
+      // For other cases, return a generic but helpful message
+      if (error.message?.includes('API Error')) {
+        return '服务暂时不可用，请稍后重试';
+      }
+      return error.message || '操作失败，请稍后重试';
+  }
+};
+
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   try {
     const response = await fetch(`${BASE_URL}/api${endpoint}`, {
@@ -34,7 +100,9 @@ async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> 
     return json as T;
   } catch (error) {
     console.error(`Error fetching ${endpoint}:`, error);
-    throw error;
+    // Transform error to user-friendly message
+    const userMessage = getErrorMessage(error, endpoint);
+    throw new Error(userMessage);
   }
 }
 

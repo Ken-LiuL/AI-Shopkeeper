@@ -119,129 +119,82 @@ async def get_recommendations() -> APIResponse[list[dict]]:
         if recommendations:
             return APIResponse(data=recommendations)
 
-    # Fallback: generate basic recommendations from product data
+    # Fallback: generate recommendations using continuous scoring algorithm
     import contextlib
+
+    from src.services.selection_scoring import SelectionScoringService
 
     recs: list[dict] = []
     with contextlib.suppress(Exception):
-        # High-margin products with good categories
-        high_value = await pool.fetch(
-            """SELECT spu_id, name, category, brand, retail_price,
-                      CASE
-                        WHEN retail_price > 1000 THEN '高价值医疗设备，需要专业资质和培训'
-                        WHEN retail_price > 500 THEN '中高价位产品，建议小批量试销'
-                        ELSE '中价位产品，适合常规销售'
-                      END as risk_note
+        # Get diverse product samples for recommendation
+        products = await pool.fetch(
+            """SELECT spu_id, name, category, brand, retail_price
                FROM qnh_products
-               WHERE status = '在售' AND retail_price > 100 AND category != ''
-               ORDER BY retail_price DESC LIMIT 10"""
+               WHERE status = '在售'
+                 AND retail_price > 0
+                 AND name != ''
+                 AND category != ''
+               ORDER BY retail_price DESC, RANDOM()
+               LIMIT 25"""
         )
-        for p in high_value:
-            # Generate data-driven reason instead of generic statement
-            category = p.get("category", "").split(">")[-1] if p.get("category") else "医疗器械"
-            price = float(p["retail_price"])
-            margin_estimate = max(15, min(40, price * 0.2))  # Estimate 20% margin
 
-            # Calculate dynamic score based on multiple factors
-            score = 0.5  # Base score
+        for p in products:
+            product_data = {
+                "spu_id": p["spu_id"],
+                "name": p["name"],
+                "category": p.get("category", ""),
+                "brand": p.get("brand", ""),
+                "retail_price": float(p["retail_price"]),
+            }
 
-            # Price factor (higher price = potentially higher margin)
-            if price > 1000:
-                score += 0.25
-            elif price > 500:
-                score += 0.15
-            elif price > 200:
-                score += 0.1
-
-            # Margin factor (estimated based on price range)
-            if margin_estimate >= 35:
-                score += 0.2
-            elif margin_estimate >= 25:
-                score += 0.15
-            elif margin_estimate >= 20:
-                score += 0.1
-
-            # Category factor (medical equipment has higher potential)
-            if "器械" in category or "设备" in category:
-                score += 0.15
-            elif "保健" in category or "健康" in category:
-                score += 0.1
-
-            # Ensure score stays within 0.5-0.95 range
-            score = min(0.95, max(0.5, score))
-
-            recs.append(
-                {
-                    "product_id": p["spu_id"],
-                    "name": p["name"],
-                    "category": p.get("category", ""),
-                    "brand": p.get("brand", ""),
-                    "price": price,
-                    "reason": f"{category}类目高价位产品，预估利润率{margin_estimate:.0f}%，适合专业客户群体",
-                    "risk_warning": p["risk_note"],
-                    "score": round(score, 2),
-                    "data_source": "真实库存数据（评分基于价格、利润率、品类等多因素计算）",
-                }
+            # Calculate continuous score using new algorithm
+            score, score_breakdown = await SelectionScoringService.calculate_comprehensive_score(
+                product_data, pool
             )
 
-        # Low-price high-frequency candidates
-        low_price = await pool.fetch(
-            """SELECT spu_id, name, category, brand, retail_price,
-                      CASE
-                        WHEN retail_price < 20 THEN '低价位商品，适合引流但利润有限'
-                        WHEN retail_price < 50 THEN '经济型产品，日常消费频次较高'
-                        ELSE '中等价位，平衡利润与销量'
-                      END as market_positioning
-               FROM qnh_products
-               WHERE status = '在售' AND retail_price BETWEEN 10 AND 50 AND category != ''
-               ORDER BY retail_price ASC LIMIT 10"""
-        )
-        for p in low_price:
-            category = p.get("category", "").split(">")[-1] if p.get("category") else "医疗用品"
-            price = float(p["retail_price"])
-            volume_estimate = max(5, min(50, int(100 / price)))  # Rough volume estimate
+            # Generate explanation
+            explanation = await SelectionScoringService.generate_scoring_explanation(
+                product_data, score_breakdown
+            )
 
-            # Calculate score for low-price items
-            score = 0.4  # Base score for low-price items
+            # Risk assessment based on price and category
+            price = product_data["retail_price"]
+            category = product_data["category"]
 
-            # Volume potential factor
-            if volume_estimate >= 30:
-                score += 0.2
-            elif volume_estimate >= 20:
-                score += 0.15
-            elif volume_estimate >= 10:
-                score += 0.1
+            if price > 1000:
+                risk_note = "高价值医疗设备，需要专业资质和培训，客户群体有限"
+            elif price > 500:
+                risk_note = "中高价位产品，建议小批量试销，关注回款周期"
+            elif price > 100:
+                risk_note = "中价位产品，适合常规销售，注意库存管理"
+            elif price > 50:
+                risk_note = "经济型产品，销售频次较高，需要稳定供应链"
+            else:
+                risk_note = "低价位商品，适合引流促销，但利润空间有限"
 
-            # Price accessibility factor
-            if price <= 20:
-                score += 0.15  # Very accessible
-            elif price <= 35:
-                score += 0.1
+            # Add medical device specific warnings
+            from src.services.medical_device_service import MedicalDeviceService
 
-            # Category factor for daily use items
-            if "用品" in category or "耗材" in category or "日用" in category:
-                score += 0.1
-            elif "药品" in category or "保健" in category:
-                score += 0.05
-
-            # Market positioning bonus
-            if "日常消费频次较高" in p["market_positioning"]:
-                score += 0.1
-
-            # Ensure score stays within 0.4-0.8 range for low-price items
-            score = min(0.8, max(0.4, score))
+            is_medical = MedicalDeviceService.is_medical_device(category, product_data["name"])
+            if is_medical:
+                device_type = MedicalDeviceService.classify_medical_device_type(
+                    product_data["name"], category
+                )
+                if device_type in ["二类器械", "三类器械"]:
+                    risk_note += "；医疗器械需要相关资质和合规经营"
 
             recs.append(
                 {
                     "product_id": p["spu_id"],
                     "name": p["name"],
-                    "category": p.get("category", ""),
+                    "category": category,
                     "brand": p.get("brand", ""),
                     "price": price,
-                    "reason": f"{category}类目亲民价位，预计月销量{volume_estimate}件左右，适合日常推广",
-                    "risk_warning": p["market_positioning"],
-                    "score": round(score, 2),
-                    "data_source": "真实库存数据（评分基于销量潜力、价格可及性、品类特性等计算）",
+                    "reason": explanation,
+                    "risk_warning": risk_note,
+                    "score": score,  # Now truly continuous
+                    "data_source": f"多因子连续评分算法（价格:{score_breakdown['price_factor']:.3f}，利润:{score_breakdown['margin_factor']:.3f}，品类:{score_breakdown['category_factor']:.3f}，周转:{score_breakdown['turnover_factor']:.3f}，季节:{score_breakdown['seasonal_factor']:.3f}）",
+                    "score_breakdown": score_breakdown,  # For debugging/analysis
                 }
             )
 

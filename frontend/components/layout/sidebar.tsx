@@ -2,7 +2,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 const nav = [
   { href: '/', label: '仪表盘', icon: '📊' },
@@ -26,11 +26,52 @@ export function Sidebar() {
   const pathname = usePathname();
   const [selectedStoreId, setSelectedStoreId] = useState('1232550');
   const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    const checkIfMobile = () => {
+      setIsMobile(window.innerWidth < 768);
+    };
+
+    checkIfMobile();
+    window.addEventListener('resize', checkIfMobile);
+    return () => window.removeEventListener('resize', checkIfMobile);
+  }, []);
+
+  const closeMobileMenu = () => {
+    setIsMobileMenuOpen(false);
+  };
 
   const selectedStore = stores.find(s => s.id === selectedStoreId) || stores[0];
 
   return (
-    <aside className="w-60 bg-background border-r border-border flex flex-col">
+    <>
+      {/* Mobile hamburger button */}
+      <button
+        onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+        className="md:hidden fixed top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-md"
+        aria-label="Toggle menu"
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+        </svg>
+      </button>
+
+      {/* Mobile overlay */}
+      {isMobile && isMobileMenuOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+          onClick={closeMobileMenu}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside className={cn(
+        "w-60 bg-background border-r border-border flex flex-col transition-transform duration-300 ease-in-out",
+        "md:translate-x-0", // Always visible on desktop
+        isMobile ? (isMobileMenuOpen ? "translate-x-0 fixed inset-y-0 left-0 z-40" : "-translate-x-full fixed inset-y-0 left-0 z-40") : ""
+      )}>
       <div className="px-6 py-6 border-b border-border">
         <h1 className="text-lg font-bold text-blue-600">🤖 AI 店长</h1>
         <p className="text-sm text-muted-foreground mt-1">智能管理后台</p>
@@ -81,6 +122,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              onClick={closeMobileMenu}
               className={cn(
                 "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
                 active
@@ -94,6 +136,7 @@ export function Sidebar() {
           );
         })}
       </nav>
-    </aside>
+      </aside>
+    </>
   );
 }

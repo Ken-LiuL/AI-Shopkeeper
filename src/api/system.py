@@ -12,7 +12,44 @@ from src.db import postgres as pg
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/system", tags=["system"])
+# 根级别路由（不带前缀）
+health_router = APIRouter(tags=["health"])
 logger = logging.getLogger(__name__)
+
+
+# 根级别健康检查（满足前端期望的 /api/health 路径）
+@health_router.get("/api/health", response_model=APIResponse[dict])
+async def root_health() -> APIResponse[dict]:
+    """Root level health check for /api/health"""
+    try:
+        pool = pg.get_pool()
+
+        # Test database connection
+        db_ok = False
+        try:
+            await pool.fetchval("SELECT 1")
+            db_ok = True
+        except Exception as e:
+            logger.warning(f"Database health check failed: {e}")
+            db_ok = False
+
+        # 快速健康检查（减少响应时间）
+        health_data = {
+            "status": "healthy" if db_ok else "degraded",
+            "database": "ok" if db_ok else "error",
+            "timestamp": datetime.now().isoformat(),
+            "service": "AI店长",
+        }
+
+        return APIResponse(data=health_data)
+
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return APIResponse(
+            success=False,
+            message=f"健康检查失败: {str(e)}",
+            data={"status": "unhealthy", "error": str(e)},
+        )
 
 
 @router.get("/health", response_model=APIResponse[dict])

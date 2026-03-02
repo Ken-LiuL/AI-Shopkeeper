@@ -118,8 +118,6 @@ def filler_prompt(
 # 竞品价格
 {competitor_prices}
 
-⚠️ 数据说明：如竞品数据标注"演示数据"，仅供定价参考，建议结合实际市场调研。
-
 # 市场均价
 {market_avg_price}
 

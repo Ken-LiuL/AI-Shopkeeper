@@ -84,7 +84,6 @@ def competitor_analysis_prompt(
 {competitor_stores}
 
 ## 竞品商品数据
-⚠️ 注意：如显示"演示数据"或"🎭"标识的竞品信息仅供参考，请结合实际市场调研。
 {competitor_products}
 
 ## 竞品缺货商品
@@ -130,12 +129,7 @@ def competitor_analysis_prompt(
 6. 标注需要的资质等级
 
 # 输出
-使用 output_competitor_analysis 工具输出结果。
-
-⚠️ 数据质量提示：分析结果中如包含"演示数据"标识的竞品信息，建议：
-1. 仅作为参考，不作为决策依据
-2. 结合实际市场调研验证
-3. 配置真实竞品数据源以提高准确性"""
+使用 output_competitor_analysis 工具输出结果"""
 
 
 def inventory_analysis_prompt(

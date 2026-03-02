@@ -25,6 +25,12 @@ function ProductsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'inventory' | 'restock'>('inventory');
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [showBatchModal, setShowBatchModal] = useState(false);
+  const [batchOperation, setBatchOperation] = useState<'enable' | 'disable' | 'price'>('enable');
+  const [batchValue, setBatchValue] = useState<string>('');
+  const [batchReason, setBatchReason] = useState<string>('');
+  const [batchProcessing, setBatchProcessing] = useState(false);
   const pageSize = 20;
 
   const load = useCallback(async () => {
@@ -48,6 +54,67 @@ function ProductsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const handleSelectProduct = (productId: string, checked: boolean) => {
+    setSelectedProducts(prev => {
+      const newSet = new Set(prev);
+      if (checked) {
+        newSet.add(productId);
+      } else {
+        newSet.delete(productId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedProducts(new Set(filteredProducts.map(p => p.product_id || p.id || '')));
+    } else {
+      setSelectedProducts(new Set());
+    }
+  };
+
+  const handleBatchOperation = async () => {
+    if (selectedProducts.size === 0) {
+      alert('请选择要操作的商品');
+      return;
+    }
+
+    setBatchProcessing(true);
+    try {
+      // Mock API call - in real implementation, this would call the actual batch API
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      let actionText = '';
+      switch (batchOperation) {
+        case 'enable':
+          actionText = '上架';
+          break;
+        case 'disable':
+          actionText = '下架';
+          break;
+        case 'price':
+          actionText = '调价';
+          break;
+      }
+
+      alert(`批量${actionText}成功！已处理 ${selectedProducts.size} 个商品。`);
+
+      // Reset states
+      setSelectedProducts(new Set());
+      setShowBatchModal(false);
+      setBatchValue('');
+      setBatchReason('');
+
+      // Reload data
+      load();
+    } catch (err) {
+      alert('批量操作失败: ' + (err instanceof Error ? err.message : '未知错误'));
+    } finally {
+      setBatchProcessing(false);
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -145,7 +212,18 @@ function ProductsPage() {
           <h1 className="text-3xl font-bold tracking-tight">📦 商品管理</h1>
           <p className="text-muted-foreground">管理您的商品库存和补货建议</p>
         </div>
-        <Button>添加商品</Button>
+        <div className="flex gap-2">
+          {selectedProducts.size > 0 && (
+            <Button
+              onClick={() => setShowBatchModal(true)}
+              variant="secondary"
+              className="mr-2"
+            >
+              批量操作 ({selectedProducts.size})
+            </Button>
+          )}
+          <Button>添加商品</Button>
+        </div>
       </div>
 
       {/* Tab 导航 */}
@@ -253,6 +331,14 @@ function ProductsPage() {
               <TableCaption>商品库存管理</TableCaption>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-12">
+                    <input
+                      type="checkbox"
+                      checked={selectedProducts.size === filteredProducts.length && filteredProducts.length > 0}
+                      onChange={(e) => handleSelectAll(e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                  </TableHead>
                   <TableHead>商品名称</TableHead>
                   <TableHead>品类</TableHead>
                   <TableHead className="text-right">价格</TableHead>
@@ -264,6 +350,14 @@ function ProductsPage() {
               <TableBody>
                 {filteredProducts.map((product) => (
                   <TableRow key={product.product_id || product.id}>
+                    <TableCell>
+                      <input
+                        type="checkbox"
+                        checked={selectedProducts.has(product.product_id || product.id || '')}
+                        onChange={(e) => handleSelectProduct(product.product_id || product.id || '', e.target.checked)}
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                      />
+                    </TableCell>
                     <TableCell className="font-medium">{product.name}</TableCell>
                     <TableCell>
                       <Badge variant="outline">{product.category}</Badge>
@@ -393,6 +487,82 @@ function ProductsPage() {
               )}
             </CardContent>
           </Card>
+        </div>
+      )}
+
+      {/* 批量操作模态框 */}
+      {showBatchModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg max-w-md w-full mx-4">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h3 className="text-lg font-medium text-gray-900">批量操作商品</h3>
+              <p className="text-sm text-gray-500 mt-1">
+                已选择 {selectedProducts.size} 个商品
+              </p>
+            </div>
+
+            <div className="px-6 py-4 space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  操作类型
+                </label>
+                <select
+                  value={batchOperation}
+                  onChange={(e) => setBatchOperation(e.target.value as 'enable' | 'disable' | 'price')}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="enable">批量上架</option>
+                  <option value="disable">批量下架</option>
+                  <option value="price">批量调价</option>
+                </select>
+              </div>
+
+              {batchOperation === 'price' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    调价方式
+                  </label>
+                  <input
+                    type="text"
+                    value={batchValue}
+                    onChange={(e) => setBatchValue(e.target.value)}
+                    placeholder="如：+10 表示涨价10元，*1.1 表示涨价10%"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  操作原因 (可选)
+                </label>
+                <input
+                  type="text"
+                  value={batchReason}
+                  onChange={(e) => setBatchReason(e.target.value)}
+                  placeholder="如：季节性调整、促销活动等"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-6 py-4 border-t border-gray-200 flex gap-3 justify-end">
+              <button
+                onClick={() => setShowBatchModal(false)}
+                disabled={batchProcessing}
+                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleBatchOperation}
+                disabled={batchProcessing || (batchOperation === 'price' && !batchValue)}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+              >
+                {batchProcessing ? '处理中...' : '确认操作'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

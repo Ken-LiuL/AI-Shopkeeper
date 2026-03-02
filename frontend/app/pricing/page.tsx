@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, batchUpdatePrices, type PricingSuggestion, type PricingRule, type BatchPriceUpdateRequest, type BatchPriceUpdateResult } from '@/lib/api';
+import { withErrorBoundary } from '@/components/error-boundary';
 
 export default function PricingPage() {
   const [suggestions, setSuggestions] = useState<PricingSuggestion[]>([]);
@@ -150,10 +151,36 @@ export default function PricingPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">加载中...</p>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-gray-900">💰 智能定价</h1>
+          <div className="text-sm text-gray-500">
+            AI驱动的定价优化建议
+          </div>
+        </div>
+
+        {/* Loading skeleton */}
+        <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200">
+            <div className="animate-pulse">
+              <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
+              <div className="h-4 bg-gray-200 rounded w-1/2"></div>
+            </div>
+          </div>
+          <div className="p-6">
+            <div className="animate-pulse space-y-4">
+              {[1, 2, 3, 4, 5].map((i) => (
+                <div key={i} className="flex space-x-4 items-center py-4 border-b border-gray-100">
+                  <div className="w-4 h-4 bg-gray-200 rounded"></div>
+                  <div className="flex-1 space-y-2">
+                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
+                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
+                  </div>
+                  <div className="h-8 bg-gray-200 rounded w-16"></div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     );
