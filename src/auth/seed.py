@@ -10,7 +10,7 @@ from src.db import postgres as pg_db
 logger = logging.getLogger(__name__)
 
 DEFAULT_ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = "admin123"
+DEFAULT_ADMIN_PASSWORD = "admin"
 
 
 async def seed_admin_user() -> None:
