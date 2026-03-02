@@ -14,6 +14,7 @@ const nav = [
   { href: '/reports', label: '报表', icon: '📈' },
   { href: '/chat', label: 'AI 客服', icon: '💬' },
   { href: '/alerts', label: '告警', icon: '🔔' },
+  { href: '/settings/sync', label: '数据同步', icon: '🔄' },
 ];
 
 const stores = [
@@ -28,6 +29,12 @@ export function Sidebar() {
   const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [username, setUsername] = useState('');
+
+  useEffect(() => {
+    const u = localStorage.getItem('auth_username') || 'admin';
+    setUsername(u);
+  }, []);
 
   useEffect(() => {
     const checkIfMobile = () => {
@@ -136,6 +143,25 @@ export function Sidebar() {
           );
         })}
       </nav>
+      {/* User info + logout */}
+      <div className="px-4 py-3 border-t border-gray-200">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-gray-500">👤</span>
+            <span className="text-sm text-gray-700 font-medium">{username}</span>
+          </div>
+          <button
+            onClick={() => {
+              localStorage.removeItem('auth_token');
+              localStorage.removeItem('auth_username');
+              window.location.href = '/login';
+            }}
+            className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+          >
+            退出
+          </button>
+        </div>
+      </div>
       </aside>
     </>
   );

@@ -77,13 +77,26 @@ const getErrorMessage = (error: any, endpoint: string): string => {
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   try {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
+
     const response = await fetch(`${BASE_URL}/api${endpoint}`, {
       headers: {
         'Content-Type': 'application/json',
+        ...authHeaders,
         ...options?.headers,
       },
       ...options,
     });
+
+    if (response.status === 401) {
+      if (typeof window !== 'undefined') {
+        localStorage.removeItem('auth_token');
+        localStorage.removeItem('auth_username');
+        window.location.href = '/login';
+      }
+      throw new Error('登录已过期，请重新登录');
+    }
 
     if (!response.ok) {
       throw new Error(`API Error: ${response.status} ${response.statusText}`);

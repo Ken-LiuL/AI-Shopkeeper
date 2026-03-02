@@ -39,6 +39,7 @@ from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.system import router as system_router
+from src.auth.router import router as auth_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
 from src.db import postgres as pg_db
@@ -67,6 +68,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     # Auto-run migrations
     await _run_migrations(pg_db.get_pool())
+
+    # Seed default admin user
+    from src.auth.seed import seed_admin_user
+    await seed_admin_user()
 
     if vector_store_backend == "neo4j":
         await neo4j_db.init_driver()
@@ -613,6 +618,7 @@ async def readiness_check():
 
 
 # ─── Register API routers ───────────────────────────────────
+app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(selection_router)
 app.include_router(cs_router)
