@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { withErrorBoundary } from '@/components/error-boundary';
-import { Tooltip } from '@/components/onboarding/guide';
+import { Tooltip as OnboardingTooltip } from '@/components/onboarding/guide';
 import { getDashboardOverview, getSalesTrend, getAlerts, getDailyInsights } from '@/lib/api';
 import type { DashboardOverview, SalesTrendData, Alert, DailyInsight } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
@@ -23,11 +23,11 @@ function StatCard({ title, value, icon, trend, tooltip }: {
         <div className="flex items-center justify-between">
           <div>
             {tooltip ? (
-              <Tooltip text={tooltip}>
+              <OnboardingTooltip text={tooltip}>
                 <p className="text-sm font-medium text-muted-foreground border-b border-dotted border-gray-400 cursor-help">
                   {title}
                 </p>
-              </Tooltip>
+              </OnboardingTooltip>
             ) : (
               <p className="text-sm font-medium text-muted-foreground">{title}</p>
             )}
