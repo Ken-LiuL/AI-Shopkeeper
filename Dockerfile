@@ -29,10 +29,8 @@ COPY migrations/ migrations/
 COPY scripts/ scripts/
 COPY data/cs_knowledge_structured.json data/
 
-# Copy built frontend files
-COPY --from=frontend-builder /app/frontend/.next/standalone /app/frontend/
-COPY --from=frontend-builder /app/frontend/.next/static /app/frontend/.next/static
-COPY --from=frontend-builder /app/frontend/public /app/frontend/public
+# Copy built frontend static export
+COPY --from=frontend-builder /app/frontend/out /app/frontend/out
 
 EXPOSE 8000
 

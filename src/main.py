@@ -643,49 +643,54 @@ app.include_router(stores_router)
 
 
 # ─── Frontend static files ──────────────────────────────────
+frontend_out_path = Path(__file__).resolve().parent.parent / "frontend" / "out"
+
+
 @app.get("/")
 async def read_root():
     """Serve the AI Store Manager home page."""
-    frontend_build_path = Path(__file__).resolve().parent.parent / "frontend"
-
-    # Try to serve the built frontend
-    if frontend_build_path.exists():
-        # Look for index.html in common Next.js locations
-        possible_index_paths = [
-            frontend_build_path / ".next" / "standalone" / "index.html",
-            frontend_build_path / ".next" / "server" / "app" / "page.html",
-            frontend_build_path / "out" / "index.html",
-            frontend_build_path / ".next" / "export" / "index.html",
-        ]
-
-        for index_path in possible_index_paths:
-            if index_path.exists():
-                return FileResponse(str(index_path), media_type="text/html")
-
-    # Fallback: return a simple homepage
+    index_path = frontend_out_path / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path), media_type="text/html")
     return {
         "message": "AI Store Manager",
         "status": "running",
         "version": "0.1.0",
         "description": "美团即时零售（医疗器械）智能运营系统",
-        "frontend": "building" if frontend_build_path.exists() else "not_available",
         "api_docs": "/docs",
-        "health": "/health",
     }
 
 
-# Mount static files if they exist
-frontend_build_path = Path(__file__).resolve().parent.parent / "frontend"
-if frontend_build_path.exists():
-    # Mount Next.js static assets
-    static_path = frontend_build_path / ".next" / "static"
-    if static_path.exists():
-        app.mount("/_next/static", StaticFiles(directory=str(static_path)), name="nextjs_static")
+# Serve Next.js static export pages (e.g., /alerts -> /alerts.html)
+@app.get("/{page_name}")
+async def serve_page(page_name: str):
+    """Serve frontend pages from Next.js static export."""
+    # Skip API and system routes
+    if page_name.startswith("api") or page_name in (
+        "health",
+        "ready",
+        "docs",
+        "openapi.json",
+        "debug",
+    ):
+        return None
+    page_path = frontend_out_path / f"{page_name}.html"
+    if page_path.exists():
+        return FileResponse(str(page_path), media_type="text/html")
+    # Fallback to index for client-side routing
+    index_path = frontend_out_path / "index.html"
+    if index_path.exists():
+        return FileResponse(str(index_path), media_type="text/html")
+    from fastapi.responses import JSONResponse
 
-    # Mount public assets
-    public_path = frontend_build_path / "public"
-    if public_path.exists():
-        app.mount("/public", StaticFiles(directory=str(public_path)), name="public_assets")
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+
+# Mount static assets from Next.js export
+if frontend_out_path.exists():
+    next_static = frontend_out_path / "_next"
+    if next_static.exists():
+        app.mount("/_next", StaticFiles(directory=str(next_static)), name="nextjs_static")
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)
