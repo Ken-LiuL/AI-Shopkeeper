@@ -16,6 +16,18 @@ DEFAULT_ADMIN_PASSWORD = "admin"
 async def seed_admin_user() -> None:
     """Ensure the default admin user exists with the correct password hash."""
     try:
+        # Ensure users table exists (migration may have been skipped/rolled back)
+        await pg_db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id     TEXT PRIMARY KEY DEFAULT gen_random_uuid()::TEXT,
+                username    TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                tenant_id   TEXT NOT NULL DEFAULT 'default',
+                role        TEXT NOT NULL DEFAULT 'admin',
+                created_at  TIMESTAMPTZ DEFAULT now(),
+                updated_at  TIMESTAMPTZ DEFAULT now()
+            )
+        """)
         row = await pg_db.fetchrow(
             "SELECT user_id, password_hash FROM users WHERE username = $1",
             DEFAULT_ADMIN_USERNAME,
