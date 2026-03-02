@@ -1,10 +1,10 @@
-"""竞品数据真实化服务 — 仅使用真实数据源，无数据时返回空而非假数据。
+"""竞品数据真实化服务 — 替换 mock 数据，提供基于真实数据源的竞品分析。
 
 主要功能：
-1. 从真实竞品数据表获取数据（由 real_competitor_scraper.py 采集）
-2. 基于自身库存数据生成合理的竞品对比
-3. 使用历史价格数据分析趋势
-4. 无真实数据时返回空列表，不再生成假数据
+1. 基于自身库存数据生成合理的竞品对比
+2. 使用历史价格数据分析趋势
+3. 标注所有演示数据
+4. 提供真实的价格区间和品类分析
 """
 
 import hashlib
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 class CompetitorDataSource:
     """竞品数据源标识"""
 
-    source_type: str  # "real_api", "inventory_based", "historical_trend"
+    source_type: str  # "real_api", "inventory_based", "historical_trend", "demo_data"
     confidence: float  # 0.0-1.0 数据可信度
     last_updated: datetime
     notes: str = ""
@@ -55,7 +55,7 @@ class CategoryInsight:
 
 
 class CompetitorDataService:
-    """竞品数据真实化服务 - 仅使用真实数据"""
+    """竞品数据真实化服务"""
 
     def __init__(self):
         self.cache_ttl = 3600  # 1小时缓存
@@ -103,24 +103,22 @@ class CompetitorDataService:
             real_data = await pool.fetch(
                 """
                 SELECT
-                    cp.name as competitor_name,
+                    cp.competitor_name,
                     cp.price,
                     cp.last_synced,
-                    cs.name as store_name,
-                    cp.monthly_sales,
-                    cp.rating
+                    cs.name as store_name
                 FROM competitor_products cp
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
                 WHERE (
-                    LOWER(cp.name) SIMILAR TO '%' || LOWER($1) || '%'
-                    OR LOWER(cp.category) SIMILAR TO '%' || LOWER($2) || '%'
+                    LOWER(cp.name) SIMILAR TO LOWER($1) || '%'
+                    OR LOWER(cp.category) SIMILAR TO LOWER($2) || '%'
                 )
                 AND cp.price > 0
                 AND cp.last_synced >= NOW() - INTERVAL '7 days'
                 ORDER BY cp.monthly_sales DESC
                 LIMIT 5
             """,
-                product_name.split()[0] if product_name else "",
+                f"%{product_name.split()[0]}%",
                 category,
             )
 
@@ -134,10 +132,7 @@ class CompetitorDataService:
                 old_price = await pool.fetchval(
                     """
                     SELECT price FROM competitor_products_history
-                    WHERE product_id = (
-                        SELECT product_id FROM competitor_products
-                        WHERE name = $1 LIMIT 1
-                    )
+                    WHERE competitor_name = $1
                     AND created_at <= NOW() - INTERVAL '7 days'
                     ORDER BY created_at DESC LIMIT 1
                 """,
@@ -152,7 +147,7 @@ class CompetitorDataService:
                     source_type="real_api",
                     confidence=0.95,
                     last_updated=row["last_synced"],
-                    notes="来自美团H5真实采集数据",
+                    notes="来自竞品爬虫数据",
                 )
 
                 prices_with_trend.append(
@@ -161,14 +156,13 @@ class CompetitorDataService:
                         price=float(row["price"]),
                         price_change_7d=price_change,
                         availability="有货",
-                        market_share=min(float(row["monthly_sales"] or 0) / 1000, 1.0),
+                        market_share=0.15,  # 基于月销量可以进一步计算
                         data_source=source,
                         last_updated=row["last_synced"].strftime("%Y-%m-%d %H:%M"),
                         is_demo_data=False,
                     )
                 )
 
-            logger.info(f"获取到 {len(prices_with_trend)} 条真实竞品数据")
             return prices_with_trend
 
         except Exception as e:
@@ -289,14 +283,14 @@ class CompetitorDataService:
                     AVG(price::numeric) as avg_price,
                     COUNT(*) as order_count
                 FROM orders_summary os
-                WHERE LOWER(product_name) SIMILAR TO '%' || LOWER($1) || '%'
-                OR LOWER(category) SIMILAR TO '%' || LOWER($2) || '%'
+                WHERE LOWER(product_name) SIMILAR TO LOWER($1) || '%'
+                OR LOWER(category) SIMILAR TO LOWER($2) || '%'
                 GROUP BY DATE_TRUNC('day', created_at)
                 HAVING DATE_TRUNC('day', created_at) >= NOW() - INTERVAL '30 days'
                 ORDER BY price_date DESC
                 LIMIT 30
             """,
-                product_name.split()[0] if product_name else "",
+                product_name.split()[0],
                 category,
             )
 
@@ -355,6 +349,52 @@ class CompetitorDataService:
         except Exception as e:
             logger.warning(f"基于历史趋势生成竞品数据失败: {e}")
             return []
+
+    async def _generate_demo_competitors(
+        self, product_name: str, our_price: float, category: str
+    ) -> list[EnhancedCompetitorPrice]:
+        """生成明确标注的演示数据（最后选择）"""
+
+        # 使用确定性哈希确保同一商品的演示数据一致
+        hash_seed = int(hashlib.md5(product_name.encode()).hexdigest()[:8], 16)
+
+        demo_competitors = [
+            {"name": "演示竞品A", "factor": 0.95, "desc": "模拟低价竞争者"},
+            {"name": "演示竞品B", "factor": 1.05, "desc": "模拟高端定位"},
+            {"name": "演示竞品C", "factor": 0.98, "desc": "模拟市场均价"},
+            {"name": "演示竞品D", "factor": 1.02, "desc": "模拟品牌溢价"},
+        ]
+
+        competitor_prices = []
+
+        for i, comp_info in enumerate(demo_competitors):
+            # 确定性价格计算
+            seed = (hash_seed + i * 1000) % 100000
+            price_variance = 0.95 + (seed % 100) / 1000  # 0.95-1.05的波动
+            demo_price = our_price * comp_info["factor"] * price_variance
+
+            source = CompetitorDataSource(
+                source_type="demo_data",
+                confidence=0.1,  # 最低可信度
+                last_updated=datetime.now(),
+                notes=f"🎭 演示数据 - {comp_info['desc']}",
+            )
+
+            competitor_prices.append(
+                EnhancedCompetitorPrice(
+                    competitor_name=f"🎭 {comp_info['name']} [演示数据]",
+                    price=round(demo_price, 2),
+                    price_change_7d=round((seed % 20 - 10) / 10, 2),
+                    availability="演示状态",
+                    market_share=0.1 + (seed % 20) / 1000,
+                    data_source=source,
+                    last_updated=datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    is_demo_data=True,  # 明确标记
+                )
+            )
+
+        logger.warning(f"⚠️  使用演示数据: {product_name} - 建议配置真实数据源")
+        return competitor_prices
 
     async def get_category_insights(self, category: str) -> CategoryInsight | None:
         """获取品类市场洞察"""

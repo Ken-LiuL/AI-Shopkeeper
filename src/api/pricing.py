@@ -112,27 +112,8 @@ async def _get_products_with_pricing_data():
                         }
                     )
             else:
-                # 如果完全无法获取数据，使用标记清楚的演示数据
-                competitor_data[product_name.lower()] = [
-                    {
-                        "competitor": "🎭 演示竞品A [演示数据]",
-                        "price": retail_price * 0.95,
-                        "updated_at": "2026-03-02",
-                        "is_demo_data": True,
-                    },
-                    {
-                        "competitor": "🎭 演示竞品B [演示数据]",
-                        "price": retail_price * 1.02,
-                        "updated_at": "2026-03-02",
-                        "is_demo_data": True,
-                    },
-                    {
-                        "competitor": "🎭 演示竞品C [演示数据]",
-                        "price": retail_price * 0.98,
-                        "updated_at": "2026-03-02",
-                        "is_demo_data": True,
-                    },
-                ]
+                # 无真实竞品数据时返回空列表，不再使用假数据
+                competitor_data[product_name.lower()] = []
 
     # 获取销量数据（简化版本，因为订单表结构可能不同）
     sales_data = {}
@@ -461,81 +442,21 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                 )
             )
 
-        # 如果没有建议生成，返回fallback数据确保页面可用
+        # 如果没有建议生成，返回空列表而不是假数据
         if not suggestions:
-            logger.warning("No pricing suggestions generated, using fallback data")
-            suggestions = [
-                PricingSuggestion(
-                    product_id="demo_001",
-                    name="血压计 - 欧姆龙HEM-7136",
-                    current_price=299.0,
-                    suggested_price=329.0,
-                    reason="医疗器械建议保持30%毛利率，当前定价偏低",
-                    confidence=0.8,
-                    potential_impact="提价后预计销量略降，但利润率提升明显",
-                ),
-                PricingSuggestion(
-                    product_id="demo_002",
-                    name="体温计 - 红外线免接触",
-                    current_price=89.0,
-                    suggested_price=85.0,
-                    reason="同类产品竞争激烈，建议略降价提升销量",
-                    confidence=0.7,
-                    potential_impact="降价4元预计销量提升15-20%",
-                ),
-                PricingSuggestion(
-                    product_id="demo_003",
-                    name="血糖仪 - 三诺安稳",
-                    current_price=128.0,
-                    suggested_price=138.0,
-                    reason="医疗器械专业产品，建议提价保持25%以上毛利率",
-                    confidence=0.8,
-                    potential_impact="提价后预计利润提升8%，销量影响较小",
-                ),
-            ]
+            logger.warning("暂无定价建议数据，请先完善商品成本信息和竞品数据")
+            suggestions = []
 
         return APIResponse(
             data=suggestions,
-            message="数据加载完成"
-            if len([s for s in suggestions if not s.product_id.startswith("demo_")]) > 0
-            else "使用演示数据",
+            message="数据加载完成" if suggestions else "暂无定价建议，请先完善商品成本和竞品数据",
         )
 
     except Exception as e:
         logger.error(f"Failed to generate pricing suggestions: {e}")
 
-        # 如果全部失败，返回一些示例建议确保页面可用
-        fallback_suggestions = [
-            PricingSuggestion(
-                product_id="demo_001",
-                name="血压计 - 欧姆龙HEM-7136",
-                current_price=299.0,
-                suggested_price=329.0,
-                reason="医疗器械建议保持30%毛利率，当前定价偏低",
-                confidence=0.8,
-                potential_impact="提价后预计销量略降，但利润率提升明显",
-            ),
-            PricingSuggestion(
-                product_id="demo_002",
-                name="体温计 - 红外线免接触",
-                current_price=89.0,
-                suggested_price=85.0,
-                reason="同类产品竞争激烈，建议略降价提升销量",
-                confidence=0.7,
-                potential_impact="降价4元预计销量提升15-20%",
-            ),
-            PricingSuggestion(
-                product_id="demo_003",
-                name="血糖仪 - 三诺安稳",
-                current_price=128.0,
-                suggested_price=138.0,
-                reason="医疗器械专业产品，建议提价保持25%以上毛利率",
-                confidence=0.8,
-                potential_impact="提价后预计利润提升8%，销量影响较小",
-            ),
-        ]
-
-        return APIResponse(data=fallback_suggestions, message="系统异常，使用演示数据：" + str(e))
+        # 系统异常时返回空数据和错误提示
+        return APIResponse(success=False, data=[], message=f"定价建议生成失败: {str(e)}")
 
 
 @router.get("/rules", response_model=APIResponse[list[PricingRule]])

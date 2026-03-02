@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-为竞品数据表填充基于真实产品的合理数据
-基于现有库存商品生成竞品店铺和商品数据
+⚠️  此脚本已废弃！请使用 scripts/real_competitor_scraper.py 获取真实竞品数据
+
+原功能：为竞品数据表填充基于真实产品的合理数据
+新方案：使用 nodriver 从美团外卖采集真实竞品价格数据
+
+废弃原因：此脚本生成的是模拟数据，已被真实数据采集器替换
 """
 
 import asyncio
@@ -414,7 +418,14 @@ async def generate_price_history():
 
 
 async def main():
-    """主函数"""
+    """主函数 - 已废弃，使用真实采集器"""
+    print("⚠️  此脚本已废弃！")
+    print("📱 请使用真实竞品采集器：python scripts/real_competitor_scraper.py")
+    print("💡 新采集器使用 nodriver 从美团外卖采集真实竞品价格数据")
+    print("❌ 本脚本生成的模拟数据不再使用")
+    return
+
+    # 以下代码已废弃，仅保留以供参考
     try:
         await init_pool()
 
