@@ -1,5 +1,7 @@
 // API client for AI店长 backend
-const BASE_URL = process.env.NODE_ENV === 'development' ? '' : '';
+const BASE_URL = process.env.NODE_ENV === 'development'
+  ? 'https://ai-shopkeeper-kk.fly.dev'
+  : '';
 
 interface APIResponse<T> {
   success: boolean;
@@ -9,7 +11,7 @@ interface APIResponse<T> {
 
 async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   try {
-    const response = await fetch(`/api${endpoint}`, {
+    const response = await fetch(`${BASE_URL}/api${endpoint}`, {
       headers: {
         'Content-Type': 'application/json',
         ...options?.headers,
@@ -276,22 +278,7 @@ export interface StoreKPIs {
 }
 
 export async function getStoreKPIs(): Promise<StoreKPIs> {
-  try {
-    const response = await fetch('/api/dashboard/store-kpis', {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
-    }
-
-    return response.json();
-  } catch (error) {
-    console.error('Error fetching store KPIs:', error);
-    throw error;
-  }
+  return fetchAPI<StoreKPIs>('/dashboard/store-kpis');
 }
 
 // Orders API
