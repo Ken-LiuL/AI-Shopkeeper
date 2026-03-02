@@ -68,7 +68,7 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         low_stock_count = (
             await pool.fetchval("""
             SELECT COUNT(*) FROM qnh_products
-            WHERE status = '在售' AND stock IS NOT NULL AND stock < 10
+            WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
         """)
             or 0
         )
@@ -77,8 +77,8 @@ async def _generate_action_items(pool) -> list[ActionItem]:
             # Get sample product names
             sample_products = await pool.fetch("""
                 SELECT name FROM qnh_products
-                WHERE status = '在售' AND stock IS NOT NULL AND stock < 10
-                ORDER BY stock ASC LIMIT 3
+                WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
+                ORDER BY stock_num ASC LIMIT 3
             """)
             product_names = [row["name"] for row in sample_products]
             detail = f"{low_stock_count}款商品库存不足10件"
@@ -228,15 +228,6 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-
-    # 检查是否配置了 Cookie（用于空状态引导）
-    cookie_configured = False
-    with contextlib.suppress(Exception):
-        row = await pool.fetchrow(
-            "SELECT 1 FROM merchant_sync_cookies WHERE is_active = true LIMIT 1"
-        )
-        cookie_configured = row is not None
-
     total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
 
     today_orders = 0
@@ -290,15 +281,6 @@ async def overview() -> APIResponse[DashboardOverview]:
 
     from decimal import Decimal
 
-    # 判断是否是空状态（没有任何真实数据）
-    has_data = total_products > 0 or today_orders > 0 or today_gmv > 0 or total_customers > 0
-    if not has_data and not cookie_configured:
-        empty_message = "尚未同步数据。请前往「设置 → 数据同步」配置牵牛花 Cookie 并触发同步。"
-    elif not has_data and cookie_configured:
-        empty_message = "Cookie 已配置，但尚无数据。请前往「设置 → 数据同步」触发同步。"
-    else:
-        empty_message = None
-
     return APIResponse(
         data=DashboardOverview(
             total_products=total_products,
@@ -310,8 +292,7 @@ async def overview() -> APIResponse[DashboardOverview]:
             pending_alerts=pending_alerts,
             pending_tasks=pending_tasks,
             action_items=action_items,
-        ),
-        message=empty_message or "数据加载成功",
+        )
     )
 
 

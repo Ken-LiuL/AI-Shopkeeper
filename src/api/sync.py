@@ -7,7 +7,7 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
 
 from src.db import postgres as pg
@@ -22,9 +22,11 @@ SYNC_API_KEY = os.environ.get("SYNC_API_KEY", "")
 
 # ── Pydantic models ─────────────────────────────────────────────────────────
 
+
 class CookieSubmitRequest(BaseModel):
     """商家提交 Cookie 请求。"""
-    cookie_string: str | None = None   # 原始 cookie 字符串，如 "a=1; b=2"
+
+    cookie_string: str | None = None  # 原始 cookie 字符串，如 "a=1; b=2"
     cookie_json: dict[str, str] | None = None  # 结构化 JSON
     merchant_id: str = "default"
 
@@ -36,6 +38,7 @@ class CookieSubmitResponse(BaseModel):
 
 
 # ── Helper ──────────────────────────────────────────────────────────────────
+
 
 def _parse_cookie_string(cookie_string: str) -> dict[str, str]:
     """解析 cookie 字符串为字典。"""
@@ -53,6 +56,7 @@ async def _get_pool():
 
 
 # ── Cookie API ──────────────────────────────────────────────────────────────
+
 
 @router.post("/cookie", response_model=CookieSubmitResponse)
 async def submit_cookie(req: CookieSubmitRequest) -> CookieSubmitResponse:
@@ -95,32 +99,22 @@ async def submit_cookie(req: CookieSubmitRequest) -> CookieSubmitResponse:
             )
         """)
 
-        # Upsert cookie — use UPDATE first, then INSERT (avoids partial-index ON CONFLICT issue)
-        updated = await pool.execute(
+        # Upsert cookie
+        await pool.execute(
             """
-            UPDATE merchant_sync_cookies
-            SET cookie_json = $2::jsonb,
+            INSERT INTO merchant_sync_cookies
+                (merchant_id, cookie_json, cookie_string, is_active, updated_at)
+            VALUES ($1, $2::jsonb, $3, true, NOW())
+            ON CONFLICT (merchant_id) DO UPDATE SET
+                cookie_json = $2::jsonb,
                 cookie_string = $3,
                 is_active = true,
                 updated_at = NOW()
-            WHERE merchant_id = $1
             """,
             req.merchant_id,
             json.dumps(cookies, ensure_ascii=False),
             req.cookie_string,
         )
-        if updated == "UPDATE 0":
-            await pool.execute(
-                """
-                INSERT INTO merchant_sync_cookies
-                    (merchant_id, cookie_json, cookie_string, is_active, updated_at)
-                VALUES ($1, $2::jsonb, $3, true, NOW())
-                ON CONFLICT DO NOTHING
-                """,
-                req.merchant_id,
-                json.dumps(cookies, ensure_ascii=False),
-                req.cookie_string,
-            )
 
         # 同时更新环境文件（写到配置目录，供本地 daemon 使用）
         _try_save_cookie_config(cookies)
@@ -151,6 +145,7 @@ def _try_save_cookie_config(cookies: dict[str, str]) -> None:
 
 
 # ── Status API ──────────────────────────────────────────────────────────────
+
 
 @router.get("/status", response_model=APIResponse[dict[str, Any]])
 async def sync_status() -> APIResponse[dict[str, Any]]:
@@ -183,7 +178,9 @@ async def sync_status() -> APIResponse[dict[str, Any]]:
             cookie_status = {
                 "configured": True,
                 "merchant_id": row["merchant_id"],
-                "last_verified_at": row["last_verified_at"].isoformat() if row["last_verified_at"] else None,
+                "last_verified_at": row["last_verified_at"].isoformat()
+                if row["last_verified_at"]
+                else None,
                 "last_sync_at": row["last_sync_at"].isoformat() if row["last_sync_at"] else None,
                 "last_sync_status": row["last_sync_status"],
                 "last_sync_error": row["last_sync_error"],
@@ -234,102 +231,9 @@ async def sync_status() -> APIResponse[dict[str, Any]]:
 
 # ── Trigger API ─────────────────────────────────────────────────────────────
 
-async def _get_stored_cookies(merchant_id: str = "default") -> dict[str, str] | None:
-    """从数据库读取商家存储的 Cookie。"""
-    import json as _json
-    pool = await _get_pool()
-    try:
-        row = await pool.fetchrow(
-            "SELECT cookie_json FROM merchant_sync_cookies WHERE merchant_id = $1 AND is_active = true LIMIT 1",
-            merchant_id,
-        )
-        if row and row["cookie_json"]:
-            data = row["cookie_json"]
-            if isinstance(data, str):
-                return _json.loads(data)
-            return dict(data)
-    except Exception as e:
-        logger.warning("读取 Cookie 失败: %s", e)
-    return None
-
-
-async def _verify_cookie_with_qnh(cookies: dict[str, str]) -> tuple[bool, str]:
-    """用 Cookie 直接发 HTTP 请求到牵牛花 API 验证有效性。
-    返回 (success, message)。
-    """
-    import aiohttp
-
-    QNH_BASE = "https://qnh.meituan.com"
-    # 使用一个简单的接口验证 Cookie 有效性
-    test_url = f"{QNH_BASE}/api/v1/tenant/modules"
-    cookie_header = "; ".join(f"{k}={v}" for k, v in cookies.items())
-    headers = {
-        "Cookie": cookie_header,
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://qnh.meituan.com/",
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(test_url, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                text = await resp.text()
-                if resp.status == 200:
-                    return True, f"Cookie 验证成功 (HTTP {resp.status})"
-                elif resp.status in (401, 403):
-                    return False, f"Cookie 已过期或无效 (HTTP {resp.status})"
-                else:
-                    # 非标准响应，可能是重定向到登录页
-                    if "login" in text.lower() or "登录" in text:
-                        return False, "Cookie 已失效，需要重新登录"
-                    return True, f"服务器响应 {resp.status}，Cookie 可能有效"
-    except Exception as e:
-        return False, f"网络请求失败: {e}"
-
 
 async def _trigger_sync_all() -> None:
-    """Run all syncers once in background, using stored cookies from DB."""
-    pool = await _get_pool()
-
-    # 先从 DB 读取 Cookie
-    cookies = await _get_stored_cookies()
-    if not cookies:
-        logger.error("同步失败：未找到存储的 Cookie，请先在设置页配置牵牛花 Cookie")
-        await pool.execute(
-            """UPDATE merchant_sync_cookies SET last_sync_status = 'failed',
-               last_sync_error = 'Cookie 未配置，请先在设置页配置牵牛花 Cookie',
-               last_sync_at = NOW(), updated_at = NOW()
-               WHERE is_active = true"""
-        )
-        return
-
-    # 验证 Cookie
-    cookie_valid, verify_msg = await _verify_cookie_with_qnh(cookies)
-    logger.info("Cookie 验证结果: %s - %s", cookie_valid, verify_msg)
-
-    if not cookie_valid:
-        logger.error("Cookie 无效，停止同步: %s", verify_msg)
-        await pool.execute(
-            """UPDATE merchant_sync_cookies SET last_sync_status = 'failed',
-               last_sync_error = $1, last_verified_at = NOW(),
-               last_sync_at = NOW(), updated_at = NOW()
-               WHERE is_active = true""",
-            f"Cookie 验证失败: {verify_msg}",
-        )
-        return
-
-    # Cookie 有效，更新验证时间，标记同步中
-    await pool.execute(
-        """UPDATE merchant_sync_cookies SET last_sync_status = 'running',
-           last_verified_at = NOW(), last_sync_error = NULL, updated_at = NOW()
-           WHERE is_active = true"""
-    )
-
-    # 将 Cookie 写入配置文件，供 QNHAuth 读取
-    _try_save_cookie_config(cookies)
-
-    # 尝试用 syncers 同步（QNHAuth 会从配置文件读取 Cookie）
-    total_records = 0
-    errors = []
+    """Run all syncers once in background."""
     try:
         from src.sync.inventory import InventorySyncer
         from src.sync.metrics import MetricsSyncer
@@ -350,45 +254,25 @@ async def _trigger_sync_all() -> None:
         ]
         for s in syncers:
             try:
-                result = await s.sync()
+                result = await s.sync()  # ← 修复: 调用 sync() 而非 sync_full()
                 if not result.success:
-                    errors.append(f"{s.name}: {result.error}")
                     logger.error("Sync failed for %s: %s", s.name, result.error)
                 else:
-                    total_records += result.records_synced
                     logger.info("Sync OK for %s: %d records", s.name, result.records_synced)
-            except Exception as exc:
-                errors.append(f"{s.name}: {exc}")
+            except Exception:
                 logger.exception("Sync exception for %s", s.name)
-    except Exception as exc:
-        errors.append(f"初始化同步器失败: {exc}")
-        logger.exception("Failed to initialize syncers")
-
-    # 更新同步结果
-    if errors and total_records == 0:
-        error_summary = "; ".join(errors[:3])
-        await pool.execute(
-            """UPDATE merchant_sync_cookies SET last_sync_status = 'failed',
-               last_sync_error = $1, last_sync_at = NOW(), updated_at = NOW()
-               WHERE is_active = true""",
-            error_summary,
-        )
-    else:
-        await pool.execute(
-            """UPDATE merchant_sync_cookies SET last_sync_status = 'success',
-               last_sync_error = NULL, last_sync_at = NOW(),
-               records_synced_total = records_synced_total + $1, updated_at = NOW()
-               WHERE is_active = true""",
-            total_records,
-        )
-        logger.info("同步完成，共同步 %d 条记录", total_records)
+    except Exception:
+        logger.exception("Failed to trigger sync")
 
 
 @router.post("/trigger", response_model=APIResponse[dict])
 async def trigger_sync(bg: BackgroundTasks) -> APIResponse[dict]:
     """手动触发全量同步。"""
     bg.add_task(_trigger_sync_all)
-    return APIResponse(data={"status": "triggered", "triggered_at": datetime.now(UTC).isoformat()}, message="已在后台触发全量同步")
+    return APIResponse(
+        data={"status": "triggered", "triggered_at": datetime.now(UTC).isoformat()},
+        message="已在后台触发全量同步",
+    )
 
 
 @router.post("/{syncer_name}/trigger", response_model=APIResponse[dict])
@@ -403,6 +287,7 @@ async def trigger_single_syncer(syncer_name: str, bg: BackgroundTasks) -> APIRes
     }
     if syncer_name not in syncer_map:
         from .errors import NotFoundError
+
         raise NotFoundError("Syncer", syncer_name)
 
     module_path, class_name = syncer_map[syncer_name]
@@ -410,7 +295,9 @@ async def trigger_single_syncer(syncer_name: str, bg: BackgroundTasks) -> APIRes
     async def _run() -> None:
         try:
             import importlib
+
             from src.sync.qnh_client import QNHClient
+
             mod = importlib.import_module(module_path)
             cls = getattr(mod, class_name)
             syncer = cls(QNHClient(), None)
@@ -428,6 +315,7 @@ async def trigger_single_syncer(syncer_name: str, bg: BackgroundTasks) -> APIRes
 
 # ── History & legacy ─────────────────────────────────────────────────────────
 
+
 @router.get("/history", response_model=APIResponse[list[dict]])
 async def sync_history(limit: int = 50) -> APIResponse[list[dict]]:
     pool = await _get_pool()
@@ -444,11 +332,10 @@ async def sync_history(limit: int = 50) -> APIResponse[list[dict]]:
 async def single_syncer_status(syncer_name: str) -> APIResponse[dict]:
     pool = await _get_pool()
     try:
-        row = await pool.fetchrow(
-            "SELECT * FROM sync_state WHERE syncer_name = $1", syncer_name
-        )
+        row = await pool.fetchrow("SELECT * FROM sync_state WHERE syncer_name = $1", syncer_name)
         if not row:
             from .errors import NotFoundError
+
             raise NotFoundError("Syncer", syncer_name)
         return APIResponse(data=dict(row))
     except HTTPException:

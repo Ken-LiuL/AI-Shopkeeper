@@ -55,8 +55,6 @@ class CompetitorMonitorResult(BaseModel):
     products: list[ProductCompetitorAnalysis]
 
 
-@router.get("", response_model=APIResponse[CompetitorMonitorResult])
-@router.get("/", response_model=APIResponse[CompetitorMonitorResult])
 @router.get("/monitor", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
     """获取竞品监控概览 - 使用真实数据源优先"""

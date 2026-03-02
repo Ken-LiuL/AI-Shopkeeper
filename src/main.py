@@ -286,8 +286,8 @@ async def _run_migrations(pool: Any) -> None:
             logger.info("Migration applied: %s ✓", fname)
         except Exception as e:
             logger.error("Migration %s failed: %s", fname, e)
-            # Continue with remaining migrations instead of blocking
-            continue
+            # Don't block startup on migration failure
+            break
 
 
 async def _initial_full_sync(pool: Any) -> None:

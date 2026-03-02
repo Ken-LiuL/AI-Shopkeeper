@@ -47,7 +47,6 @@ function StatCard({ title, value, icon, trend, tooltip }: {
 
 function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [overviewMessage, setOverviewMessage] = useState<string | null>(null);
   const [trend, setTrend] = useState<SalesTrendData[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [insights, setInsights] = useState<DailyInsight | null>(null);
@@ -65,17 +64,6 @@ function DashboardPage() {
           getDailyInsights(),
         ]);
         setOverview(overviewData);
-        // Check if we have any real data
-        const hasRealData = overviewData &&
-          (Number(overviewData.total_products) > 0 ||
-           Number(overviewData.today_orders) > 0 ||
-           Number(overviewData.today_gmv) > 0 ||
-           Number(overviewData.total_customers) > 0);
-        if (!hasRealData) {
-          setOverviewMessage('暂无数据，请先前往「设置 → 数据同步」配置牵牛花 Cookie 并同步您的店铺数据');
-        } else {
-          setOverviewMessage(null);
-        }
         setTrend(trendData);
         setAlerts(alertsData.slice(0, 5)); // Show only latest 5 alerts
         setInsights(insightsData);
@@ -172,24 +160,6 @@ function DashboardPage() {
         <h1 className="text-3xl font-bold tracking-tight">仪表盘</h1>
         <p className="text-muted-foreground">欢迎回到 AI 店长智能管理后台</p>
       </div>
-
-      {overviewMessage && (
-        <Card className="border-amber-200 bg-amber-50">
-          <CardContent className="p-4 flex items-start gap-3">
-            <div className="text-2xl">📭</div>
-            <div>
-              <p className="font-medium text-amber-800">暂无店铺数据</p>
-              <p className="text-sm text-amber-700 mt-1">{overviewMessage}</p>
-              <a
-                href="/settings/sync"
-                className="inline-block mt-2 px-3 py-1.5 bg-amber-600 text-white text-sm rounded hover:bg-amber-700"
-              >
-                前往数据同步设置 →
-              </a>
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => (
