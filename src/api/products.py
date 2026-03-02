@@ -425,21 +425,35 @@ async def knowledge_stats() -> APIResponse[dict]:
 
 @router.get("/pricing-analysis", response_model=APIResponse[dict])
 async def get_pricing_analysis() -> APIResponse[dict]:
-    """商品定价分析 - 从 qnh_products 表分析各品类价格分布和利润率"""
+    """商品定价分析 - 从 qnh_products 表分析各品类价格分布和利润率
+
+    当 cost_price 缺失时，按医疗器械行业平均利润率估算：
+    - 高价设备(>500): 35% 毛利
+    - 中价商品(100-500): 30% 毛利
+    - 低价耗材(<100): 25% 毛利
+    """
     try:
         pool = pg.get_pool()
 
+        # 使用 COALESCE + 行业估算利润率，当 cost_price 为空或 0 时自动估算
         price_distribution = await pool.fetch("""
             SELECT
                 category,
                 COUNT(*) as product_count,
                 AVG(retail_price::numeric) as avg_retail_price,
                 AVG(channel_price::numeric) as avg_channel_price,
-                AVG(cost_price::numeric) as avg_cost_price,
                 AVG(CASE
-                    WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
+                    WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
+                    WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
+                    WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
+                    ELSE retail_price::numeric * 0.75
+                END) as avg_cost_price,
+                AVG(CASE
+                    WHEN COALESCE(cost_price::numeric, 0) > 0 AND retail_price::numeric > 0
                     THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
-                    ELSE NULL
+                    WHEN retail_price::numeric > 500 THEN 35.0
+                    WHEN retail_price::numeric > 100 THEN 30.0
+                    ELSE 25.0
                 END) as avg_margin_percent
             FROM qnh_products
             WHERE retail_price::numeric > 0 AND category IS NOT NULL AND category != ''
@@ -476,30 +490,43 @@ async def get_pricing_analysis() -> APIResponse[dict]:
 
         pricing_suggestions = []
 
+        # 估算成本价：有真实数据用真实，没有则按品类估算
         low_margin_products = await pool.fetch("""
-            SELECT spu_id, name, category, retail_price, cost_price,
-                   CASE
-                       WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
-                       THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
-                       ELSE 0
-                   END as margin_percent
-            FROM qnh_products
-            WHERE retail_price::numeric > 0 AND cost_price::numeric > 0
-            AND (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100 < 15
+            WITH products_with_cost AS (
+                SELECT spu_id, name, category, retail_price::numeric as rp,
+                    CASE
+                        WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
+                        WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
+                        WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
+                        ELSE retail_price::numeric * 0.75
+                    END as cp
+                FROM qnh_products
+                WHERE retail_price::numeric > 0
+            )
+            SELECT spu_id, name, category, rp as retail_price, cp as cost_price,
+                   (rp - cp) / rp * 100 as margin_percent
+            FROM products_with_cost
+            WHERE (rp - cp) / rp * 100 < 15
             ORDER BY margin_percent ASC
             LIMIT 20
         """)
 
         high_margin_products = await pool.fetch("""
-            SELECT spu_id, name, category, retail_price, cost_price,
-                   CASE
-                       WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
-                       THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
-                       ELSE 0
-                   END as margin_percent
-            FROM qnh_products
-            WHERE retail_price::numeric > 0 AND cost_price::numeric > 0
-            AND (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100 > 40
+            WITH products_with_cost AS (
+                SELECT spu_id, name, category, retail_price::numeric as rp,
+                    CASE
+                        WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
+                        WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
+                        WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
+                        ELSE retail_price::numeric * 0.75
+                    END as cp
+                FROM qnh_products
+                WHERE retail_price::numeric > 0
+            )
+            SELECT spu_id, name, category, rp as retail_price, cp as cost_price,
+                   (rp - cp) / rp * 100 as margin_percent
+            FROM products_with_cost
+            WHERE (rp - cp) / rp * 100 > 40
             ORDER BY margin_percent DESC
             LIMIT 10
         """)
