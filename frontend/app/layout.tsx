@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
 import './globals.css';
 import { Sidebar } from '@/components/layout/sidebar';
+import { OnboardingGuide } from '@/components/onboarding/guide';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -20,6 +21,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="p-6 lg:p-8">{children}</div>
           </main>
         </div>
+        <OnboardingGuide />
       </body>
     </html>
   );

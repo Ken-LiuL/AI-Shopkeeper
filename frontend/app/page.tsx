@@ -4,18 +4,33 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { withErrorBoundary } from '@/components/error-boundary';
+import { Tooltip } from '@/components/onboarding/guide';
 import { getDashboardOverview, getSalesTrend, getAlerts, getDailyInsights } from '@/lib/api';
 import type { DashboardOverview, SalesTrendData, Alert, DailyInsight } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
-function StatCard({ title, value, icon, trend }: { title: string; value: number | string; icon: string; trend?: string }) {
+function StatCard({ title, value, icon, trend, tooltip }: {
+  title: string;
+  value: number | string;
+  icon: string;
+  trend?: string;
+  tooltip?: string;
+}) {
   return (
     <Card>
       <CardContent className="p-6">
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            {tooltip ? (
+              <Tooltip text={tooltip}>
+                <p className="text-sm font-medium text-muted-foreground border-b border-dotted border-gray-400 cursor-help">
+                  {title}
+                </p>
+              </Tooltip>
+            ) : (
+              <p className="text-sm font-medium text-muted-foreground">{title}</p>
+            )}
             <p className="text-2xl font-bold">{value}</p>
             {trend && (
               <p className="text-xs text-green-600 mt-1">
@@ -107,22 +122,26 @@ function DashboardPage() {
     {
       title: '今日 GMV',
       value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '-',
-      icon: '💰'
+      icon: '💰',
+      tooltip: 'GMV = 商品交易总额，包括已付款和未付款订单的总价值'
     },
     {
       title: '今日订单',
       value: overview?.today_orders ? Number(overview.today_orders).toLocaleString() : '-',
-      icon: '📋'
+      icon: '📋',
+      tooltip: '今日新增订单数量，包括待付款、已付款、配送中等所有状态'
     },
     {
       title: '客单价',
       value: overview?.avg_order_value ? `¥${Number(overview.avg_order_value).toFixed(2)}` : '-',
-      icon: '🛒'
+      icon: '🛒',
+      tooltip: '平均客单价 = 总GMV / 订单数，反映单次购买金额水平'
     },
     {
       title: '客户总数',
       value: overview?.total_customers ? Number(overview.total_customers).toLocaleString() : '-',
-      icon: '👥'
+      icon: '👥',
+      tooltip: '累计注册用户数，包括有过购买行为的所有客户'
     },
   ];
 
@@ -144,7 +163,13 @@ function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <StatCard key={stat.title} {...stat} />
+          <StatCard
+            key={stat.title}
+            title={stat.title}
+            value={stat.value}
+            icon={stat.icon}
+            tooltip={stat.tooltip}
+          />
         ))}
       </div>
 

@@ -53,6 +53,10 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                         "created_at": now_str,
                         "resolved_at": None,
                         "actionable": True,
+                        "action_suggestions": [
+                            f"立即补货损失最大的{min(3, int(loss_amount / 100))}个商品，预计3-5天到货",
+                            f"联系供应商申请紧急发货，可考虑支付{loss_amount * 0.1:.0f}元加急费",
+                        ],
                     }
                 )
 
@@ -71,6 +75,10 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                         "created_at": now_str,
                         "resolved_at": None,
                         "actionable": True,
+                        "action_suggestions": [
+                            "增加备货量前3名热销商品，减少缺货等待时间",
+                            f"联系美团配送优化路线，目标降至{max(3, rate * 100 - 5):.0f}%以下",
+                        ],
                     }
                 )
 
@@ -130,6 +138,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                LIMIT 2"""
         )
         for product in high_price_products:
+            suggested_price = product["category_avg_price"] * 1.2  # 20% premium
             alerts.append(
                 {
                     "alert_id": f"high_price_{product['spu_id']}",
@@ -142,6 +151,10 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "created_at": "2026-03-01T06:30:00Z",
                     "resolved_at": None,
                     "actionable": True,
+                    "action_suggestions": [
+                        f"考虑降价至¥{suggested_price:.0f}提升竞争力",
+                        f"强化该商品卖点宣传，突出{int((product['retail_price'] / product['category_avg_price'] - 1) * 100)}%价差的价值理由",
+                    ],
                 }
             )
 
@@ -161,6 +174,10 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                     "created_at": now_str,
                     "resolved_at": None,
                     "actionable": True,
+                    "action_suggestions": [
+                        f"推广滞销商品：设置{int((turnover_days - 30) / 10) * 5 + 10}%折扣促销",
+                        f"暂停进货{int(turnover_days / 30)}个月，专注清仓现有库存",
+                    ],
                 }
             )
 
