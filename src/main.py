@@ -6,10 +6,13 @@ import logging
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from src.api.alerts import router as alerts_router
 from src.api.analytics import router as analytics_router
@@ -637,6 +640,52 @@ app.include_router(analytics_router)
 app.include_router(inventory_router)
 app.include_router(insights_router)
 app.include_router(stores_router)
+
+
+# ─── Frontend static files ──────────────────────────────────
+@app.get("/")
+async def read_root():
+    """Serve the AI Store Manager home page."""
+    frontend_build_path = Path(__file__).resolve().parent.parent / "frontend"
+
+    # Try to serve the built frontend
+    if frontend_build_path.exists():
+        # Look for index.html in common Next.js locations
+        possible_index_paths = [
+            frontend_build_path / ".next" / "standalone" / "index.html",
+            frontend_build_path / ".next" / "server" / "app" / "page.html",
+            frontend_build_path / "out" / "index.html",
+            frontend_build_path / ".next" / "export" / "index.html",
+        ]
+
+        for index_path in possible_index_paths:
+            if index_path.exists():
+                return FileResponse(str(index_path), media_type="text/html")
+
+    # Fallback: return a simple homepage
+    return {
+        "message": "AI Store Manager",
+        "status": "running",
+        "version": "0.1.0",
+        "description": "美团即时零售（医疗器械）智能运营系统",
+        "frontend": "building" if frontend_build_path.exists() else "not_available",
+        "api_docs": "/docs",
+        "health": "/health",
+    }
+
+
+# Mount static files if they exist
+frontend_build_path = Path(__file__).resolve().parent.parent / "frontend"
+if frontend_build_path.exists():
+    # Mount Next.js static assets
+    static_path = frontend_build_path / ".next" / "static"
+    if static_path.exists():
+        app.mount("/_next/static", StaticFiles(directory=str(static_path)), name="nextjs_static")
+
+    # Mount public assets
+    public_path = frontend_build_path / "public"
+    if public_path.exists():
+        app.mount("/public", StaticFiles(directory=str(public_path)), name="public_assets")
 
 # ─── Unified error handling ─────────────────────────────────
 register_error_handlers(app)

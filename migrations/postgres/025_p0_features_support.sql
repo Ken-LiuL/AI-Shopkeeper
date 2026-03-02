@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
 -- 商品供应商信息表
 CREATE TABLE IF NOT EXISTS product_suppliers (
     id BIGSERIAL PRIMARY KEY,
-    product_id VARCHAR(32) REFERENCES products(product_id),
+    product_id VARCHAR(32) REFERENCES qnh_products(spu_id),
     supplier_name VARCHAR(100) NOT NULL,
     supplier_contact VARCHAR(200),
     lead_time_days INTEGER DEFAULT 7,
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS idx_product_suppliers_product ON product_suppliers(pr
 -- 补货记录表
 CREATE TABLE IF NOT EXISTS restock_records (
     id BIGSERIAL PRIMARY KEY,
-    product_id VARCHAR(32) REFERENCES products(product_id),
+    product_id VARCHAR(32) REFERENCES qnh_products(spu_id),
     suggested_qty INTEGER NOT NULL,
     actual_qty INTEGER,
     urgency VARCHAR(20) NOT NULL, -- high, medium, low
@@ -83,7 +83,7 @@ ON CONFLICT (poi_id) DO NOTHING;
 CREATE TABLE IF NOT EXISTS store_inventory (
     id BIGSERIAL PRIMARY KEY,
     poi_id INTEGER REFERENCES stores(poi_id),
-    product_id VARCHAR(32) REFERENCES products(product_id),
+    product_id VARCHAR(32) REFERENCES qnh_products(spu_id),
     stock INTEGER DEFAULT 0,
     reserved_stock INTEGER DEFAULT 0, -- 预留库存
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS store_inventory (
 
 -- 商品销量分析表
 CREATE TABLE IF NOT EXISTS product_sales_analysis (
-    product_id VARCHAR(32) PRIMARY KEY REFERENCES products(product_id),
+    product_id VARCHAR(32) PRIMARY KEY REFERENCES qnh_products(spu_id),
     daily_avg_sales DECIMAL(8, 2) DEFAULT 0,
     weekly_avg_sales DECIMAL(8, 2) DEFAULT 0,
     monthly_avg_sales DECIMAL(8, 2) DEFAULT 0,
@@ -115,24 +115,24 @@ CREATE TABLE IF NOT EXISTS daily_insights (
 CREATE INDEX IF NOT EXISTS idx_daily_insights_date ON daily_insights(analysis_date);
 CREATE INDEX IF NOT EXISTS idx_daily_insights_poi ON daily_insights(poi_id);
 
--- 更新products表，添加缺失字段
-ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price DECIMAL(10, 2);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS supplier VARCHAR(100);
-ALTER TABLE products ADD COLUMN IF NOT EXISTS lead_time_days INTEGER DEFAULT 7;
-ALTER TABLE products ADD COLUMN IF NOT EXISTS safety_stock INTEGER DEFAULT 0;
+-- 更新qnh_products表，添加缺失字段
+ALTER TABLE qnh_products ADD COLUMN IF NOT EXISTS cost_price DECIMAL(10, 2);
+ALTER TABLE qnh_products ADD COLUMN IF NOT EXISTS supplier VARCHAR(100);
+ALTER TABLE qnh_products ADD COLUMN IF NOT EXISTS lead_time_days INTEGER DEFAULT 7;
+ALTER TABLE qnh_products ADD COLUMN IF NOT EXISTS safety_stock INTEGER DEFAULT 0;
 
--- 更新orders表，支持门店维度
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS poi_id INTEGER;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_fee DECIMAL(6, 2) DEFAULT 0;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS estimated_delivery_time TIMESTAMPTZ;
-ALTER TABLE orders ADD COLUMN IF NOT EXISTS actual_delivery_time TIMESTAMPTZ;
+-- 更新qnh_orders表，支持门店维度
+ALTER TABLE qnh_orders ADD COLUMN IF NOT EXISTS poi_id INTEGER;
+ALTER TABLE qnh_orders ADD COLUMN IF NOT EXISTS delivery_fee DECIMAL(6, 2) DEFAULT 0;
+ALTER TABLE qnh_orders ADD COLUMN IF NOT EXISTS estimated_delivery_time TIMESTAMPTZ;
+ALTER TABLE qnh_orders ADD COLUMN IF NOT EXISTS actual_delivery_time TIMESTAMPTZ;
 
 -- 创建一些有用的视图
 
 -- 商品销量排行视图
 CREATE OR REPLACE VIEW product_sales_ranking AS
 SELECT
-    p.product_id,
+    p.spu_id as product_id,
     p.name,
     p.category,
     p.retail_price,
@@ -144,11 +144,11 @@ SELECT
     COALESCE(SUM(oi.quantity), 0) as total_sold_30d,
     COALESCE(COUNT(DISTINCT oi.order_id), 0) as order_count_30d,
     COALESCE(SUM(oi.quantity * oi.unit_price), 0) as revenue_30d
-FROM products p
-LEFT JOIN order_items oi ON p.product_id = oi.product_id
-LEFT JOIN orders o ON oi.order_id = o.order_id AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
+FROM qnh_products p
+LEFT JOIN order_items oi ON p.spu_id = oi.product_id
+LEFT JOIN qnh_orders o ON oi.order_id = o.order_id AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
 WHERE p.status = 'active'
-GROUP BY p.product_id, p.name, p.category, p.retail_price, p.cost_price
+GROUP BY p.spu_id, p.name, p.category, p.retail_price, p.cost_price
 ORDER BY total_sold_30d DESC;
 
 -- 门店表现视图
@@ -161,7 +161,7 @@ SELECT
     COALESCE(SUM(o.total_amount), 0) as gmv,
     COALESCE(AVG(o.total_amount), 0) as avg_order_value
 FROM stores s
-LEFT JOIN orders o ON s.poi_id = o.poi_id AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
+LEFT JOIN qnh_orders o ON s.poi_id = o.poi_id AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
 WHERE s.is_active = true
 GROUP BY s.poi_id, s.store_name, DATE(o.order_time);
 
