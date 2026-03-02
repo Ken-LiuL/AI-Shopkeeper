@@ -55,6 +55,40 @@ class CompetitorMonitorResult(BaseModel):
     products: list[ProductCompetitorAnalysis]
 
 
+@router.get("/", response_model=APIResponse[CompetitorMonitorResult])
+async def get_competitors_root(limit: int = 20) -> APIResponse[CompetitorMonitorResult]:
+    """竞品监控根端点 - 默认返回监控结果，支持 limit 参数"""
+    try:
+        # 复用 monitor 端点的逻辑
+        result = await get_competitor_monitor()
+        if result.success and result.data and limit < len(result.data.products):
+            # 应用 limit 参数
+            limited_result = CompetitorMonitorResult(
+                total_monitored=result.data.total_monitored,
+                price_alerts=result.data.price_alerts,
+                competitive_products=result.data.competitive_products,
+                overpriced_products=result.data.overpriced_products,
+                underpriced_products=result.data.underpriced_products,
+                products=result.data.products[:limit],
+            )
+            return APIResponse(data=limited_result)
+        return result
+    except Exception as e:
+        logger.error(f"Failed to get competitors root: {e}")
+        return APIResponse(
+            success=False,
+            message=f"竞品数据获取失败: {str(e)}",
+            data=CompetitorMonitorResult(
+                total_monitored=0,
+                price_alerts=0,
+                competitive_products=0,
+                overpriced_products=0,
+                underpriced_products=0,
+                products=[],
+            ),
+        )
+
+
 @router.get("/monitor", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
     """获取竞品监控概览 - 使用真实数据源优先"""
