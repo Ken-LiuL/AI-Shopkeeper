@@ -12,7 +12,7 @@ from src.services.session_manager import SessionManager
 
 from .schemas import APIResponse, ChatRequest, ChatResponse
 
-router = APIRouter(prefix="/api/v1", tags=["chat"])
+router = APIRouter(prefix="/api", tags=["chat"])
 logger = logging.getLogger(__name__)
 
 

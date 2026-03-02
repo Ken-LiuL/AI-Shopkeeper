@@ -958,8 +958,8 @@ async def get_products_pricing_analysis() -> APIResponse[dict]:
                 AVG(CASE
                     WHEN (channel_price->>'meituan')::numeric > 0 AND retail_price > 0
                     THEN (retail_price - (channel_price->>'meituan')::numeric) / retail_price * 100
-                    -- 如果没有渠道价，估算15%的默认margin
-                    WHEN retail_price > 0 THEN 15.0
+                    -- 无渠道价数据时返回NULL，前端显示"待补充"
+                    WHEN retail_price > 0 THEN NULL
                     ELSE NULL
                 END) as avg_margin_percent
             FROM qnh_products

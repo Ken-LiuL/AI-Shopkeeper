@@ -256,6 +256,9 @@ class PricingService:
                 await pool.fetchval("SELECT AVG(price) FROM competitor_products WHERE price > 0")
                 or 0
             )
+            competitor_count = (
+                await pool.fetchval("SELECT COUNT(*) FROM competitor_products WHERE price > 0") or 0
+            )
 
             # Use store metrics for better analysis
             store_data = await fetch_latest_raw(pool, "qnh_store_metrics_raw")
@@ -284,7 +287,8 @@ class PricingService:
 
                 # Check if price is significantly higher than average
                 if competitor_avg_price > 0 and current_price > competitor_avg_price * 1.2:
-                    suggested_price = competitor_avg_price * 1.1
+                    # Don't suggest below cost (estimated_cost = 0.7 * current_price)
+                    suggested_price = max(competitor_avg_price * 1.1, estimated_cost * 1.05)
                     reason = f"价格高于市场均价({competitor_avg_price:.2f})，建议适度降价"
                     current_margin = 0.25
                 elif current_price < 15:  # Low price products might need adjustment
@@ -331,7 +335,7 @@ class PricingService:
                                 "max": competitor_avg_price * 1.2
                                 if competitor_avg_price > 0
                                 else current_price * 1.2,
-                                "count": 3,  # Simulated
+                                "count": competitor_count,
                             },
                         )
                     )
