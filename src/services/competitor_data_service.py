@@ -34,11 +34,11 @@ class EnhancedCompetitorPrice:
 
     competitor_name: str
     price: float
+    data_source: CompetitorDataSource
+    last_updated: str
     price_change_7d: float = 0.0  # 7天价格变化
     availability: str = "有货"
     market_share: float = 0.0  # 该竞品在品类中的市场份额估算
-    data_source: CompetitorDataSource
-    last_updated: str
     is_demo_data: bool = False  # 明确标记演示数据
 
 
