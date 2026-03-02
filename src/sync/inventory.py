@@ -24,7 +24,8 @@ class InventorySyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=6)
 
     # 推断的 goldengateway module 名，需验证
-    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到库存专用 viewCode
+    # 使用热销商品排行视图（包含库存相关数据）
+    VIEW_CODE = "homepage_hotsale_goods_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: snapshot of all current stock levels."""

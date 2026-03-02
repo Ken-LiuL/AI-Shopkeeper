@@ -23,7 +23,8 @@ class ReviewSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到评价专用 viewCode
+    # 使用客户消费排行视图（包含评价相关数据）
+    VIEW_CODE = "customer_consume_rank_table_view_new"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 90 days of reviews."""

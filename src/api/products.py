@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -52,31 +53,34 @@ async def list_products_v1(
         params.append(qnh_status)
         idx += 1
 
-    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-
     try:
         # Read from qnh_products (synced from QNH platform)
-        total = await pool.fetchval(f"SELECT COUNT(*) FROM qnh_products{where}", *params) or 0
+        count_query = "SELECT COUNT(*) FROM qnh_products"
+        if conditions:
+            count_query += " WHERE " + " AND ".join(conditions)
+        total = await pool.fetchval(count_query, *params) or 0
 
         offset = (page - 1) * page_size
         params_page = params + [page_size, offset]
-        rows = await pool.fetch(
-            f"""SELECT
-                spu_id AS product_id,
-                name,
-                brand,
-                category,
-                retail_price,
-                channel_price,
-                cost_price,
-                status,
-                synced_at AS created_at,
-                synced_at AS updated_at
-            FROM qnh_products{where}
-            ORDER BY synced_at DESC
-            LIMIT ${idx} OFFSET ${idx + 1}""",
-            *params_page,
-        )
+
+        select_query = """SELECT
+            spu_id AS product_id,
+            name,
+            brand,
+            category,
+            retail_price,
+            channel_price,
+            cost_price,
+            status,
+            synced_at AS created_at,
+            synced_at AS updated_at
+        FROM qnh_products"""
+
+        if conditions:
+            select_query += " WHERE " + " AND ".join(conditions)
+        select_query += f" ORDER BY synced_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+
+        rows = await pool.fetch(select_query, *params_page)
 
         # Convert to expected format and handle data types
         processed_rows = []

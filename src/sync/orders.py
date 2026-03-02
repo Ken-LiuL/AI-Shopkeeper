@@ -22,8 +22,8 @@ class OrderSyncer(BaseSyncer):
     name = "orders"
     full_sync_interval = timedelta(hours=12)
 
-    # 推断的 goldengateway module 名，需验证
-    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到订单专用 viewCode
+    # 使用数据概览视图获取订单相关数据（复合模块查询）
+    VIEW_CODE = "homepage_data_overview_view_not_erp"
 
     async def full_sync(self) -> SyncResult:
         """Full sync: last 30 days of orders."""

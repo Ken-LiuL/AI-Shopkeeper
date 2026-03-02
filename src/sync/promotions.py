@@ -26,7 +26,8 @@ class PromotionSyncer(BaseSyncer):
     full_sync_interval = timedelta(hours=24)
 
     # 推断的 goldengateway module 名，需验证
-    VIEW_CODE = "homepage_not_erp_poi_rank_table_view"  # TODO: 需要找到营销专用 viewCode
+    # 使用渠道分布视图（营销活动按渠道分析）
+    VIEW_CODE = "homepage_channel_distribute_table_view_new"
 
     async def full_sync(self) -> SyncResult:
         """全量同步: 最近180天的活动。"""

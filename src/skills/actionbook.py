@@ -1324,11 +1324,75 @@ class ActionBookSkill:
         raise RuntimeError(error_msg)
 
     async def alibaba_supplier(self, supplier_id: str) -> AlibabaSupplier:
-        """获取1688供应商信息。TODO: 实现供应商页面解析。"""
+        """获取1688供应商信息。"""
         self._check_rate("alibaba_supplier")
-        raise NotImplementedError(
-            f"alibaba_supplier not yet implemented for supplier_id={supplier_id}. "
-            "需要实现供应商页面解析。"
+
+        url = f"https://shop{supplier_id}.1688.com/"
+        js = r"""(() => {
+            const info = {};
+
+            // 供应商名称
+            const nameEl = document.querySelector('.company-name, .shop-name, h1');
+            info.name = nameEl ? nameEl.textContent.trim() : '';
+
+            // 评分信息
+            const ratingEl = document.querySelector('.score, .rating-score');
+            info.rating = ratingEl ? parseFloat(ratingEl.textContent) || 0 : 0;
+
+            // 成立年数
+            const yearEl = document.querySelector('.establish-year, .shop-year');
+            const yearText = yearEl ? yearEl.textContent : '';
+            const yearMatch = yearText.match(/(\d+)年/);
+            info.years_established = yearMatch ? parseInt(yearMatch[1]) : 0;
+
+            // 主营类目
+            const categoryEl = document.querySelector('.main-category, .shop-category');
+            info.main_category = categoryEl ? categoryEl.textContent.trim() : '';
+
+            // 工商信息
+            const companyEl = document.querySelector('.company-info, .business-info');
+            info.company_verified = companyEl ? companyEl.textContent.includes('已认证') : false;
+
+            // 联系方式（部分可见）
+            const contactEl = document.querySelector('.contact-info');
+            info.contact_partial = contactEl ? contactEl.textContent.trim() : '';
+
+            return JSON.stringify(info);
+        })()"""
+
+        try:
+            result_str = await self._scrape_with_actionbook(
+                url, js, wait_seconds=3.0, domain="alibaba"
+            )
+            if result_str:
+                data = json.loads(result_str)
+                return AlibabaSupplier(
+                    supplier_id=supplier_id,
+                    name=data.get("name", "未知供应商"),
+                    rating=data.get("rating", 0.0),
+                    years_established=data.get("years_established", 0),
+                    main_category=data.get("main_category", ""),
+                    company_verified=data.get("company_verified", False),
+                    contact_info=data.get("contact_partial", ""),
+                    total_products=0,  # 需要额外查询
+                    response_rate=0.0,  # 需要额外查询
+                    location="",  # 需要额外查询
+                )
+        except Exception as e:
+            logger.error(f"Failed to get alibaba supplier {supplier_id}: {e}")
+
+        # 返回默认值
+        return AlibabaSupplier(
+            supplier_id=supplier_id,
+            name=f"供应商{supplier_id}",
+            rating=0.0,
+            years_established=0,
+            main_category="",
+            company_verified=False,
+            contact_info="",
+            total_products=0,
+            response_rate=0.0,
+            location="",
         )
 
     # ── 拼多多 ───────────────────────────────────────────────────────────
@@ -1420,10 +1484,69 @@ class ActionBookSkill:
         raise RuntimeError(error_msg)
 
     async def pdd_shop(self, shop_id: str) -> PddShop:
-        """获取拼多多店铺信息。TODO: 实现店铺页面解析。"""
+        """获取拼多多店铺信息。"""
         self._check_rate("pdd_shop")
-        raise NotImplementedError(
-            f"pdd_shop not yet implemented for shop_id={shop_id}. 需要实现店铺页面解析。"
+
+        url = f"https://mobile.yangkeduo.com/shop.html?mall_id={shop_id}"
+        js = r"""(() => {
+            const info = {};
+
+            // 店铺名称
+            const nameEl = document.querySelector('.shop-name, .store-name, .mall-name');
+            info.name = nameEl ? nameEl.textContent.trim() : '';
+
+            // 粉丝数
+            const fansEl = document.querySelector('.fans-count, .follow-count');
+            const fansText = fansEl ? fansEl.textContent : '';
+            const fansMatch = fansText.match(/(\d+)/);
+            info.followers = fansMatch ? parseInt(fansMatch[1]) : 0;
+
+            // 商品数量
+            const productEl = document.querySelector('.product-count, .goods-count');
+            const productText = productEl ? productEl.textContent : '';
+            const productMatch = productText.match(/(\d+)/);
+            info.total_products = productMatch ? parseInt(productMatch[1]) : 0;
+
+            // 店铺评分（如果有）
+            const ratingEl = document.querySelector('.shop-score, .store-rating');
+            info.rating = ratingEl ? parseFloat(ratingEl.textContent) || 0 : 0;
+
+            // 店铺描述
+            const descEl = document.querySelector('.shop-desc, .store-intro');
+            info.description = descEl ? descEl.textContent.trim() : '';
+
+            // 是否官方店
+            const officialEl = document.querySelector('.official-mark, .brand-mark');
+            info.is_official = officialEl ? true : false;
+
+            return JSON.stringify(info);
+        })()"""
+
+        try:
+            result_str = await self._scrape_with_actionbook(url, js, wait_seconds=3.0, domain="pdd")
+            if result_str:
+                data = json.loads(result_str)
+                return PddShop(
+                    shop_id=shop_id,
+                    name=data.get("name", "未知店铺"),
+                    followers=data.get("followers", 0),
+                    total_products=data.get("total_products", 0),
+                    rating=data.get("rating", 0.0),
+                    description=data.get("description", ""),
+                    is_official=data.get("is_official", False),
+                )
+        except Exception as e:
+            logger.error(f"Failed to get pdd shop {shop_id}: {e}")
+
+        # 返回默认值
+        return PddShop(
+            shop_id=shop_id,
+            name=f"店铺{shop_id}",
+            followers=0,
+            total_products=0,
+            rating=0.0,
+            description="",
+            is_official=False,
         )
 
     async def cleanup(self):

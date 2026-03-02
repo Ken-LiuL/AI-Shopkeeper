@@ -256,10 +256,12 @@ async def list_alerts(
         params.append(product_id)
         idx += 1
 
-    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
-    rows = await pool.fetch(
-        f"SELECT * FROM alerts{where} ORDER BY created_at DESC LIMIT 100", *params
-    )
+    query = "SELECT * FROM alerts"
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY created_at DESC LIMIT 100"
+
+    rows = await pool.fetch(query, *params)
 
     # If no structured alerts exist, generate smart alerts based on real data
     if not rows:
