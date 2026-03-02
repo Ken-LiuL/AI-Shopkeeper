@@ -521,3 +521,76 @@ async def raw_data_debug() -> dict:
                 "latest": dict(sample) if sample else None,
             }
     return result
+
+
+@router.get("/trends", response_model=APIResponse[list[dict]])
+async def sales_trends(
+    days: int = 7,
+) -> APIResponse[list[dict]]:
+    """查询近 N 天销售趋势（从 orders 表）"""
+    pool = pg.get_pool()
+    try:
+        rows = []
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """
+                SELECT
+                    DATE(order_time) AS date,
+                    COUNT(*) AS order_count,
+                    COALESCE(SUM(total_amount), 0) AS revenue,
+                    COALESCE(AVG(total_amount), 0) AS avg_order_value
+                FROM orders
+                WHERE order_time >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day'
+                GROUP BY DATE(order_time)
+                ORDER BY date
+                """,
+                days,
+            )
+
+        trends = [
+            {
+                "date": str(r["date"]),
+                "order_count": int(r["order_count"]),
+                "revenue": round(float(r["revenue"]), 2),
+                "avg_order_value": round(float(r["avg_order_value"]), 2),
+            }
+            for r in rows
+        ]
+
+        if not trends:
+            # 数据库无订单数据，尝试从 metrics_raw 中提取
+            with contextlib.suppress(Exception):
+                raw_rows = await pool.fetch(
+                    """
+                    SELECT DISTINCT ON (created_at::date)
+                           created_at::date AS date,
+                           raw_data
+                    FROM qnh_store_metrics_raw
+                    WHERE created_at >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day'
+                    ORDER BY created_at::date, created_at DESC
+                    """,
+                    days,
+                )
+                import json as _json
+
+                for r in raw_rows:
+                    data = r["raw_data"]
+                    if isinstance(data, str):
+                        data = _json.loads(data)
+                    order_count = int(_extract_metric(data, "eff_ord_cnt"))
+                    revenue = _extract_metric(data, "sale_amt_gmv")
+                    avg_val = revenue / order_count if order_count > 0 else 0
+                    trends.append(
+                        {
+                            "date": str(r["date"]),
+                            "order_count": order_count,
+                            "revenue": round(revenue, 2),
+                            "avg_order_value": round(avg_val, 2),
+                        }
+                    )
+                trends.sort(key=lambda x: x["date"])
+
+        return APIResponse(data=trends, message=f"近{days}天销售趋势")
+    except Exception as e:
+        logger.error("Failed to get sales trends: %s", e)
+        return APIResponse(success=False, message=f"获取销售趋势失败: {str(e)}", data=[])

@@ -379,3 +379,93 @@ async def get_competitor_alerts() -> APIResponse[list[dict]]:
     except Exception as e:
         logger.error(f"Failed to get competitor alerts: {e}")
         return APIResponse(success=False, message=f"获取竞品预警失败: {str(e)}", data=[])
+
+
+@router.get("/analysis", response_model=APIResponse[dict])
+async def get_competitors_analysis() -> APIResponse[dict]:
+    """竞品分析汇总 - 聚合竞品监控数据，返回竞争态势总览"""
+    try:
+        monitor_result = await get_competitor_monitor()
+
+        if not monitor_result.success or not monitor_result.data:
+            return APIResponse(
+                data={
+                    "summary": {
+                        "total_monitored": 0,
+                        "price_alerts": 0,
+                        "competitive_products": 0,
+                        "overpriced_products": 0,
+                        "underpriced_products": 0,
+                    },
+                    "price_position_breakdown": {},
+                    "top_price_alerts": [],
+                    "competitive_advantages": [],
+                    "message": "暂无竞品数据，请先配置竞品监控",
+                }
+            )
+
+        data = monitor_result.data
+
+        # 价格定位分布
+        position_breakdown: dict[str, int] = {}
+        top_alerts = []
+        competitive_advantages = []
+
+        for product in data.products:
+            pos = product.price_position
+            position_breakdown[pos] = position_breakdown.get(pos, 0) + 1
+
+            if pos == "highest":
+                top_alerts.append(
+                    {
+                        "product_id": product.product_id,
+                        "name": product.product_name,
+                        "our_price": product.our_price,
+                        "avg_competitor_price": product.avg_competitor_price,
+                        "price_gap": round(product.our_price - product.avg_competitor_price, 2),
+                        "recommendation": product.recommendation,
+                    }
+                )
+            elif pos == "lowest":
+                competitive_advantages.append(
+                    {
+                        "product_id": product.product_id,
+                        "name": product.product_name,
+                        "our_price": product.our_price,
+                        "avg_competitor_price": product.avg_competitor_price,
+                        "price_advantage": round(
+                            product.avg_competitor_price - product.our_price, 2
+                        ),
+                    }
+                )
+
+        top_alerts.sort(key=lambda x: x["price_gap"], reverse=True)
+        competitive_advantages.sort(key=lambda x: x["price_advantage"], reverse=True)
+
+        return APIResponse(
+            data={
+                "summary": {
+                    "total_monitored": data.total_monitored,
+                    "price_alerts": data.price_alerts,
+                    "competitive_products": data.competitive_products,
+                    "overpriced_products": data.overpriced_products,
+                    "underpriced_products": data.underpriced_products,
+                },
+                "price_position_breakdown": position_breakdown,
+                "top_price_alerts": top_alerts[:10],
+                "competitive_advantages": competitive_advantages[:10],
+                "message": f"共监控 {data.total_monitored} 个商品，发现 {data.price_alerts} 个价格预警",
+            }
+        )
+    except Exception as e:
+        logger.error("Failed to get competitors analysis: %s", e)
+        return APIResponse(
+            success=False,
+            message=f"竞品分析失败: {str(e)}",
+            data={
+                "summary": {},
+                "top_price_alerts": [],
+                "competitive_advantages": [],
+                "message": "数据获取失败，请稍后重试",
+            },
+        )

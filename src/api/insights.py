@@ -9,9 +9,11 @@ import pickle
 from datetime import datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Query
+import asyncio
 
-from src.agents.llm import MODEL_DEEPSEEK, call_tool
+from fastapi import APIRouter, BackgroundTasks, Query
+
+from src.agents.llm import MODEL_DEEPSEEK, MODEL_HAIKU, call_tool
 from src.db import postgres as pg
 
 from .schemas import APIResponse
@@ -460,13 +462,23 @@ async def _generate_ai_insights(business_data: dict[str, Any]) -> dict[str, Any]
     }
 
     try:
-        result = await call_tool(
-            prompt=prompt,
-            tool=tool,
-            model=MODEL_DEEPSEEK,
-            max_tokens=4000,
-            trace_name="daily_business_insights",
-        )
+        # 优先使用更快的模型（Haiku 速度更快），若失败降级到 DeepSeek
+        try:
+            result = await call_tool(
+                prompt=prompt,
+                tool=tool,
+                model=MODEL_HAIKU,
+                max_tokens=2000,
+                trace_name="daily_business_insights",
+            )
+        except Exception:
+            result = await call_tool(
+                prompt=prompt,
+                tool=tool,
+                model=MODEL_DEEPSEEK,
+                max_tokens=4000,
+                trace_name="daily_business_insights",
+            )
 
         return result
     except Exception as e:
@@ -502,8 +514,30 @@ def _get_season(date: datetime) -> str:
         return "autumn"
 
 
+async def _async_generate_and_cache(cache_key: str, target_date: datetime) -> None:
+    """后台异步生成 AI 洞察并写入缓存"""
+    try:
+        business_data = await _get_daily_business_data(target_date)
+        insights = await _generate_ai_insights(business_data)
+        result = {
+            "analysis_date": str(target_date.date()),
+            "generated_at": datetime.now().isoformat(),
+            "business_data": business_data,
+            "ai_insights": insights,
+            "data_completeness": _calculate_data_completeness(business_data),
+            "from_cache": False,
+            "cache_key": cache_key,
+            "status": "ready",
+        }
+        _save_to_cache(cache_key, result)
+        logger.info(f"Background insights generation completed for {cache_key}")
+    except Exception as e:
+        logger.error(f"Background insights generation failed: {e}")
+
+
 @router.get("/daily", response_model=APIResponse[dict])
 async def get_daily_insights(
+    background_tasks: BackgroundTasks,
     date: str = Query(None, description="分析日期 YYYY-MM-DD，默认今天"),
     force_refresh: bool = Query(False, description="强制刷新缓存"),
 ) -> APIResponse[dict]:
@@ -532,30 +566,20 @@ async def get_daily_insights(
                 cached_result["cache_key"] = cache_key
                 return APIResponse(data=cached_result)
 
-        # 缓存未命中或强制刷新，重新生成
-        logger.info(f"Generating fresh insights for {target_date.date()}")
+        # 缓存未命中或强制刷新 — 异步后台生成，立即返回"生成中"状态
+        logger.info(f"Cache miss for {cache_key}, dispatching background generation")
+        background_tasks.add_task(_async_generate_and_cache, cache_key, target_date)
 
-        # 获取业务数据
-        business_data = await _get_daily_business_data(target_date)
-
-        # 生成AI洞察
-        insights = await _generate_ai_insights(business_data)
-
-        # 组合返回数据
-        result = {
-            "analysis_date": str(target_date.date()),
-            "generated_at": datetime.now().isoformat(),
-            "business_data": business_data,
-            "ai_insights": insights,
-            "data_completeness": _calculate_data_completeness(business_data),
-            "from_cache": False,
-            "cache_key": cache_key,
-        }
-
-        # 保存到缓存
-        _save_to_cache(cache_key, result)
-
-        return APIResponse(data=result)
+        return APIResponse(
+            data={
+                "analysis_date": str(target_date.date()),
+                "generated_at": datetime.now().isoformat(),
+                "status": "generating",
+                "message": "AI 洞察正在后台生成，通常需要 10-20 秒，请稍后重新请求（将命中缓存直接返回）",
+                "from_cache": False,
+                "cache_key": cache_key,
+            }
+        )
 
     except Exception as e:
         logger.error(f"Failed to generate daily insights: {e}")

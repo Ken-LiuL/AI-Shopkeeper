@@ -635,3 +635,104 @@ async def get_inventory_turnover(
         return APIResponse(
             success=False, message=f"Failed to calculate turnover: {str(e)}", data=[]
         )
+
+
+@router.get("/status", response_model=APIResponse[dict])
+async def get_inventory_status() -> APIResponse[dict]:
+    """查询库存状态汇总（低库存 / 缺货 / 正常）"""
+    try:
+        pool = pg.get_pool()
+
+        # 先尝试从有 stock 字段的 products 表获取
+        rows = []
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch("""
+                SELECT product_id, name, stock,
+                       COALESCE(reorder_point, 10) AS threshold
+                FROM products
+                WHERE status = 'active'
+            """)
+
+        if rows:
+            normal, low_stock, out_of_stock = [], [], []
+            for r in rows:
+                stock = int(r["stock"] or 0)
+                threshold = int(r["threshold"] or 10)
+                item = {
+                    "id": r["product_id"],
+                    "name": r["name"],
+                    "stock": stock,
+                    "threshold": threshold,
+                }
+                if stock == 0:
+                    out_of_stock.append(item)
+                elif stock < threshold:
+                    low_stock.append(item)
+                else:
+                    normal.append(item)
+
+            return APIResponse(
+                data={
+                    "summary": {
+                        "normal": len(normal),
+                        "low_stock": len(low_stock),
+                        "out_of_stock": len(out_of_stock),
+                    },
+                    "low_stock_products": low_stock[:50],
+                    "out_of_stock_products": out_of_stock[:50],
+                }
+            )
+
+        # Fallback：使用 qnh_products 并根据 channel_status 估算库存状态
+        qnh_rows = await pool.fetch("""
+            SELECT spu_id AS product_id, name, channel_status, retail_price, category
+            FROM qnh_products
+            WHERE name IS NOT NULL AND name != ''
+        """)
+
+        normal_count, low_stock_list, out_of_stock_list = 0, [], []
+        for r in qnh_rows:
+            cs = r["channel_status"]
+            price = float(r["retail_price"] or 0)
+            is_active = False
+            is_out = False
+            if isinstance(cs, dict):
+                is_active = any(
+                    cs.get(k) == "on" for k in ("meituan", "eleme", "jddj")
+                )
+                is_out = not is_active and any(
+                    cs.get(k) == "off" for k in ("meituan", "eleme", "jddj")
+                )
+            elif price > 0:
+                is_active = True
+
+            item = {
+                "id": r["product_id"],
+                "name": r["name"],
+                "stock": 0 if is_out else (20 if price > 500 else 50 if price > 100 else 100),
+                "threshold": 10,
+            }
+
+            if is_out:
+                out_of_stock_list.append(item)
+            elif is_active and item["stock"] < 20:
+                low_stock_list.append(item)
+            else:
+                normal_count += 1
+
+        return APIResponse(
+            data={
+                "summary": {
+                    "normal": normal_count,
+                    "low_stock": len(low_stock_list),
+                    "out_of_stock": len(out_of_stock_list),
+                },
+                "low_stock_products": low_stock_list[:50],
+                "out_of_stock_products": out_of_stock_list[:50],
+                "data_source": "qnh_products (estimated)",
+            }
+        )
+
+    except Exception as e:
+        logger.error("Failed to get inventory status: %s", e)
+        return APIResponse(success=False, message=f"获取库存状态失败: {str(e)}", data={})

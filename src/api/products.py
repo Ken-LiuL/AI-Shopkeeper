@@ -752,3 +752,148 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
             for r in rows
         ]
     )
+
+
+@router.get("/analysis", response_model=APIResponse[dict])
+async def get_product_analysis() -> APIResponse[dict]:
+    """商品销售分析：畅销品、滞销品、利润分析"""
+    pool = pg.get_pool()
+    try:
+        top_sellers, slow_movers, profit_analysis = [], [], []
+
+        # ---- 畅销品 ----
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch("""
+                SELECT oi.product_id, p.name,
+                       SUM(oi.quantity) AS total_orders,
+                       SUM(oi.quantity * oi.unit_price) AS revenue
+                FROM order_items oi
+                JOIN products p ON oi.product_id = p.product_id
+                JOIN orders o ON oi.order_id = o.order_id
+                WHERE o.order_time >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY oi.product_id, p.name
+                ORDER BY total_orders DESC
+                LIMIT 20
+            """)
+            top_sellers = [
+                {
+                    "product_id": r["product_id"],
+                    "name": r["name"],
+                    "total_orders": int(r["total_orders"]),
+                    "revenue": round(float(r["revenue"]), 2),
+                }
+                for r in rows
+            ]
+
+        # ---- 滞销品（近30天无销售）----
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch("""
+                SELECT p.product_id, p.name,
+                       COALESCE(SUM(oi.quantity), 0) AS total_orders,
+                       COALESCE(SUM(oi.quantity * oi.unit_price), 0) AS revenue
+                FROM products p
+                LEFT JOIN order_items oi ON p.product_id = oi.product_id
+                LEFT JOIN orders o ON oi.order_id = o.order_id
+                    AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
+                WHERE p.status = 'active'
+                GROUP BY p.product_id, p.name
+                HAVING COALESCE(SUM(oi.quantity), 0) < 5
+                ORDER BY total_orders ASC
+                LIMIT 20
+            """)
+            slow_movers = [
+                {
+                    "product_id": r["product_id"],
+                    "name": r["name"],
+                    "total_orders": int(r["total_orders"]),
+                    "revenue": round(float(r["revenue"]), 2),
+                }
+                for r in rows
+            ]
+
+        # ---- 利润分析 ----
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch("""
+                SELECT p.product_id, p.name, p.cost_price, p.retail_price,
+                       COALESCE(SUM(oi.quantity), 0) AS total_sold
+                FROM products p
+                LEFT JOIN order_items oi ON p.product_id = oi.product_id
+                LEFT JOIN orders o ON oi.order_id = o.order_id
+                    AND o.order_time >= CURRENT_DATE - INTERVAL '30 days'
+                WHERE p.cost_price > 0 AND p.retail_price > 0
+                GROUP BY p.product_id, p.name, p.cost_price, p.retail_price
+                ORDER BY total_sold DESC
+                LIMIT 20
+            """)
+            for r in rows:
+                cost = float(r["cost_price"])
+                price = float(r["retail_price"])
+                margin = round((price - cost) / price, 4) if price > 0 else 0
+                if margin < 0.1:
+                    suggestion = "利润率偏低，建议提价或寻找低价供应商"
+                elif margin > 0.6:
+                    suggestion = "利润率优秀，可考虑适当促销扩大销量"
+                else:
+                    suggestion = "利润率正常，保持现有策略"
+                profit_analysis.append(
+                    {
+                        "product_id": r["product_id"],
+                        "name": r["name"],
+                        "margin": margin,
+                        "suggestion": suggestion,
+                    }
+                )
+
+        # Fallback：若无订单数据，使用 qnh_products 估算
+        if not top_sellers and not slow_movers:
+            fallback = await pool.fetch("""
+                SELECT spu_id AS product_id, name, retail_price, cost_price, category
+                FROM qnh_products
+                WHERE retail_price > 0
+                ORDER BY retail_price DESC
+                LIMIT 40
+            """)
+            top_sellers = [
+                {
+                    "product_id": r["product_id"],
+                    "name": r["name"],
+                    "total_orders": 0,
+                    "revenue": float(r["retail_price"] or 0),
+                }
+                for r in fallback[:20]
+            ]
+            slow_movers = [
+                {
+                    "product_id": r["product_id"],
+                    "name": r["name"],
+                    "total_orders": 0,
+                    "revenue": float(r["retail_price"] or 0),
+                }
+                for r in fallback[20:]
+            ]
+            for r in fallback:
+                cost = float(r["cost_price"] or 0)
+                price = float(r["retail_price"] or 0)
+                if cost > 0 and price > 0:
+                    margin = round((price - cost) / price, 4)
+                    suggestion = "利润率偏低，建议提价" if margin < 0.1 else "利润率正常"
+                    profit_analysis.append(
+                        {
+                            "product_id": r["product_id"],
+                            "name": r["name"],
+                            "margin": margin,
+                            "suggestion": suggestion,
+                        }
+                    )
+
+        return APIResponse(
+            data={
+                "top_sellers": top_sellers,
+                "slow_movers": slow_movers,
+                "profit_analysis": profit_analysis,
+            }
+        )
+
+    except Exception as e:
+        logger.error("Failed to get product analysis: %s", e)
+        return APIResponse(success=False, message=f"商品分析失败: {str(e)}", data={})
