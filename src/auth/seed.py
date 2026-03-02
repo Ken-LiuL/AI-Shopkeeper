@@ -28,30 +28,27 @@ async def seed_admin_user() -> None:
                 updated_at  TIMESTAMPTZ DEFAULT now()
             )
         """)
+        hashed = get_password_hash(DEFAULT_ADMIN_PASSWORD)
+        # Always upsert: insert or update password hash (handles __PLACEHOLDER__ and first run)
+        await pg_db.execute(
+            """
+            INSERT INTO users (user_id, username, password_hash, tenant_id, role)
+            VALUES ('user-admin-001', $1, $2, 'default', 'admin')
+            ON CONFLICT (username) DO UPDATE SET password_hash = $2
+            """,
+            DEFAULT_ADMIN_USERNAME,
+            hashed,
+        )
+        logger.info("管理员账号已初始化: %s", DEFAULT_ADMIN_USERNAME)
+
+        # Verify
         row = await pg_db.fetchrow(
             "SELECT user_id, password_hash FROM users WHERE username = $1",
             DEFAULT_ADMIN_USERNAME,
         )
-        hashed = get_password_hash(DEFAULT_ADMIN_PASSWORD)
-        if row is None:
-            await pg_db.execute(
-                """
-                INSERT INTO users (user_id, username, password_hash, tenant_id, role)
-                VALUES ('user-admin-001', $1, $2, 'default', 'admin')
-                ON CONFLICT (username) DO NOTHING
-                """,
-                DEFAULT_ADMIN_USERNAME,
-                hashed,
-            )
-            logger.info("默认管理员账号已创建: %s", DEFAULT_ADMIN_USERNAME)
-        elif row["password_hash"] == "__PLACEHOLDER__":
-            await pg_db.execute(
-                "UPDATE users SET password_hash = $1 WHERE username = $2",
-                hashed,
-                DEFAULT_ADMIN_USERNAME,
-            )
-            logger.info("默认管理员密码已初始化")
+        if row and row["password_hash"].startswith("$2"):
+            logger.info("管理员密码 hash 验证通过 ✓")
         else:
-            logger.info("管理员账号已存在，跳过初始化")
+            logger.error("管理员密码 hash 异常: %s", row["password_hash"][:20] if row else "no row")
     except Exception as e:
         logger.error("初始化管理员账号失败: %s", e)
