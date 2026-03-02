@@ -423,6 +423,142 @@ async def knowledge_stats() -> APIResponse[dict]:
 # ── Dynamic path routes ─────────────────────────────────────
 
 
+@router.get("/pricing-analysis", response_model=APIResponse[dict])
+async def get_pricing_analysis() -> APIResponse[dict]:
+    """商品定价分析 - 从 qnh_products 表分析各品类价格分布和利润率"""
+    try:
+        pool = pg.get_pool()
+
+        price_distribution = await pool.fetch("""
+            SELECT
+                category,
+                COUNT(*) as product_count,
+                AVG(retail_price) as avg_retail_price,
+                AVG(channel_price) as avg_channel_price,
+                AVG(cost_price) as avg_cost_price,
+                AVG(CASE
+                    WHEN cost_price > 0 AND retail_price > 0
+                    THEN (retail_price - cost_price) / retail_price * 100
+                    ELSE NULL
+                END) as avg_margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0 AND category IS NOT NULL AND category != ''
+            GROUP BY category
+            HAVING COUNT(*) >= 3
+            ORDER BY avg_margin_percent DESC NULLS LAST
+        """)
+
+        price_ranges = await pool.fetch("""
+            SELECT
+                CASE
+                    WHEN retail_price <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    ELSE '超高价(>500元)'
+                END as price_range,
+                COUNT(*) as product_count,
+                AVG(CASE
+                    WHEN cost_price > 0 AND retail_price > 0
+                    THEN (retail_price - cost_price) / retail_price * 100
+                    ELSE NULL
+                END) as avg_margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0
+            GROUP BY
+                CASE
+                    WHEN retail_price <= 50 THEN '低价(≤50元)'
+                    WHEN retail_price <= 200 THEN '中价(51-200元)'
+                    WHEN retail_price <= 500 THEN '高价(201-500元)'
+                    ELSE '超高价(>500元)'
+                END
+            ORDER BY avg_margin_percent DESC NULLS LAST
+        """)
+
+        pricing_suggestions = []
+
+        low_margin_products = await pool.fetch("""
+            SELECT spu_id, name, category, retail_price, cost_price,
+                   CASE
+                       WHEN cost_price > 0 AND retail_price > 0
+                       THEN (retail_price - cost_price) / retail_price * 100
+                       ELSE 0
+                   END as margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0 AND cost_price > 0
+            AND (retail_price - cost_price) / retail_price * 100 < 15
+            ORDER BY margin_percent ASC
+            LIMIT 20
+        """)
+
+        high_margin_products = await pool.fetch("""
+            SELECT spu_id, name, category, retail_price, cost_price,
+                   CASE
+                       WHEN cost_price > 0 AND retail_price > 0
+                       THEN (retail_price - cost_price) / retail_price * 100
+                       ELSE 0
+                   END as margin_percent
+            FROM qnh_products
+            WHERE retail_price > 0 AND cost_price > 0
+            AND (retail_price - cost_price) / retail_price * 100 > 40
+            ORDER BY margin_percent DESC
+            LIMIT 10
+        """)
+
+        for product in low_margin_products:
+            suggested_price = float(product["cost_price"]) * 1.25
+            pricing_suggestions.append(
+                {
+                    "product_id": product["spu_id"],
+                    "name": product["name"],
+                    "current_price": float(product["retail_price"]),
+                    "suggested_price": round(suggested_price, 2),
+                    "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
+                    "action": "涨价",
+                }
+            )
+
+        result = {
+            "category_analysis": [
+                {
+                    "category": row["category"],
+                    "product_count": int(row["product_count"]),
+                    "avg_retail_price": round(float(row["avg_retail_price"] or 0), 2),
+                    "avg_channel_price": round(float(row["avg_channel_price"] or 0), 2),
+                    "avg_cost_price": round(float(row["avg_cost_price"] or 0), 2),
+                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
+                }
+                for row in price_distribution
+            ],
+            "price_range_analysis": [
+                {
+                    "price_range": row["price_range"],
+                    "product_count": int(row["product_count"]),
+                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
+                }
+                for row in price_ranges
+            ],
+            "pricing_suggestions": pricing_suggestions[:10],
+            "summary": {
+                "total_products": len(pricing_suggestions) + len(high_margin_products),
+                "low_margin_count": len(low_margin_products),
+                "high_margin_count": len(high_margin_products),
+                "avg_margin": round(
+                    sum(float(row["avg_margin_percent"] or 0) for row in price_distribution)
+                    / len(price_distribution)
+                    if price_distribution
+                    else 0,
+                    2,
+                ),
+            },
+        }
+
+        return APIResponse(data=result)
+
+    except Exception as e:
+        logger.error(f"Failed to get pricing analysis: {e}")
+        return APIResponse(success=False, message=f"获取定价分析失败: {str(e)}", data={})
+
+
 @router.get("", response_model=PaginatedResponse[dict])
 async def list_products(
     page: int = Query(1, ge=1),
@@ -589,145 +725,3 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
             for r in rows
         ]
     )
-
-
-@router.get("/pricing-analysis", response_model=APIResponse[dict])
-async def get_pricing_analysis() -> APIResponse[dict]:
-    """商品定价分析 - 从 qnh_products 表分析各品类价格分布和利润率"""
-    try:
-        pool = pg.get_pool()
-
-        # 获取价格分布数据（从qnh_products表）
-        price_distribution = await pool.fetch("""
-            SELECT
-                category,
-                COUNT(*) as product_count,
-                AVG(retail_price) as avg_retail_price,
-                AVG(channel_price) as avg_channel_price,
-                AVG(cost_price) as avg_cost_price,
-                AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
-                    ELSE NULL
-                END) as avg_margin_percent
-            FROM qnh_products
-            WHERE retail_price > 0 AND category IS NOT NULL AND category != ''
-            GROUP BY category
-            HAVING COUNT(*) >= 3
-            ORDER BY avg_margin_percent DESC NULLS LAST
-        """)
-
-        # 价格区间分析
-        price_ranges = await pool.fetch("""
-            SELECT
-                CASE
-                    WHEN retail_price <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price <= 500 THEN '高价(201-500元)'
-                    ELSE '超高价(>500元)'
-                END as price_range,
-                COUNT(*) as product_count,
-                AVG(CASE
-                    WHEN cost_price > 0 AND retail_price > 0
-                    THEN (retail_price - cost_price) / retail_price * 100
-                    ELSE NULL
-                END) as avg_margin_percent
-            FROM qnh_products
-            WHERE retail_price > 0
-            GROUP BY
-                CASE
-                    WHEN retail_price <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price <= 500 THEN '高价(201-500元)'
-                    ELSE '超高价(>500元)'
-                END
-            ORDER BY avg_margin_percent DESC NULLS LAST
-        """)
-
-        # 定价建议
-        pricing_suggestions = []
-
-        # 低利润率商品（利润率<15%）
-        low_margin_products = await pool.fetch("""
-            SELECT spu_id, name, category, retail_price, cost_price,
-                   CASE
-                       WHEN cost_price > 0 AND retail_price > 0
-                       THEN (retail_price - cost_price) / retail_price * 100
-                       ELSE 0
-                   END as margin_percent
-            FROM qnh_products
-            WHERE retail_price > 0 AND cost_price > 0
-            AND (retail_price - cost_price) / retail_price * 100 < 15
-            ORDER BY margin_percent ASC
-            LIMIT 20
-        """)
-
-        # 高利润率商品（利润率>40%）
-        high_margin_products = await pool.fetch("""
-            SELECT spu_id, name, category, retail_price, cost_price,
-                   CASE
-                       WHEN cost_price > 0 AND retail_price > 0
-                       THEN (retail_price - cost_price) / retail_price * 100
-                       ELSE 0
-                   END as margin_percent
-            FROM qnh_products
-            WHERE retail_price > 0 AND cost_price > 0
-            AND (retail_price - cost_price) / retail_price * 100 > 40
-            ORDER BY margin_percent DESC
-            LIMIT 10
-        """)
-
-        # 构建定价建议
-        for product in low_margin_products:
-            suggested_price = float(product["cost_price"]) * 1.25  # 25%利润率
-            pricing_suggestions.append(
-                {
-                    "product_id": product["spu_id"],
-                    "name": product["name"],
-                    "current_price": float(product["retail_price"]),
-                    "suggested_price": round(suggested_price, 2),
-                    "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
-                    "action": "涨价",
-                }
-            )
-
-        result = {
-            "category_analysis": [
-                {
-                    "category": row["category"],
-                    "product_count": int(row["product_count"]),
-                    "avg_retail_price": round(float(row["avg_retail_price"] or 0), 2),
-                    "avg_channel_price": round(float(row["avg_channel_price"] or 0), 2),
-                    "avg_cost_price": round(float(row["avg_cost_price"] or 0), 2),
-                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
-                }
-                for row in price_distribution
-            ],
-            "price_range_analysis": [
-                {
-                    "price_range": row["price_range"],
-                    "product_count": int(row["product_count"]),
-                    "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
-                }
-                for row in price_ranges
-            ],
-            "pricing_suggestions": pricing_suggestions[:10],  # 限制返回数量
-            "summary": {
-                "total_products": len(pricing_suggestions) + len(high_margin_products),
-                "low_margin_count": len(low_margin_products),
-                "high_margin_count": len(high_margin_products),
-                "avg_margin": round(
-                    sum(float(row["avg_margin_percent"] or 0) for row in price_distribution)
-                    / len(price_distribution)
-                    if price_distribution
-                    else 0,
-                    2,
-                ),
-            },
-        }
-
-        return APIResponse(data=result)
-
-    except Exception as e:
-        logger.error(f"Failed to get pricing analysis: {e}")
-        return APIResponse(success=False, message=f"获取定价分析失败: {str(e)}", data={})
