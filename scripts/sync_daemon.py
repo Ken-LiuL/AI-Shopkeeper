@@ -78,7 +78,13 @@ async def push_to_backend(source: str, data: list[dict]) -> dict:
             json=payload,
             timeout=aiohttp.ClientTimeout(total=30),
         ) as resp:
+            if resp.status >= 400:
+                text = await resp.text()
+                raise RuntimeError(f"ingest HTTP {resp.status}: {text[:300]}")
             result = await resp.json()
+            # 检查 ingest 响应中的错误
+            if isinstance(result, dict) and not result.get("ok", True):
+                raise RuntimeError(f"ingest rejected: {result}")
             return result
 
 
@@ -214,7 +220,7 @@ async def sync_round(page) -> None:
                     "✅ %s (%s): pushed %d records → %s", vc[:30], source, len(data), result
                 )
             else:
-                logger.info("⏭️  %s: no data", vc[:30])
+                logger.warning("⚠️  %s: API 返回空数据（可能 Cookie 过期或无权限）", vc[:30])
         except Exception as e:
             logger.error("❌ %s: %s", vc[:30], e)
 
