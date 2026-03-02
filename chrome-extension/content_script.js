@@ -24,6 +24,25 @@
   }
   injectScript();
 
+  // ─── 监听业务数据事件（injected.js 派发） ────────────────────────────
+  window.addEventListener('__AI_DIANZHANG_DATA__', (e) => {
+    try {
+      const payload = JSON.parse(e.detail);
+      chrome.runtime.sendMessage(
+        { type: 'BUSINESS_DATA', payload },
+        () => { /* 静默忽略错误 */ chrome.runtime.lastError; }
+      );
+    } catch (_) {}
+  });
+
+  // ─── 页面加载时主动触发一次数据采集 ─────────────────────────────────
+  function triggerInitialCapture() {
+    // 向 injected.js 发送信号，让其立即读取页面已有数据（可选）
+    // 这里通过 CustomEvent 通知 injected 侧的监听者
+    window.dispatchEvent(new CustomEvent('__AI_DIANZHANG_CAPTURE__'));
+  }
+  setTimeout(triggerInitialCapture, 2000);
+
   // ─── Listen for intercepted WS messages ──────────────────────────────
   window.addEventListener('__AI_DIANZHANG_WS__', (e) => {
     if (!enabled) return;

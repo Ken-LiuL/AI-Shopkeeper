@@ -1,10 +1,15 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 牵牛花智能客服",
-  "version": "1.0.0",
-  "description": "AI-powered customer service assistant for Meituan 牵牛花 merchant platform",
+  "version": "1.1.0",
+  "description": "AI-powered customer service assistant & business data sync for Meituan 牵牛花 merchant platform",
   "permissions": ["storage", "activeTab"],
-  "host_permissions": ["https://qnh.meituan.com/*"],
+  "host_permissions": [
+    "https://qnh.meituan.com/*",
+    "https://*.meituan.com/*",
+    "https://ai-shopkeeper-kk.fly.dev/*",
+    "https://ai-shopkeeper-1dl4.onrender.com/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

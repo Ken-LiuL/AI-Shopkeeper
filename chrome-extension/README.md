@@ -1,70 +1,63 @@
-# 🤖 AI店长 — 牵牛花智能客服 Chrome Extension
+# AI店长 Chrome 扩展
 
-Auto-reply to customer messages on Meituan's 牵牛花 (qnh.meituan.com) merchant platform using AI.
+牵牛花（qnh.meituan.com）商家管理后台的 AI 智能助手，提供：
+- **智能客服**：自动拦截客户 IM 消息，由 AI 生成回复建议
+- **数据同步**：自动拦截牵牛花业务接口（订单、商品、销售数据），同步到 AI店长 后端
 
-## Features
+---
 
-- **WebSocket interception** — captures incoming customer messages in real-time
-- **DOM observer fallback** — works even if WS structure changes
-- **Two modes**: auto-fill (you click send) or auto-send (fully automatic)
-- **Floating panel** — draggable, minimizable, shows status & recent replies
-- **Configurable** — backend URL, API key, store ID via popup settings
+## 安装步骤
 
-## Installation
+### 1. 在 Chrome 中加载扩展（开发者模式）
 
-1. Open Chrome → `chrome://extensions/`
-2. Enable **Developer mode** (top right)
-3. Click **Load unpacked**
-4. Select this `chrome-extension/` folder
-5. Navigate to `https://qnh.meituan.com/` — the panel appears automatically
+1. 打开 Chrome，地址栏输入 `chrome://extensions`
+2. 右上角开启 **开发者模式**（Developer mode）
+3. 点击 **加载已解压的扩展程序**（Load unpacked）
+4. 选择本目录（`chrome-extension/`）
+5. 扩展图标出现在工具栏即安装成功
 
-## Configuration
+### 2. 配置后端地址
 
-Click the extension icon in the toolbar to open settings:
+1. 点击工具栏中的 **AI店长** 图标，打开弹窗
+2. 切换到 **「数据同步」** 标签页
+3. 填写后端地址（默认：`https://ai-shopkeeper-kk.fly.dev`）
+4. 点击 **保存同步配置**
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| 启用 | ✅ | Enable/disable the assistant |
-| 回复模式 | 自动填充 | `auto-fill` or `auto-send` |
-| API 地址 | `https://ai-shopkeeper-1dl4.onrender.com/api/v1/customer-service/chat` | Backend URL |
-| API Key | — | Optional Bearer token |
-| 店铺 ID | — | Optional store identifier |
+如需配置客服功能，切换到 **「客服助手」** 标签页，填写对应 API 地址。
 
-## Architecture
+### 3. 使用
 
-```
-manifest.json          — Manifest V3 config
-background.js          — Service worker, API calls with retry
-content_script.js      — Injected into qnh.meituan.com, panel UI
-injected.js            — Page-level WebSocket interceptor
-popup.html / popup.js  — Extension popup settings
-panel.css              — Floating panel styles
-icons/                 — Extension icons
-```
+打开牵牛花商家后台（https://qnh.meituan.com），正常浏览即可：
 
-## API Contract
+- **业务数据**（订单/商品/销售）在页面加载时自动拦截并同步，每类数据 30 秒内只同步一次
+- **客服消息**由悬浮面板处理，支持自动填充或自动发送回复
+- 在「数据同步」标签页可查看各类数据的同步时间和数量
+
+---
+
+## 数据流说明
 
 ```
-POST /api/v1/customer-service/chat
-{
-  "message": "customer text",
-  "session_id": "conversation_id",
-  "customer_info": {},
-  "store_id": "optional"
-}
-
-Response: { "reply": "AI-generated response" }
+牵牛花页面
+  │
+  ├─ [injected.js] 拦截 WebSocket（客服消息）
+  │       └─ CustomEvent __AI_DIANZHANG_WS__
+  │               └─ [content_script.js] → background.js → AI API → 填充回复
+  │
+  └─ [injected.js] 拦截 fetch/XHR（业务接口）
+          └─ CustomEvent __AI_DIANZHANG_DATA__
+                  └─ [content_script.js] → background.js → POST /api/sync/ingest
 ```
 
-## Tuning for Production
+---
 
-The WebSocket message parsing in `injected.js` and `content_script.js` uses heuristic field matching. After inspecting real 牵牛花 WebSocket traffic:
+## 常见问题
 
-1. Open DevTools → Network → WS on `qnh.meituan.com`
-2. Observe message structure when a customer sends a message
-3. Update `extractCustomerMessage()` in `content_script.js` to match exact fields
-4. Similarly update DOM selectors in `startDOMObserver()` for the chat UI
+**Q: 数据同步标签页显示"尚未同步任何数据"？**
+A: 请确保已打开牵牛花后台并浏览了相关页面（订单列表、商品列表等）。数据在接口请求时自动拦截。
 
-## License
+**Q: 后端接口返回错误？**
+A: 扩展采用静默失败策略，错误不影响牵牛花正常使用，可按 F12 查看控制台日志。
 
-Internal use only.
+**Q: 如何立即同步？**
+A: 数据同步标签页点击「立即同步（清除节流限制）」按钮，然后刷新牵牛花页面即可触发。
