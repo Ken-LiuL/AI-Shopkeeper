@@ -620,8 +620,8 @@ async def top_products() -> APIResponse[list[TopProduct]]:
     )
 
 
-@router.get("/store-kpis")
-async def store_kpis() -> dict:
+@router.get("/store-kpis", response_model=APIResponse[dict])
+async def store_kpis() -> APIResponse[dict]:
     """Return parsed store KPIs from dataset records or raw metrics."""
     pool = pg.get_pool()
 
@@ -656,24 +656,26 @@ async def store_kpis() -> dict:
             agg["unit_price"] = agg["sale_amt_gmv"] / agg["eff_ord_cnt"]
             agg["actual_unit_price"] = agg["actual_pay_amt"] / agg["eff_ord_cnt"]
 
-        return {
-            "orders": int(agg["eff_ord_cnt"]),
-            "gmv": round(agg["sale_amt_gmv"], 2),
-            "actual_revenue": round(agg["actual_pay_amt"], 2),
-            "product_sales": round(agg["prod_sale_amt"], 2),
-            "avg_order_value": round(agg["unit_price"], 2),
-            "actual_avg_order_value": round(agg["actual_unit_price"], 2),
-            "net_profit": round(agg["net_profit"], 2),
-            "customers": int(agg["user_cnt"]),
-            "delivery_fee": round(agg["delivery_fee"], 2),
-            "package_fee": round(agg["package_fee"], 2),
-            "stockout_loss": round(agg["stockout_loss_amt"], 2),
-        }
+        return APIResponse(
+            data={
+                "orders": int(agg["eff_ord_cnt"]),
+                "gmv": round(agg["sale_amt_gmv"], 2),
+                "actual_revenue": round(agg["actual_pay_amt"], 2),
+                "product_sales": round(agg["prod_sale_amt"], 2),
+                "avg_order_value": round(agg["unit_price"], 2),
+                "actual_avg_order_value": round(agg["actual_unit_price"], 2),
+                "net_profit": round(agg["net_profit"], 2),
+                "customers": int(agg["user_cnt"]),
+                "delivery_fee": round(agg["delivery_fee"], 2),
+                "package_fee": round(agg["package_fee"], 2),
+                "stockout_loss": round(agg["stockout_loss_amt"], 2),
+            }
+        )
 
     # ── Fallback: old raw metrics ──
     metrics = await _get_latest_metrics(pool)
     if not metrics:
-        return {"error": "no metrics data"}
+        return APIResponse(data={}, message="no metrics data")
 
     kpis = {}
     for key in [
@@ -693,19 +695,21 @@ async def store_kpis() -> dict:
     ]:
         kpis[key] = _extract_metric(metrics, key)
 
-    return {
-        "orders": int(kpis["eff_ord_cnt"]),
-        "gmv": kpis["sale_amt_gmv"],
-        "actual_revenue": kpis["actual_pay_amt"],
-        "product_sales": kpis["prod_sale_amt"],
-        "avg_order_value": kpis["unit_price"],
-        "actual_avg_order_value": kpis["actual_unit_price"],
-        "net_profit": kpis["net_profit"],
-        "customers": int(kpis["user_cnt"]),
-        "delivery_fee": kpis["delivery_fee"],
-        "package_fee": kpis["package_fee"],
-        "stockout_loss": kpis["stockout_loss_amt"],
-    }
+    return APIResponse(
+        data={
+            "orders": int(kpis["eff_ord_cnt"]),
+            "gmv": kpis["sale_amt_gmv"],
+            "actual_revenue": kpis["actual_pay_amt"],
+            "product_sales": kpis["prod_sale_amt"],
+            "avg_order_value": kpis["unit_price"],
+            "actual_avg_order_value": kpis["actual_unit_price"],
+            "net_profit": kpis["net_profit"],
+            "customers": int(kpis["user_cnt"]),
+            "delivery_fee": kpis["delivery_fee"],
+            "package_fee": kpis["package_fee"],
+            "stockout_loss": kpis["stockout_loss_amt"],
+        }
+    )
 
 
 @router.get("/raw-data-debug")
