@@ -125,33 +125,36 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 
     try:
         # 1. Check for low stock items (high priority)
-        low_stock_count = (
-            await pool.fetchval("""
-            SELECT COUNT(*) FROM qnh_products
-            WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
-        """)
-            or 0
-        )
-
-        if low_stock_count > 0:
-            # Get sample product names
-            sample_products = await pool.fetch("""
-                SELECT name FROM qnh_products
+        with contextlib.suppress(Exception):
+            low_stock_count = (
+                await pool.fetchval("""
+                SELECT COUNT(*) FROM qnh_products
                 WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
-                ORDER BY stock_num ASC LIMIT 3
             """)
-            product_names = [row["name"] for row in sample_products]
-            detail = f"{low_stock_count}款商品库存不足10件"
-            if product_names:
-                detail += f"，包括：{', '.join(product_names[:2])}"
-                if len(product_names) > 2:
-                    detail += "等"
-
-            action_items.append(
-                ActionItem(
-                    priority="high", action="紧急补货", detail=detail, link="/inventory/restock"
-                )
+                or 0
             )
+
+            if low_stock_count > 0:
+                sample_products = await pool.fetch("""
+                    SELECT name FROM qnh_products
+                    WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
+                    ORDER BY stock_num ASC LIMIT 3
+                """)
+                product_names = [row["name"] for row in sample_products]
+                detail = f"{low_stock_count}款商品库存不足10件"
+                if product_names:
+                    detail += f"，包括：{', '.join(product_names[:2])}"
+                    if len(product_names) > 2:
+                        detail += "等"
+
+                action_items.append(
+                    ActionItem(
+                        priority="high",
+                        action="紧急补货",
+                        detail=detail,
+                        link="/inventory/restock",
+                    )
+                )
 
         # 2. Check for pricing issues from competitor analysis (medium priority)
         with contextlib.suppress(Exception):
