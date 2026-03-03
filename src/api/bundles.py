@@ -18,6 +18,38 @@ router = APIRouter(prefix="/api/bundles", tags=["bundles"])
 logger = logging.getLogger(__name__)
 
 
+@router.get("/recommendations", response_model=APIResponse[list[dict]])
+async def bundle_recommendations() -> APIResponse[list[dict]]:
+    """智能套餐推荐 — 基于热销商品 + 品类互补生成 bundle 建议。"""
+    from src.services.bundle_intelligence import generate_bundle_recommendations
+
+    try:
+        pool = pg.get_pool()
+        # 从 qnh_dataset_records 获取热销商品
+        rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
+        )
+        if not rows:
+            return APIResponse(data=[], message="暂无热销商品数据，无法生成推荐")
+
+        hotsale_records = []
+        for row in rows:
+            payload = row["payload"]
+            if isinstance(payload, str):
+                hotsale_records.append(json.loads(payload))
+            else:
+                hotsale_records.append(payload)
+
+        recommendations = generate_bundle_recommendations(hotsale_records)
+        return APIResponse(
+            data=recommendations,
+            message=f"生成 {len(recommendations)} 个套餐推荐",
+        )
+    except Exception as e:
+        logger.exception("Bundle recommendations failed")
+        return APIResponse(data=[], message=f"推荐生成失败: {e}")
+
+
 @router.get("/{bundle_id}", response_model=APIResponse[dict])
 async def get_bundle(bundle_id: str) -> APIResponse[dict]:
     pool = pg.get_pool()
