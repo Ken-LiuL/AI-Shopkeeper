@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
@@ -68,6 +69,24 @@ def get_pool() -> asyncpg.Pool:
     if _pool is None:
         raise RuntimeError("PostgreSQL pool not initialised. Call init_pool() first.")
     return _pool
+
+
+async def ensure_pool() -> asyncpg.Pool:
+    """Get pool, re-initialising if needed (e.g. after PG restart)."""
+    global _pool
+    if _pool is None:
+        return await init_pool()
+    # Quick health check
+    try:
+        async with _pool.acquire(timeout=5) as conn:
+            await conn.fetchval("SELECT 1")
+        return _pool
+    except Exception:
+        logger.warning("PG pool unhealthy, re-initialising...")
+        with contextlib.suppress(Exception):
+            await _pool.close()
+        _pool = None
+        return await init_pool()
 
 
 async def close_pool() -> None:

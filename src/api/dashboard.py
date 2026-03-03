@@ -60,10 +60,20 @@ def _get_data_str(field: dict | str | None) -> str:
 async def _get_dataset_records(pool, dataset: str) -> list[dict]:
     """Fetch all records from qnh_dataset_records for a given dataset."""
     try:
-        rows = await pool.fetch(
-            "SELECT payload FROM qnh_dataset_records WHERE dataset = $1",
-            dataset,
-        )
+        # Re-acquire pool if connection is dead
+        try:
+            rows = await pool.fetch(
+                "SELECT payload FROM qnh_dataset_records WHERE dataset = $1",
+                dataset,
+            )
+        except Exception:
+            from src.db import postgres as pg_mod
+
+            pool = await pg_mod.ensure_pool()
+            rows = await pool.fetch(
+                "SELECT payload FROM qnh_dataset_records WHERE dataset = $1",
+                dataset,
+            )
         results = []
         for row in rows:
             p = row["payload"]
@@ -419,7 +429,14 @@ async def overview() -> APIResponse[DashboardOverview]:
             pending_tasks += await pool.fetchval(q) or 0
 
     # Generate action items
-    action_items = await _generate_action_items(pool)
+    # Timeout action_items generation to prevent overview from hanging
+    import asyncio
+
+    try:
+        action_items = await asyncio.wait_for(_generate_action_items(pool), timeout=10.0)
+    except TimeoutError:
+        logger.warning("action_items generation timed out")
+        action_items = []
 
     from decimal import Decimal
 

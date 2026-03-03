@@ -302,7 +302,7 @@ async def quick_wins() -> APIResponse[list[dict]]:
 
     # 1. 高销量低折扣空间商品
     hotsale_rows = await pool.fetch(
-        "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods' ORDER BY (payload->>'rank')::int ASC LIMIT 20"
+        "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods' LIMIT 50"
     )
 
     for row in hotsale_rows:
