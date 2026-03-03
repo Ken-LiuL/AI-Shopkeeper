@@ -16,3 +16,4 @@ node_modules/
 # QNH cookies (sensitive)
 config/qnh_cookies.json
 data/
+data/qnh_sync.db
