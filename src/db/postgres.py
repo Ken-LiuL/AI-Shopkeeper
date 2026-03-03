@@ -65,10 +65,25 @@ async def init_pool() -> asyncpg.Pool:
 
 
 def get_pool() -> asyncpg.Pool:
-    """Return the current pool or raise if not initialised."""
+    """Return the current pool or raise if not initialised.
+
+    NOTE: If pool is None and we're in an async context, callers should
+    use ``await get_pool_safe()`` instead, which will attempt init.
+    """
     if _pool is None:
         raise RuntimeError("PostgreSQL pool not initialised. Call init_pool() first.")
     return _pool
+
+
+async def get_pool_safe() -> asyncpg.Pool | None:
+    """Return pool, attempting init if needed. Returns None if PG unavailable."""
+    global _pool
+    if _pool is not None:
+        return _pool
+    try:
+        return await init_pool()
+    except Exception:
+        return None
 
 
 async def ensure_pool() -> asyncpg.Pool:

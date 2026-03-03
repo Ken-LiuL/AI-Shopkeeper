@@ -353,10 +353,23 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         ]
 
 
+async def _safe_pool():
+    """Get pool, trying to reconnect if needed."""
+    try:
+        return pg.get_pool()
+    except RuntimeError:
+        from src.db import postgres as pg_mod
+
+        pool = await pg_mod.get_pool_safe()
+        if pool is None:
+            raise
+        return pool
+
+
 @router.get("", response_model=APIResponse[DashboardOverview])
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
-    pool = pg.get_pool()
+    pool = await _safe_pool()
     total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
 
     today_orders = 0
@@ -458,7 +471,7 @@ async def overview() -> APIResponse[DashboardOverview]:
 @router.get("/alerts", response_model=APIResponse[list[dict]])
 async def dashboard_alerts() -> APIResponse[list[dict]]:
     """Get dashboard alerts from smart alerts generator."""
-    pool = pg.get_pool()
+    pool = await _safe_pool()
     try:
         from .alerts import _generate_smart_alerts
 
@@ -471,7 +484,7 @@ async def dashboard_alerts() -> APIResponse[list[dict]]:
 
 @router.get("/sales-trend", response_model=APIResponse[list[SalesTrendPoint]])
 async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
-    pool = pg.get_pool()
+    pool = await _safe_pool()
 
     rows: list[dict] = []
 
@@ -566,7 +579,7 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
 
 @router.get("/top-products", response_model=APIResponse[list[TopProduct]])
 async def top_products() -> APIResponse[list[TopProduct]]:
-    pool = pg.get_pool()
+    pool = await _safe_pool()
 
     # ── Priority 1: Read from qnh_dataset_records (hotsale_goods) ──
     hotsale = await _get_dataset_records(pool, "hotsale_goods")
@@ -630,7 +643,7 @@ async def top_products() -> APIResponse[list[TopProduct]]:
 @router.get("/store-kpis")
 async def store_kpis() -> dict:
     """Return parsed store KPIs from dataset records or raw metrics."""
-    pool = pg.get_pool()
+    pool = await _safe_pool()
 
     # ── Priority 1: Aggregate from qnh_dataset_records (store_rank) ──
     store_records = await _get_dataset_records(pool, "store_rank")
@@ -718,7 +731,7 @@ async def store_kpis() -> dict:
 @router.get("/raw-data-debug")
 async def raw_data_debug() -> dict:
     """Debug endpoint: show what's in raw tables."""
-    pool = pg.get_pool()
+    pool = await _safe_pool()
     result = {}
     for table in [
         "qnh_store_metrics_raw",
@@ -744,7 +757,7 @@ async def sales_trends(
     days: int = 7,
 ) -> APIResponse[list[dict]]:
     """查询近 N 天销售趋势（从 orders 表）"""
-    pool = pg.get_pool()
+    pool = await _safe_pool()
     try:
         rows = []
         with contextlib.suppress(Exception):

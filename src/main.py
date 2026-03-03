@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -78,15 +79,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         import asyncio
 
         async def _retry_pg():
-            for i in range(10):
-                await asyncio.sleep(30)
+            for i in range(20):
+                delay = 5 if i < 5 else 30
+                await asyncio.sleep(delay)
                 try:
                     await pg_db.init_pool()
                     logger.info("PG reconnected on retry %d", i + 1)
-                    await _run_migrations(pg_db.get_pool())
+                    with contextlib.suppress(Exception):
+                        await _run_migrations(pg_db.get_pool())
                     return
                 except Exception:
-                    logger.warning("PG retry %d/10 failed", i + 1)
+                    logger.warning("PG retry %d/20 failed", i + 1)
 
         asyncio.create_task(_retry_pg())
 
@@ -565,6 +568,18 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def ensure_pg_pool(request, call_next):
+    """Auto-init PG pool on first API request if startup init failed."""
+    if pg_db._pool is None and request.url.path.startswith("/api"):
+        try:
+            await pg_db.init_pool()
+            logger.info("PG pool lazily initialized via middleware")
+        except Exception:
+            pass  # Will fail at endpoint level with proper error
+    return await call_next(request)
 
 
 # ─── Health check ────────────────────────────────────────────
