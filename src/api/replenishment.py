@@ -7,11 +7,43 @@ import logging
 from fastapi import APIRouter
 
 from src.services.replenishment import ReplenishmentService
+from src.services.replenishment_predictor import predict_replenishment
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/replenishment", tags=["replenishment"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/predictions", response_model=APIResponse[list[dict]])
+async def replenishment_predictions() -> APIResponse[list[dict]]:
+    """返回预测性补货建议列表。"""
+    try:
+        predictions = await predict_replenishment()
+    except Exception as exc:  # pragma: no cover - logging path
+        logger.exception("预测性补货引擎失败")
+        return APIResponse(data=[], message=f"补货预测失败: {exc}")
+
+    return APIResponse(
+        data=predictions,
+        message=f"生成 {len(predictions)} 条补货预测",
+    )
+
+
+@router.get("/urgent", response_model=APIResponse[list[dict]])
+async def urgent_replenishment_predictions() -> APIResponse[list[dict]]:
+    """仅返回 <=5 天可能断货的紧急商品。"""
+    try:
+        predictions = await predict_replenishment()
+    except Exception as exc:  # pragma: no cover - logging path
+        logger.exception("急需补货预测失败")
+        return APIResponse(data=[], message=f"紧急补货预测失败: {exc}")
+
+    urgent_items = [item for item in predictions if item.get("urgency") == "urgent"]
+    return APIResponse(
+        data=urgent_items,
+        message=f"共有 {len(urgent_items)} 个商品需要立即补货",
+    )
 
 
 @router.get("/suggestions", response_model=APIResponse[list])
