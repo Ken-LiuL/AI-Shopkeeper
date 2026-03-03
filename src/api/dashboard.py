@@ -389,13 +389,25 @@ async def overview() -> APIResponse[DashboardOverview]:
             if expose_cnt > 0 and today_orders > 0:
                 conversion_rate = round(today_orders / expose_cnt * 100, 2)
 
-    # Get pending alerts count dynamically
+    # Fast alert count estimate (avoid expensive full alert generation in overview)
     pending_alerts = 0
     with contextlib.suppress(Exception):
-        from .alerts import _generate_smart_alerts
-
-        smart_alerts = await _generate_smart_alerts(pool)
-        pending_alerts = len([a for a in smart_alerts if a.get("status") == "pending"])
+        # Count low-stock products as proxy for alert count
+        low_stock = (
+            await pool.fetchval(
+                "SELECT COUNT(*) FROM qnh_products WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10"
+            )
+            or 0
+        )
+        pending_alerts += low_stock
+    # Add store_rank based alerts
+    if store_records:
+        for rec in store_records:
+            if _parse_data_value(rec.get("stockout_loss_amt")) > 0:
+                pending_alerts += 1
+            ot = _parse_data_value(rec.get("overtime_ord_rate"))
+            if ot > 5:
+                pending_alerts += 1
 
     pending_tasks = 0
     for q in [
