@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 
 from fastapi import APIRouter
 
@@ -14,6 +15,65 @@ from .schemas import ActionItem, APIResponse, DashboardOverview, SalesTrendPoint
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 logger = logging.getLogger(__name__)
+
+
+# ── Dataset record helpers ──────────────────────────────────────────
+
+
+def _parse_data_value(field: dict | str | None) -> float:
+    """Parse a dataValue from goldengateway payload field.
+
+    Field is typically: {"dataCode": "...", "dataValue": "3,910.34", ...}
+    dataValue may contain commas, percentage signs, or be plain numbers.
+    """
+    if field is None:
+        return 0.0
+    if isinstance(field, int | float):
+        return float(field)
+    if isinstance(field, str):
+        raw = field
+    elif isinstance(field, dict):
+        raw = field.get("dataValue", "")
+    else:
+        return 0.0
+    if not raw:
+        return 0.0
+    # Remove commas, percentage signs, whitespace
+    cleaned = re.sub(r"[,%\s]", "", str(raw))
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _get_data_str(field: dict | str | None) -> str:
+    """Get string dataValue from a payload field."""
+    if field is None:
+        return ""
+    if isinstance(field, str):
+        return field
+    if isinstance(field, dict):
+        return str(field.get("dataValue", ""))
+    return str(field)
+
+
+async def _get_dataset_records(pool, dataset: str) -> list[dict]:
+    """Fetch all records from qnh_dataset_records for a given dataset."""
+    try:
+        rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = $1",
+            dataset,
+        )
+        results = []
+        for row in rows:
+            p = row["payload"]
+            if isinstance(p, str):
+                p = json.loads(p)
+            results.append(p)
+        return results
+    except Exception as e:
+        logger.debug("Failed to fetch dataset %s: %s", dataset, e)
+        return []
 
 
 def _extract_metric(raw_data: dict, key: str, use_reference: bool = True) -> float:
@@ -231,33 +291,44 @@ async def overview() -> APIResponse[DashboardOverview]:
     total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
 
     today_orders = 0
-    with contextlib.suppress(Exception):
-        today_orders = (
-            await pool.fetchval("SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE")
-            or 0
-        )
-
-    # Extract GMV / orders from raw metrics
     today_gmv = 0.0
     avg_order_value = 0.0
     total_customers = 0
     conversion_rate = 0.0
-    metrics = await _get_latest_metrics(pool)
-    if metrics:
-        if today_orders == 0:
-            today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
-        today_gmv = _extract_metric(metrics, "sale_amt_gmv")
-        if today_gmv == 0:
-            today_gmv = _extract_metric(metrics, "actual_pay_amt")
-        total_customers = int(_extract_metric(metrics, "user_cnt"))
-        # Unit price from raw metric directly
-        avg_order_value = _extract_metric(metrics, "unit_price")
-        if avg_order_value == 0 and today_orders > 0 and today_gmv > 0:
+
+    # ── Priority 1: Read from qnh_dataset_records (store_rank aggregated) ──
+    store_records = await _get_dataset_records(pool, "store_rank")
+    if store_records:
+        for rec in store_records:
+            today_orders += int(_parse_data_value(rec.get("eff_ord_cnt")))
+            today_gmv += _parse_data_value(rec.get("sale_amt_gmv"))
+            total_customers += int(_parse_data_value(rec.get("user_cnt")))
+        if today_orders > 0 and today_gmv > 0:
             avg_order_value = today_gmv / today_orders
-        # Conversion
-        expose_cnt = _extract_metric(metrics, "expose_cnt")
-        if expose_cnt > 0 and today_orders > 0:
-            conversion_rate = round(today_orders / expose_cnt * 100, 2)
+
+    # ── Fallback: old raw metrics table ──
+    if today_orders == 0:
+        with contextlib.suppress(Exception):
+            today_orders = (
+                await pool.fetchval(
+                    "SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE"
+                )
+                or 0
+            )
+        metrics = await _get_latest_metrics(pool)
+        if metrics:
+            if today_orders == 0:
+                today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
+            today_gmv = _extract_metric(metrics, "sale_amt_gmv")
+            if today_gmv == 0:
+                today_gmv = _extract_metric(metrics, "actual_pay_amt")
+            total_customers = int(_extract_metric(metrics, "user_cnt"))
+            avg_order_value = _extract_metric(metrics, "unit_price")
+            if avg_order_value == 0 and today_orders > 0 and today_gmv > 0:
+                avg_order_value = today_gmv / today_orders
+            expose_cnt = _extract_metric(metrics, "expose_cnt")
+            if expose_cnt > 0 and today_orders > 0:
+                conversion_rate = round(today_orders / expose_cnt * 100, 2)
 
     # Get pending alerts count dynamically
     pending_alerts = 0
@@ -421,6 +492,29 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
 async def top_products() -> APIResponse[list[TopProduct]]:
     pool = pg.get_pool()
 
+    # ── Priority 1: Read from qnh_dataset_records (hotsale_goods) ──
+    hotsale = await _get_dataset_records(pool, "hotsale_goods")
+    if hotsale:
+        products = []
+        for rec in hotsale:
+            name = _get_data_str(rec.get("product_name"))
+            if not name:
+                continue
+            rank = int(_parse_data_value(rec.get("rank")))
+            revenue = _parse_data_value(rec.get("prod_sale_amt"))
+            sales = int(_parse_data_value(rec.get("prod_sale_num_gmv")))
+            products.append(
+                TopProduct(
+                    product_id=str(rank),
+                    name=name,
+                    total_sales=sales,
+                    revenue=revenue,
+                )
+            )
+        products.sort(key=lambda p: p.revenue, reverse=True)
+        return APIResponse(data=products[:10])
+
+    # ── Fallback: old tables ──
     rows = []
     with contextlib.suppress(Exception):
         rows = await pool.fetch(
@@ -459,8 +553,55 @@ async def top_products() -> APIResponse[list[TopProduct]]:
 
 @router.get("/store-kpis")
 async def store_kpis() -> dict:
-    """Return parsed store KPIs from raw metrics."""
+    """Return parsed store KPIs from dataset records or raw metrics."""
     pool = pg.get_pool()
+
+    # ── Priority 1: Aggregate from qnh_dataset_records (store_rank) ──
+    store_records = await _get_dataset_records(pool, "store_rank")
+    if store_records:
+        # Aggregate across all stores
+        agg: dict[str, float] = {}
+        kpi_keys = [
+            "eff_ord_cnt",
+            "sale_amt_gmv",
+            "actual_pay_amt",
+            "prod_sale_amt",
+            "unit_price",
+            "actual_unit_price",
+            "net_profit",
+            "user_cnt",
+            "delivery_fee",
+            "package_fee",
+            "stockout_loss_amt",
+        ]
+        # Percentage-based fields: take weighted average, not sum
+        pct_keys = {"overtime_ord_rate", "stockout_refund_rate"}
+
+        for key in kpi_keys:
+            agg[key] = sum(_parse_data_value(rec.get(key)) for rec in store_records)
+        for key in pct_keys:
+            vals = [_parse_data_value(rec.get(key)) for rec in store_records]
+            agg[key] = sum(vals) / len(vals) if vals else 0.0
+        # Avg order value = GMV / orders (not sum)
+        if agg["eff_ord_cnt"] > 0:
+            agg["unit_price"] = agg["sale_amt_gmv"] / agg["eff_ord_cnt"]
+            agg["actual_unit_price"] = agg["actual_pay_amt"] / agg["eff_ord_cnt"]
+
+        return {
+            "orders": int(agg["eff_ord_cnt"]),
+            "gmv": round(agg["sale_amt_gmv"], 2),
+            "actual_revenue": round(agg["actual_pay_amt"], 2),
+            "product_sales": round(agg["prod_sale_amt"], 2),
+            "avg_order_value": round(agg["unit_price"], 2),
+            "actual_avg_order_value": round(agg["actual_unit_price"], 2),
+            "net_profit": round(agg["net_profit"], 2),
+            "customers": int(agg["user_cnt"]),
+            "delivery_fee": round(agg["delivery_fee"], 2),
+            "package_fee": round(agg["package_fee"], 2),
+            "stockout_loss": round(agg["stockout_loss_amt"], 2),
+        }
+
+    # ── Fallback: old raw metrics ──
     metrics = await _get_latest_metrics(pool)
     if not metrics:
         return {"error": "no metrics data"}
@@ -481,8 +622,7 @@ async def store_kpis() -> dict:
         "stockout_refund_rate",
         "stockout_loss_amt",
     ]:
-        val = _extract_metric(metrics, key)
-        kpis[key] = val
+        kpis[key] = _extract_metric(metrics, key)
 
     return {
         "orders": int(kpis["eff_ord_cnt"]),
