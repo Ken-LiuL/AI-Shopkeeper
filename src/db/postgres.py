@@ -39,17 +39,28 @@ async def init_pool() -> asyncpg.Pool:
         ssl_ctx.check_hostname = False
         ssl_ctx.verify_mode = _ssl.CERT_NONE
         ssl_param = ssl_ctx
-    _pool = await asyncpg.create_pool(
-        dsn=dsn,
-        min_size=1,
-        max_size=10,
-        timeout=10,
-        command_timeout=30,
-        max_inactive_connection_lifetime=300,
-        **({"ssl": ssl_param} if ssl_param else {}),
-    )
-    logger.info("PostgreSQL pool initialised (min=1, max=10)")
-    return _pool
+    # Retry pool creation — Fly PG can be slow on cold start
+    import asyncio
+
+    for attempt in range(5):
+        try:
+            _pool = await asyncpg.create_pool(
+                dsn=dsn,
+                min_size=1,
+                max_size=10,
+                timeout=30,
+                command_timeout=30,
+                max_inactive_connection_lifetime=300,
+                **({"ssl": ssl_param} if ssl_param else {}),
+            )
+            logger.info("PostgreSQL pool initialised (min=1, max=10)")
+            return _pool
+        except Exception as e:
+            logger.warning("PG pool init attempt %d/5 failed: %s", attempt + 1, e)
+            if attempt < 4:
+                await asyncio.sleep(2**attempt)
+            else:
+                raise
 
 
 def get_pool() -> asyncpg.Pool:
