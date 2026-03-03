@@ -124,7 +124,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             # Skip sync on server — sync runs locally via nodriver daemon
             if os.environ.get("DISABLE_SYNC", "").lower() in ("1", "true", "yes"):
                 logger.info("DISABLE_SYNC=true, skipping initial sync (use local daemon instead)")
-            else:
+            elif pg_db._pool is not None:
                 pool = pg_db.get_pool()
                 count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
                 if count == 0:
@@ -132,6 +132,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                     _asyncio.create_task(_initial_full_sync(pool))
                 else:
                     logger.info("Database has %d products, skipping initial full sync", count)
+            else:
+                logger.warning("PG not available, skipping initial sync check")
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
@@ -149,40 +151,50 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
             vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
             logger.info("Using Neo4j as vector store backend")
-        else:
+        elif pg_db._pool is not None:
             from src.skills.pgvector_skill import PgVectorSkill
 
             vector_skill = PgVectorSkill(pool=pg_db.get_pool())
             logger.info("Using PostgreSQL pgvector as vector store backend")
+        else:
+            vector_skill = None
+            logger.warning("PG not available, skipping pgvector skill init")
 
         # Init product knowledge skill
-        from src.skills.product_knowledge import ProductKnowledgeSkill
+        if pg_db._pool is not None:
+            from src.skills.product_knowledge import ProductKnowledgeSkill
 
-        product_knowledge_skill = ProductKnowledgeSkill(
-            pool=pg_db.get_pool(), embedding=embedding_skill
-        )
+            product_knowledge_skill = ProductKnowledgeSkill(
+                pool=pg_db.get_pool(), embedding=embedding_skill
+            )
+        else:
+            product_knowledge_skill = None
 
-        register_skills(
-            vector_store=vector_skill,
-            embedding=embedding_skill,
-            reranker=reranker_skill,
-            product_knowledge=product_knowledge_skill,
-        )
-        logger.info("Customer service skills registered (with product knowledge) ✓")
+        if vector_skill is not None:
+            register_skills(
+                vector_store=vector_skill,
+                embedding=embedding_skill,
+                reranker=reranker_skill,
+                product_knowledge=product_knowledge_skill,
+            )
+            logger.info("Customer service skills registered (with product knowledge) ✓")
+        else:
+            logger.warning("Skipping skills registration — PG not available")
 
         # Build embeddings in background (non-blocking)
-        import asyncio as _asyncio2
+        if pg_db._pool is not None:
+            import asyncio as _asyncio2
 
-        async def _bg_build_embeddings():
-            try:
-                from src.skills.product_knowledge import build_embeddings
+            async def _bg_build_embeddings():
+                try:
+                    from src.skills.product_knowledge import build_embeddings
 
-                await build_embeddings(pg_db.get_pool(), embedding_skill)
-            except Exception as e:
-                logger.error("Background embedding build failed: %s", e)
+                    await build_embeddings(pg_db.get_pool(), embedding_skill)
+                except Exception as e:
+                    logger.error("Background embedding build failed: %s", e)
 
-        _asyncio2.create_task(_bg_build_embeddings())
-        logger.info("Background embedding build task started")
+            _asyncio2.create_task(_bg_build_embeddings())
+            logger.info("Background embedding build task started")
 
         # Initialize product memory for new customer service
         async def _init_product_memory():
