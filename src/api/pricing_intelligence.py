@@ -99,7 +99,7 @@ async def pricing_report() -> APIResponse[PricingReport]:
 
     # 2. 获取商品库数据（含成本价）
     products = await pool.fetch("""
-        SELECT spu_id, name, retail_price, cost_price, category, stock_num
+        SELECT spu_id, name, retail_price, cost_price, category
         FROM qnh_products WHERE status = '在售' AND retail_price > 0
     """)
     product_map = {p["name"]: dict(p) for p in products}
