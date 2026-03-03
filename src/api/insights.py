@@ -9,8 +9,6 @@ import pickle
 from datetime import datetime, timedelta
 from typing import Any
 
-import asyncio
-
 from fastapi import APIRouter, BackgroundTasks, Query
 
 from src.agents.llm import MODEL_DEEPSEEK, MODEL_HAIKU, call_tool
@@ -83,207 +81,190 @@ def _save_to_cache(cache_key: str, data: dict[str, Any]) -> None:
 
 
 async def _get_daily_business_data(target_date: datetime = None) -> dict[str, Any]:
-    """获取指定日期的业务数据"""
+    """获取指定日期的业务数据 — 优先从 qnh_dataset_records 读取真实数据。"""
+    import re
+
     if not target_date:
         target_date = datetime.now()
 
     pool = pg.get_pool()
-
-    # 获取基础指标
     today = target_date.date()
-    yesterday = today - timedelta(days=1)
-    last_week = today - timedelta(days=7)
 
-    business_data = {
+    def _pv(field) -> float:
+        if field is None:
+            return 0.0
+        if isinstance(field, int | float):
+            return float(field)
+        if isinstance(field, dict):
+            raw = field.get("dataValue", "")
+        else:
+            raw = str(field)
+        if not raw:
+            return 0.0
+        cleaned = re.sub(r"[,%\s]", "", str(raw))
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
+            return 0.0
+
+    def _sv(field) -> str:
+        if field is None:
+            return ""
+        if isinstance(field, str):
+            return field
+        if isinstance(field, dict):
+            return str(field.get("dataValue", ""))
+        return str(field)
+
+    business_data: dict[str, Any] = {
         "date": str(today),
         "orders": {},
         "products": {},
         "categories": {},
         "competitors": {},
         "trends": {},
+        "raw_metrics": {},
+        "raw_orders": {},
     }
 
+    # ── Priority 1: qnh_dataset_records (store_rank + hotsale_goods) ──
     try:
-        # 订单数据
-        order_stats = await pool.fetchrow(
-            """
-            SELECT
-                COUNT(*) as today_orders,
-                COALESCE(SUM(total_amount), 0) as today_gmv,
-                COALESCE(AVG(total_amount), 0) as avg_order_value
-            FROM orders
-            WHERE DATE(order_time) = $1
-        """,
-            today,
+        store_rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'store_rank'"
         )
+        if store_rows:
+            total_orders = 0
+            total_gmv = 0.0
+            total_customers = 0
+            total_profit = 0.0
+            for row in store_rows:
+                p = row["payload"]
+                if isinstance(p, str):
+                    p = json.loads(p)
+                total_orders += int(_pv(p.get("eff_ord_cnt")))
+                total_gmv += _pv(p.get("sale_amt_gmv"))
+                total_customers += int(_pv(p.get("user_cnt")))
+                total_profit += _pv(p.get("net_profit"))
 
-        yesterday_stats = await pool.fetchrow(
-            """
-            SELECT
-                COUNT(*) as yesterday_orders,
-                COALESCE(SUM(total_amount), 0) as yesterday_gmv
-            FROM orders
-            WHERE DATE(order_time) = $1
-        """,
-            yesterday,
-        )
+            avg_order = total_gmv / total_orders if total_orders > 0 else 0
+            business_data["orders"] = {
+                "today_count": total_orders,
+                "today_gmv": round(total_gmv, 2),
+                "avg_order_value": round(avg_order, 2),
+                "yesterday_count": 0,
+                "yesterday_gmv": 0,
+                "growth_rate": 0,
+                "net_profit": round(total_profit, 2),
+                "customers": total_customers,
+            }
 
-        business_data["orders"] = {
-            "today_count": int(order_stats["today_orders"]) if order_stats["today_orders"] else 0,
-            "today_gmv": float(order_stats["today_gmv"]) if order_stats["today_gmv"] else 0,
-            "avg_order_value": float(order_stats["avg_order_value"])
-            if order_stats["avg_order_value"]
-            else 0,
-            "yesterday_count": int(yesterday_stats["yesterday_orders"])
-            if yesterday_stats["yesterday_orders"]
-            else 0,
-            "yesterday_gmv": float(yesterday_stats["yesterday_gmv"])
-            if yesterday_stats["yesterday_gmv"]
-            else 0,
-            "growth_rate": 0,
-        }
-
-        # 计算增长率
-        if business_data["orders"]["yesterday_gmv"] > 0:
-            business_data["orders"]["growth_rate"] = (
-                business_data["orders"]["today_gmv"] / business_data["orders"]["yesterday_gmv"] - 1
-            ) * 100
-
-    except Exception as e:
-        logger.warning(f"Failed to get order stats: {e}")
-
-    try:
         # 热销商品
-        top_products = await pool.fetch(
-            """
-            SELECT
-                p.name,
-                p.category,
-                SUM(oi.quantity) as total_sold,
-                SUM(oi.quantity * oi.unit_price) as revenue,
-                COUNT(DISTINCT oi.order_id) as order_count
-            FROM order_items oi
-            JOIN orders o ON oi.order_id = o.order_id
-            JOIN products p ON oi.product_id = p.product_id
-            WHERE DATE(o.order_time) = $1
-            GROUP BY p.product_id, p.name, p.category
-            ORDER BY total_sold DESC
-            LIMIT 10
-        """,
-            today,
+        hotsale_rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
         )
+        if hotsale_rows:
+            top_selling = []
+            for row in hotsale_rows:
+                p = row["payload"]
+                if isinstance(p, str):
+                    p = json.loads(p)
+                name = _sv(p.get("product_name"))
+                if not name:
+                    continue
+                top_selling.append(
+                    {
+                        "name": name,
+                        "category": "",
+                        "quantity_sold": int(_pv(p.get("prod_sale_num_gmv"))),
+                        "revenue": round(_pv(p.get("prod_sale_amt")), 2),
+                        "actual_pay": round(_pv(p.get("prod_actual_pay_amt")), 2),
+                        "rank": int(_pv(p.get("rank"))),
+                    }
+                )
+            top_selling.sort(key=lambda x: x["revenue"], reverse=True)
+            business_data["products"]["top_selling"] = top_selling[:10]
 
-        business_data["products"]["top_selling"] = [
-            {
-                "name": row["name"],
-                "category": row["category"],
-                "quantity_sold": int(row["total_sold"]),
-                "revenue": float(row["revenue"]),
-                "order_count": int(row["order_count"]),
-            }
-            for row in top_products
-        ]
+        # 竞品数据
+        try:
+            comps = await pool.fetch("""
+                SELECT product_name, competitor_name, price
+                FROM competitor_products
+                WHERE updated_at >= CURRENT_DATE - INTERVAL '7 days'
+                ORDER BY updated_at DESC LIMIT 20
+            """)
+            if comps:
+                business_data["competitors"]["price_changes"] = [
+                    {
+                        "product": c["product_name"],
+                        "competitor": c["competitor_name"],
+                        "price": float(c["price"]),
+                    }
+                    for c in comps
+                ]
+        except Exception:
+            pass
 
-    except Exception as e:
-        logger.warning(f"Failed to get product stats: {e}")
-        business_data["products"]["top_selling"] = []
-
-    try:
-        # 品类表现
-        category_performance = await pool.fetch(
-            """
-            SELECT
-                p.category,
-                SUM(oi.quantity) as total_sold,
-                SUM(oi.quantity * oi.unit_price) as revenue,
-                COUNT(DISTINCT p.product_id) as product_count
-            FROM order_items oi
-            JOIN orders o ON oi.order_id = o.order_id
-            JOIN products p ON oi.product_id = p.product_id
-            WHERE DATE(o.order_time) = $1
-            GROUP BY p.category
-            ORDER BY revenue DESC
-        """,
-            today,
-        )
-
-        business_data["categories"] = {
-            "performance": [
+        # 品类分布
+        try:
+            cats = await pool.fetch("""
+                SELECT category, COUNT(*) as cnt, AVG(retail_price) as avg_price
+                FROM qnh_products WHERE status = '在售' AND category != ''
+                GROUP BY category ORDER BY cnt DESC LIMIT 10
+            """)
+            business_data["categories"]["performance"] = [
                 {
-                    "category": row["category"],
-                    "total_sold": int(row["total_sold"]),
-                    "revenue": float(row["revenue"]),
-                    "product_count": int(row["product_count"]),
+                    "category": c["category"],
+                    "product_count": c["cnt"],
+                    "avg_price": round(float(c["avg_price"] or 0), 2),
                 }
-                for row in category_performance
+                for c in cats
             ]
-        }
+        except Exception:
+            pass
 
     except Exception as e:
-        logger.warning(f"Failed to get category stats: {e}")
-        business_data["categories"] = {"performance": []}
+        logger.warning(f"Failed to get business data from dataset_records: {e}")
 
-    try:
-        # 竞品动态
-        competitor_changes = await pool.fetch(
-            """
-            SELECT
-                competitor_name,
-                product_name,
-                price,
-                previous_price,
-                price_change_percent,
-                updated_at
-            FROM competitor_products
-            WHERE DATE(updated_at) = $1 AND ABS(price_change_percent) > 5
-            ORDER BY ABS(price_change_percent) DESC
-            LIMIT 10
-        """,
-            today,
-        )
+    # ── Fallback: fill in missing data from old tables ──
+    if not business_data.get("categories", {}).get("performance"):
+        try:
+            cats = await pool.fetch("""
+                SELECT category, COUNT(*) as cnt FROM qnh_products
+                WHERE status = '在售' AND category != ''
+                GROUP BY category ORDER BY cnt DESC LIMIT 10
+            """)
+            business_data["categories"]["performance"] = [
+                {"category": c["category"], "product_count": c["cnt"]} for c in cats
+            ]
+        except Exception:
+            business_data["categories"]["performance"] = []
 
-        business_data["competitors"]["price_changes"] = [
-            {
-                "competitor": row["competitor_name"],
-                "product": row["product_name"],
-                "current_price": float(row["price"]),
-                "previous_price": float(row["previous_price"]) if row["previous_price"] else 0,
-                "change_percent": float(row["price_change_percent"])
-                if row["price_change_percent"]
-                else 0,
-            }
-            for row in competitor_changes
-        ]
-
-    except Exception as e:
-        logger.warning(f"Failed to get competitor data: {e}")
+    if not business_data.get("competitors", {}).get("price_changes"):
         business_data["competitors"]["price_changes"] = []
 
+    # 7天趋势 — 从 dataset_records daily snapshots
     try:
-        # 7天趋势
-        trend_data = await pool.fetch(
+        last_week = today - timedelta(days=7)
+        trend_rows = await pool.fetch(
             """
-            SELECT
-                DATE(order_time) as date,
-                COUNT(*) as order_count,
-                SUM(total_amount) as gmv
-            FROM orders
-            WHERE order_time >= $1
-            GROUP BY DATE(order_time)
-            ORDER BY date
+            SELECT synced_at::date AS date, payload
+            FROM qnh_dataset_records
+            WHERE dataset = 'store_rank' AND synced_at >= $1
+            ORDER BY synced_at
         """,
             last_week,
         )
-
-        business_data["trends"]["weekly"] = [
-            {
-                "date": str(row["date"]),
-                "order_count": int(row["order_count"]),
-                "gmv": float(row["gmv"]),
-            }
-            for row in trend_data
-        ]
-
+        daily_trends: dict[str, dict] = {}
+        for row in trend_rows:
+            d = str(row["date"])
+            p = row["payload"]
+            if isinstance(p, str):
+                p = json.loads(p)
+            if d not in daily_trends:
+                daily_trends[d] = {"date": d, "order_count": 0, "gmv": 0.0}
+            daily_trends[d]["order_count"] += int(_pv(p.get("eff_ord_cnt")))
+            daily_trends[d]["gmv"] += _pv(p.get("sale_amt_gmv"))
+        business_data["trends"]["weekly"] = sorted(daily_trends.values(), key=lambda x: x["date"])
     except Exception as e:
         logger.warning(f"Failed to get trend data: {e}")
         business_data["trends"]["weekly"] = []
