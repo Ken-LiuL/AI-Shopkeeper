@@ -100,6 +100,8 @@ class CompetitorDataService:
             pool = pg.get_pool()
 
             # 查询真实竞品数据（来自爬虫或API）
+            # 提取关键词用于匹配
+            keyword = product_name.split()[0] if product_name else ""
             real_data = await pool.fetch(
                 """
                 SELECT
@@ -112,15 +114,14 @@ class CompetitorDataService:
                 FROM competitor_products cp
                 LEFT JOIN competitor_stores cs ON cp.store_id = cs.store_id
                 WHERE (
-                    LOWER(cp.name) SIMILAR TO '%' || LOWER($1) || '%'
-                    OR LOWER(cp.category) SIMILAR TO '%' || LOWER($2) || '%'
+                    cp.name ILIKE '%' || $1 || '%'
+                    OR cp.category ILIKE '%' || $2 || '%'
                 )
                 AND cp.price > 0
-                AND cp.last_synced >= NOW() - INTERVAL '7 days'
                 ORDER BY cp.monthly_sales DESC
                 LIMIT 5
             """,
-                product_name.split()[0] if product_name else "",
+                keyword,
                 category,
             )
 
@@ -130,23 +131,8 @@ class CompetitorDataService:
             # 获取价格变化趋势
             prices_with_trend = []
             for row in real_data:
-                # 查询7天前价格做对比
-                old_price = await pool.fetchval(
-                    """
-                    SELECT price FROM competitor_products_history
-                    WHERE product_id = (
-                        SELECT product_id FROM competitor_products
-                        WHERE name = $1 LIMIT 1
-                    )
-                    AND created_at <= NOW() - INTERVAL '7 days'
-                    ORDER BY created_at DESC LIMIT 1
-                """,
-                    row["competitor_name"],
-                )
-
+                # 价格变化暂不计算（history表后续实现）
                 price_change = 0.0
-                if old_price:
-                    price_change = float(row["price"]) - float(old_price)
 
                 source = CompetitorDataSource(
                     source_type="real_api",
@@ -289,8 +275,8 @@ class CompetitorDataService:
                     AVG(price::numeric) as avg_price,
                     COUNT(*) as order_count
                 FROM orders_summary os
-                WHERE LOWER(product_name) SIMILAR TO '%' || LOWER($1) || '%'
-                OR LOWER(category) SIMILAR TO '%' || LOWER($2) || '%'
+                WHERE product_name ILIKE '%' || $1 || '%'
+                OR category ILIKE '%' || $2 || '%'
                 GROUP BY DATE_TRUNC('day', created_at)
                 HAVING DATE_TRUNC('day', created_at) >= NOW() - INTERVAL '30 days'
                 ORDER BY price_date DESC
