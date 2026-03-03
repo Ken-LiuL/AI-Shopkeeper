@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 
@@ -92,99 +93,66 @@ async def _get_current_inventory(limit: int = 50):
 
 
 async def _calculate_sales_velocity():
-    """基于qnh_store_metrics_raw和商品价格估算销售速度"""
+    """基于 hotsale_goods 真实销量数据计算销售速度。"""
+    import re
+
     pool = pg.get_pool()
-
-    # 从metrics获取总体销量数据
     sales_velocity = {}
-    try:
-        # 获取最新的metrics数据
-        metrics_row = await pool.fetchrow("""
-            SELECT raw_data FROM qnh_store_metrics_raw
-            ORDER BY created_at DESC LIMIT 1
-        """)
 
-        if not metrics_row:
-            return {}
-
-        metrics = metrics_row["raw_data"]
-        if metrics is None:
-            return {}
-        if isinstance(metrics, str):
-            try:
-                metrics = json.loads(metrics)
-            except (json.JSONDecodeError, TypeError):
-                return {}
-        if not isinstance(metrics, dict):
-            return {}
-
-        # 使用和dashboard一样的_extract_metric函数
-        def _extract_metric_local(raw_data: dict, key: str) -> float:
-            field = raw_data.get(key, {})
-            if not isinstance(field, dict):
-                try:
-                    return float(field)
-                except (TypeError, ValueError):
-                    return 0.0
-
-            indic = field.get("indicValue", {})
-            if isinstance(indic, dict):
-                return float(indic.get("originValue", 0) or 0)
+    def _pv(field) -> float:
+        if field is None:
+            return 0.0
+        if isinstance(field, int | float):
+            return float(field)
+        if isinstance(field, dict):
+            raw = field.get("dataValue", "")
+        else:
+            raw = str(field)
+        if not raw:
+            return 0.0
+        cleaned = re.sub(r"[,%\\s]", "", str(raw))
+        try:
+            return float(cleaned)
+        except (ValueError, TypeError):
             return 0.0
 
-        # 提取总体销售指标
-        total_orders = _extract_metric_local(metrics, "eff_ord_cnt")
-        total_gmv = _extract_metric_local(metrics, "sale_amt_gmv")
-        avg_order_value = _extract_metric_local(metrics, "unit_price")
+    def _sv(field) -> str:
+        if field is None:
+            return ""
+        if isinstance(field, dict):
+            return str(field.get("dataValue", ""))
+        return str(field)
 
-        if avg_order_value == 0 and total_orders > 0 and total_gmv > 0:
-            avg_order_value = total_gmv / total_orders
+    try:
+        # Priority 1: Real per-product sales from hotsale_goods
+        hotsale_rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
+        )
+        # Build name→product_id mapping
+        products = await pool.fetch("SELECT spu_id, name FROM qnh_products WHERE status = '在售'")
+        name_to_id = {p["name"].lower().strip(): p["spu_id"] for p in products}
 
-        # 获取所有商品进行销量分配
-        products = await pool.fetch("""
-            SELECT spu_id, name, retail_price, channel_status, category
-            FROM qnh_products
-            WHERE 1=1
-        """)
-
-        # 为每个商品估算销售速度
-        total_products = len(products)
-        if total_products > 0 and total_orders > 0:
-            # 基于价格和状态分配权重
-            total_weight = 0
-            product_weights = {}
-
-            for product in products:
-                price = product["retail_price"] or 50  # 默认价格
-                status = product["channel_status"]
-
-                # 计算权重（价格越高，在售状态权重越大）
-                if status == "在售":
-                    weight = max(1.0, price / avg_order_value) if avg_order_value > 0 else 1.0
-                else:  # 缺货
-                    weight = 0.1
-
-                product_weights[product["spu_id"]] = weight
-                total_weight += weight
-
-            # 分配销量
-            for product in products:
-                product_id = product["spu_id"]
-                weight = product_weights[product_id]
-
-                # 按权重分配订单
-                allocated_orders = (weight / total_weight) * total_orders if total_weight > 0 else 0
-                avg_daily_sales = allocated_orders / 30.0  # 30天平均
-
-                sales_velocity[product_id] = {
-                    "total_30days": int(allocated_orders),
-                    "avg_daily": avg_daily_sales,
-                    "avg_per_order": 1.2,  # 平均每单商品数
-                    "active_days": 30,
-                }
+        for row in hotsale_rows:
+            p = row["payload"]
+            if isinstance(p, str):
+                p = json.loads(p)
+            name = _sv(p.get("product_name")).strip()
+            qty = int(_pv(p.get("prod_sale_num_gmv")))
+            if not name or qty == 0:
+                continue
+            product_id = name_to_id.get(name.lower(), name)
+            # hotsale data is 7-day window
+            sales_velocity[product_id] = {
+                "total_7days": qty,
+                "total_30days": int(qty * 4.3),  # estimate monthly
+                "avg_daily": round(qty / 7.0, 2),
+                "avg_per_order": 1.0,
+                "active_days": 7,
+                "product_name": name,
+            }
 
     except Exception as e:
-        logger.warning(f"Failed to calculate sales velocity from metrics: {e}")
+        logger.warning(f"Failed to calculate sales velocity: {e}")
 
     return sales_velocity
 
@@ -697,9 +665,7 @@ async def get_inventory_status() -> APIResponse[dict]:
             is_active = False
             is_out = False
             if isinstance(cs, dict):
-                is_active = any(
-                    cs.get(k) == "on" for k in ("meituan", "eleme", "jddj")
-                )
+                is_active = any(cs.get(k) == "on" for k in ("meituan", "eleme", "jddj"))
                 is_out = not is_active and any(
                     cs.get(k) == "off" for k in ("meituan", "eleme", "jddj")
                 )
