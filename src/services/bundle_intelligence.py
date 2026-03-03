@@ -159,24 +159,43 @@ def _matches_keywords(product_name: str, keywords: list[str]) -> bool:
 
 
 async def get_hotsale_products() -> list[ProductInfo]:
-    """从本地 SQLite 获取热销商品数据"""
-    import sqlite3
-    from pathlib import Path
+    """从 PostgreSQL 获取热销商品数据（fallback 到 SQLite）"""
+    rows = []
 
-    db_path = Path(__file__).resolve().parent.parent.parent / "data" / "qnh_sync.db"
-    if not db_path.exists():
-        logger.warning("SQLite 不存在: %s", db_path)
-        return []
+    # 优先从 PG 读
+    try:
+        from src.db import postgres as pg
 
-    conn = sqlite3.connect(str(db_path))
-    rows = conn.execute(
-        "SELECT payload FROM qnh_dataset_records WHERE dataset='hotsale_goods'"
-    ).fetchall()
-    conn.close()
+        pool = pg.get_pool()
+        pg_rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset='hotsale_goods'"
+        )
+        rows = [(r["payload"],) for r in pg_rows]
+        logger.info("从 PG 加载 %d 条热销商品", len(rows))
+    except Exception as e:
+        logger.warning("PG 读取失败 (%s)，fallback 到 SQLite", e)
+
+    # Fallback: SQLite
+    if not rows:
+        import sqlite3
+        from pathlib import Path
+
+        db_path = Path(__file__).resolve().parent.parent.parent / "data" / "qnh_sync.db"
+        if db_path.exists():
+            conn = sqlite3.connect(str(db_path))
+            rows = conn.execute(
+                "SELECT payload FROM qnh_dataset_records WHERE dataset='hotsale_goods'"
+            ).fetchall()
+            conn.close()
+            logger.info("从 SQLite 加载 %d 条热销商品", len(rows))
+        else:
+            logger.warning("SQLite 不存在: %s", db_path)
+            return []
 
     products: list[ProductInfo] = []
     for row in rows:
-        data = json.loads(row[0])
+        raw = row[0]
+        data = raw if isinstance(raw, dict) else json.loads(raw)
         name = _extract_data_value(data, "product_name")
         if not name:
             continue
