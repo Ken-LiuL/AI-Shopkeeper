@@ -64,16 +64,30 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # Determine vector store backend
     vector_store_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
 
-    # Init database connections
-    await pg_db.init_pool()
+    # Init database connections (graceful — app starts even if PG is down)
+    try:
+        await pg_db.init_pool()
+        await _run_migrations(pg_db.get_pool())
+        from src.auth.seed import seed_admin_user
 
-    # Auto-run migrations
-    await _run_migrations(pg_db.get_pool())
+        await seed_admin_user()
+    except Exception as e:
+        logger.error("PG init failed, app will start without DB: %s", e)
+        # Background retry
+        import asyncio
 
-    # Seed default admin user
-    from src.auth.seed import seed_admin_user
+        async def _retry_pg():
+            for i in range(10):
+                await asyncio.sleep(30)
+                try:
+                    await pg_db.init_pool()
+                    logger.info("PG reconnected on retry %d", i + 1)
+                    await _run_migrations(pg_db.get_pool())
+                    return
+                except Exception:
+                    logger.warning("PG retry %d/10 failed", i + 1)
 
-    await seed_admin_user()
+        asyncio.create_task(_retry_pg())
 
     if vector_store_backend == "neo4j":
         await neo4j_db.init_driver()
