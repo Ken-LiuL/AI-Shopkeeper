@@ -171,7 +171,7 @@ class BrowserClient:
         separator = "&" if "?" in url else "?"
         full_url = f"{url}{separator}yodaReady=h5&csecplatform=4&csecversion=4.2.0"
 
-        body_str = json.dumps(body) if body else "undefined"
+        body_json_escaped = json.dumps(json.dumps(body)) if body else "undefined"
         key = f"__api_result_{int(time.time() * 1000)}"
 
         js = f"""
@@ -180,9 +180,12 @@ class BrowserClient:
                 method: '{method}',
                 headers: {{'Content-Type': 'application/json'}},
                 credentials: 'include',
-                body: {body_str}
-            }}).then(function(r) {{ return r.json(); }})
-              .then(function(d) {{ window.{key} = JSON.stringify(d); }})
+                body: {body_json_escaped}
+            }}).then(function(r) {{ return r.text(); }})
+              .then(function(t) {{
+                try {{ window.{key} = t; }}
+                catch(e) {{ window.{key} = JSON.stringify({{_error: true, message: 'parse: ' + e.message}}); }}
+              }})
               .catch(function(e) {{ window.{key} = JSON.stringify({{_error: true, message: e.message}}); }});
         """
 
@@ -208,7 +211,7 @@ class BrowserClient:
                 if "401" in msg or "403" in msg:
                     logger.warning("API 认证失败，尝试刷新 cookies...")
                     await self._refresh()
-                    return await self._execute_once(full_url, method, body_str)
+                    return await self._execute_once(full_url, method, body_json_escaped)
 
             return result
 
@@ -216,7 +219,9 @@ class BrowserClient:
             logger.error("浏览器 API 调用异常: %s", e)
             raise
 
-    async def _execute_once(self, full_url: str, method: str, body_str: str) -> dict[str, Any]:
+    async def _execute_once(
+        self, full_url: str, method: str, body_json_escaped: str
+    ) -> dict[str, Any]:
         """单次执行（重试用）。"""
         key = f"__api_result_{int(time.time() * 1000)}"
 
@@ -226,9 +231,12 @@ class BrowserClient:
                 method: '{method}',
                 headers: {{'Content-Type': 'application/json'}},
                 credentials: 'include',
-                body: {body_str}
-            }}).then(function(r) {{ return r.json(); }})
-              .then(function(d) {{ window.{key} = JSON.stringify(d); }})
+                body: {body_json_escaped}
+            }}).then(function(r) {{ return r.text(); }})
+              .then(function(t) {{
+                try {{ window.{key} = t; }}
+                catch(e) {{ window.{key} = JSON.stringify({{_error: true, message: 'parse: ' + e.message}}); }}
+              }})
               .catch(function(e) {{ window.{key} = JSON.stringify({{_error: true, message: e.message}}); }});
         """
 
