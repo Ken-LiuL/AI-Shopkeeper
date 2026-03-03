@@ -178,45 +178,101 @@ async def _generate_action_items(pool) -> list[ActionItem]:
                     )
                 )
 
-        # 3. Check performance metrics from raw data
-        metrics = await _get_latest_metrics(pool)
-        if metrics:
-            # Check overtime rate
-            overtime_rate = _extract_metric(metrics, "overtime_ord_rate")
-            if overtime_rate > 0.2:  # > 20%
+        # 3. Check performance metrics from dataset records (priority) or raw data
+        store_records = await _get_dataset_records(pool, "store_rank")
+        if store_records:
+            # Aggregate KPIs across stores
+            total_overtime = sum(
+                _parse_data_value(r.get("overtime_ord_rate")) for r in store_records
+            )
+            avg_overtime = total_overtime / len(store_records) if store_records else 0
+            total_stockout = sum(
+                _parse_data_value(r.get("stockout_loss_amt")) for r in store_records
+            )
+            total_turnover_days = sum(
+                _parse_data_value(r.get("turnover_days_by_quantity")) for r in store_records
+            )
+            avg_turnover = total_turnover_days / len(store_records) if store_records else 0
+            sku_rate = sum(_parse_data_value(r.get("txn_sku_rate")) for r in store_records)
+            avg_sku_rate = sku_rate / len(store_records) if store_records else 0
+
+            if avg_overtime > 20:  # > 20%
                 action_items.append(
                     ActionItem(
                         priority="high",
                         action="优化配送",
-                        detail=f"超时订单率{overtime_rate * 100:.1f}%，影响客户满意度",
+                        detail=f"整单超时率{avg_overtime:.1f}%，严重影响客户满意度",
                         link="/logistics",
                     )
                 )
-            elif overtime_rate > 0.05:  # > 5%
+            elif avg_overtime > 5:
                 action_items.append(
                     ActionItem(
                         priority="medium",
                         action="关注超时率",
-                        detail=f"超时订单率{overtime_rate * 100:.1f}%，建议优化配送",
+                        detail=f"整单超时率{avg_overtime:.1f}%，建议优化配送",
                         link="/alerts",
                     )
                 )
 
-            # Check stockout losses
-            stockout_loss = _extract_metric(metrics, "stockout_loss_amt")
-            if stockout_loss > 1000:
+            if total_stockout > 1000:
                 action_items.append(
                     ActionItem(
                         priority="high",
                         action="减少缺货损失",
-                        detail=f"缺货损失¥{stockout_loss:.2f}，优化库存预警",
+                        detail=f"缺货损失¥{total_stockout:,.2f}，需优化库存预警",
                         link="/inventory/alerts",
                     )
                 )
 
-            # Check conversion rate
-            expose_cnt = _extract_metric(metrics, "expose_cnt")
-            order_cnt = _extract_metric(metrics, "eff_ord_cnt")
+            if avg_turnover > 90:
+                action_items.append(
+                    ActionItem(
+                        priority="medium",
+                        action="加速库存周转",
+                        detail=f"平均周转天数{avg_turnover:.0f}天，建议清理滞销品",
+                        link="/inventory",
+                    )
+                )
+
+            if avg_sku_rate < 40:
+                action_items.append(
+                    ActionItem(
+                        priority="low",
+                        action="提升动销率",
+                        detail=f"商品动销率{avg_sku_rate:.1f}%，{100 - avg_sku_rate:.0f}%商品无销售",
+                        link="/products",
+                    )
+                )
+        else:
+            metrics = await _get_latest_metrics(pool)
+            if metrics:
+                overtime_rate = _extract_metric(metrics, "overtime_ord_rate")
+                if overtime_rate > 0.2:
+                    action_items.append(
+                        ActionItem(
+                            priority="high",
+                            action="优化配送",
+                            detail=f"超时订单率{overtime_rate * 100:.1f}%，影响客户满意度",
+                            link="/logistics",
+                        )
+                    )
+                stockout_loss = _extract_metric(metrics, "stockout_loss_amt")
+                if stockout_loss > 1000:
+                    action_items.append(
+                        ActionItem(
+                            priority="high",
+                            action="减少缺货损失",
+                            detail=f"缺货损失¥{stockout_loss:.2f}，优化库存预警",
+                            link="/inventory/alerts",
+                        )
+                    )
+
+            expose_cnt = 0
+            order_cnt = 0
+            if metrics:
+                expose_cnt = _extract_metric(metrics, "expose_cnt")
+                order_cnt = _extract_metric(metrics, "eff_ord_cnt")
             if expose_cnt > 0 and order_cnt > 0:
                 conversion_rate = order_cnt / expose_cnt
                 if conversion_rate < 0.02:  # < 2%
