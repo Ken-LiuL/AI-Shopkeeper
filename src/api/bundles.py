@@ -24,26 +24,11 @@ async def bundle_recommendations() -> APIResponse[list[dict]]:
     from src.services.bundle_intelligence import generate_bundle_recommendations
 
     try:
-        pool = pg.get_pool()
-        # 从 qnh_dataset_records 获取热销商品
-        rows = await pool.fetch(
-            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
-        )
-        if not rows:
-            return APIResponse(data=[], message="暂无热销商品数据，无法生成推荐")
-
-        hotsale_records = []
-        for row in rows:
-            payload = row["payload"]
-            if isinstance(payload, str):
-                hotsale_records.append(json.loads(payload))
-            else:
-                hotsale_records.append(payload)
-
-        recommendations = generate_bundle_recommendations(hotsale_records)
+        result = await generate_bundle_recommendations()
+        bundles = result.get("bundles", [])
         return APIResponse(
-            data=recommendations,
-            message=f"生成 {len(recommendations)} 个套餐推荐",
+            data=bundles,
+            message=result.get("message", f"生成 {len(bundles)} 个套餐推荐"),
         )
     except Exception as e:
         logger.exception("Bundle recommendations failed")
