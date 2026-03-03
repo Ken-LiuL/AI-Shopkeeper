@@ -98,7 +98,7 @@ async def category_gaps() -> APIResponse[list[dict]]:
                     "gap": round(ideal_pct - current_pct, 1),
                     "priority": "high" if current_pct < ideal_pct * 0.3 else "medium",
                     "reason": info["reason"],
-                    "recommendation": f"建议补充{max(5, int(total * (ideal_pct - current_pct) / 100))}款{ideal_cat}商品",
+                    "recommendation": f"建议补充{min(20, max(3, int(total * (ideal_pct - current_pct) / 100 * 0.3)))}款{ideal_cat}商品",
                 }
             )
 
