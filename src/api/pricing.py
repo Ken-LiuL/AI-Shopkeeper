@@ -20,6 +20,28 @@ from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
+
+def _parse_hotsale_value(field) -> float:
+    """Parse a goldengateway field value (may be nested dict with dataValue)."""
+    if field is None:
+        return 0.0
+    if isinstance(field, int | float):
+        return float(field)
+    if isinstance(field, dict):
+        raw = field.get("dataValue", "")
+    else:
+        raw = str(field)
+    if not raw:
+        return 0.0
+    import re
+
+    cleaned = re.sub(r"[,%\s]", "", str(raw))
+    try:
+        return float(cleaned)
+    except (ValueError, TypeError):
+        return 0.0
+
+
 # 创建一个专门的路由来处理 /api/products/pricing
 products_pricing_router = APIRouter(prefix="/api/products", tags=["pricing"])
 logger = logging.getLogger(__name__)
@@ -115,47 +137,59 @@ async def _get_products_with_pricing_data():
                 # 无真实竞品数据时返回空列表，不再使用假数据
                 competitor_data[product_name.lower()] = []
 
-    # 获取销量数据（简化版本，因为订单表结构可能不同）
+    # 获取销量数据 — 优先从 qnh_dataset_records (hotsale_goods) 读取真实销售数据
     sales_data = {}
     try:
-        # 尝试从可能的订单表获取数据，失败则使用模拟数据
-        sales = await pool.fetch("""
-            SELECT product_id, SUM(quantity::int) as total_sales, AVG(price::numeric) as avg_price
-            FROM orders_summary
-            WHERE date >= CURRENT_DATE - INTERVAL '30 days'
-            GROUP BY product_id
-            LIMIT 100
-        """)
+        # Priority 1: Real sales data from hotsale_goods dataset
+        hotsale_rows = await pool.fetch(
+            "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
+        )
+        if hotsale_rows:
+            for row in hotsale_rows:
+                p = row["payload"]
+                if isinstance(p, str):
+                    p = json.loads(p)
+                product_name = p.get("product_name", {})
+                if isinstance(product_name, dict):
+                    product_name = product_name.get("dataValue", "")
+                name_lower = str(product_name).lower().strip()
+                sale_amt = _parse_hotsale_value(p.get("prod_sale_amt"))
+                sale_num = int(_parse_hotsale_value(p.get("prod_sale_num_gmv")))
+                actual_pay = _parse_hotsale_value(p.get("prod_actual_pay_amt"))
+                avg_price = actual_pay / sale_num if sale_num > 0 else 0
+                # Match by product name to product_id
+                for product in products:
+                    if product["name"].lower().strip() == name_lower:
+                        sales_data[product["product_id"]] = {
+                            "monthly_sales": sale_num,
+                            "avg_selling_price": avg_price,
+                            "total_revenue": sale_amt,
+                        }
+                        break
+            logger.info(f"Loaded real sales data for {len(sales_data)} products from hotsale_goods")
 
-        for sale in sales:
-            sales_data[sale["product_id"]] = {
-                "monthly_sales": int(sale["total_sales"] or 0),
-                "avg_selling_price": float(sale["avg_price"] or 0),
-            }
+        # Priority 2: orders_summary table
+        if not sales_data:
+            sales = await pool.fetch("""
+                SELECT product_id, SUM(quantity::int) as total_sales, AVG(price::numeric) as avg_price
+                FROM orders_summary
+                WHERE date >= CURRENT_DATE - INTERVAL '30 days'
+                GROUP BY product_id LIMIT 100
+            """)
+            for sale in sales:
+                sales_data[sale["product_id"]] = {
+                    "monthly_sales": int(sale["total_sales"] or 0),
+                    "avg_selling_price": float(sale["avg_price"] or 0),
+                }
     except Exception as e:
-        logger.warning(f"Failed to fetch sales data, using realistic mock: {e}")
-        # 基于产品特征生成差异化销量数据
-        import hashlib
+        logger.warning(f"Failed to fetch sales data: {e}")
 
-        for product in products:
-            price = float(product["retail_price"] or 0)
-            category = product["category"] or ""
-            hash_seed = int(hashlib.md5(product["name"].encode()).hexdigest()[:8], 16)
-
-            # 价格越低，销量一般越高
-            base_sales = max(5, int(200 - price * 0.3))
-
-            # 医疗器械销量相对较低但稳定
-            if "医" in category or "器械" in category:
-                base_sales = max(3, int(base_sales * 0.4))
-
-            # 添加随机变动但保持一致性
-            variance = (hash_seed % 100) / 100  # 0-1
-            monthly_sales = max(1, int(base_sales * (0.5 + variance)))
-
+    # Fill missing products with 0 sales (no fake data)
+    for product in products:
+        if product["product_id"] not in sales_data:
             sales_data[product["product_id"]] = {
-                "monthly_sales": monthly_sales,
-                "avg_selling_price": price,
+                "monthly_sales": 0,
+                "avg_selling_price": float(product["retail_price"] or 0),
             }
 
     return products, competitor_data, sales_data

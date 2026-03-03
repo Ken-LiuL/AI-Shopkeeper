@@ -444,103 +444,91 @@ async def dashboard_alerts() -> APIResponse[list[dict]]:
 async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
     pool = pg.get_pool()
 
-    # Try to get 30 days of data from structured sales_history first
-    rows = []
-    with contextlib.suppress(Exception):
-        rows = await pool.fetch(
-            """SELECT sale_date AS date, SUM(quantity)::int AS quantity, SUM(revenue) AS revenue
-               FROM sales_history
-               WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
-               GROUP BY sale_date ORDER BY sale_date"""
-        )
+    rows: list[dict] = []
 
-    # Fallback: aggregate from raw metrics per day
+    # ── Priority 1: Daily snapshots from qnh_dataset_records ──
+    # Each sync run saves store_rank with synced_at timestamp — aggregate by date
+    with contextlib.suppress(Exception):
+        snapshot_rows = await pool.fetch("""
+            SELECT synced_at::date AS date, payload
+            FROM qnh_dataset_records
+            WHERE dataset = 'store_rank'
+              AND synced_at >= CURRENT_DATE - INTERVAL '30 days'
+            ORDER BY synced_at
+        """)
+        daily: dict[str, dict] = {}
+        for r in snapshot_rows:
+            d = str(r["date"])
+            p = r["payload"]
+            if isinstance(p, str):
+                p = json.loads(p)
+            orders = int(_parse_data_value(p.get("eff_ord_cnt")))
+            revenue = _parse_data_value(p.get("sale_amt_gmv"))
+            if d not in daily:
+                daily[d] = {"date": d, "quantity": 0, "revenue": 0.0}
+            daily[d]["quantity"] += orders
+            daily[d]["revenue"] += revenue
+        if daily:
+            rows = sorted(daily.values(), key=lambda x: x["date"])
+
+    # ── Priority 2: structured sales_history table ──
+    if not rows:
+        with contextlib.suppress(Exception):
+            db_rows = await pool.fetch(
+                """SELECT sale_date AS date, SUM(quantity)::int AS quantity, SUM(revenue) AS revenue
+                   FROM sales_history
+                   WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
+                   GROUP BY sale_date ORDER BY sale_date"""
+            )
+            rows = [
+                {"date": str(r["date"]), "quantity": r["quantity"], "revenue": float(r["revenue"])}
+                for r in db_rows
+            ]
+
+    # ── Priority 3: raw metrics per day ──
     if not rows:
         with contextlib.suppress(Exception):
             raw_rows = await pool.fetch("""
-                SELECT DISTINCT ON (created_at::date)
-                       created_at::date AS date,
-                       raw_data
+                SELECT DISTINCT ON (created_at::date) created_at::date AS date, raw_data
                 FROM qnh_store_metrics_raw
                 WHERE created_at >= CURRENT_DATE - INTERVAL '30 days'
                 ORDER BY created_at::date, created_at DESC
             """)
-
             for r in raw_rows:
-                d = str(r["date"])
                 data = r["raw_data"]
                 if isinstance(data, str):
                     data = json.loads(data)
-                orders = int(_extract_metric(data, "eff_ord_cnt"))
-                revenue = _extract_metric(data, "sale_amt_gmv")
-                rows.append({"date": d, "quantity": orders, "revenue": revenue})
+                rows.append(
+                    {
+                        "date": str(r["date"]),
+                        "quantity": int(_extract_metric(data, "eff_ord_cnt")),
+                        "revenue": _extract_metric(data, "sale_amt_gmv"),
+                    }
+                )
             rows = sorted(rows, key=lambda x: x["date"])
 
-    # If we still have insufficient data (< 7 days), simulate reasonable trend
-    result_points = []
+    # Build result — only real data, no simulation
+    result_points = [
+        SalesTrendPoint(
+            date=r["date"],
+            quantity=r["quantity"],
+            revenue=float(r["revenue"]),
+            simulated=False,
+        )
+        for r in rows
+    ]
 
-    if len(rows) < 7:
-        from datetime import date, timedelta
-
-        # Use existing data as baseline
-        if rows:
-            avg_orders = sum(r["quantity"] for r in rows) / len(rows)
-            avg_revenue = sum(r["revenue"] for r in rows) / len(rows)
-        else:
-            # Get current day metrics as baseline
-            metrics = await _get_latest_metrics(pool)
-            avg_orders = _extract_metric(metrics, "eff_ord_cnt") if metrics else 10
-            avg_revenue = _extract_metric(metrics, "sale_amt_gmv") if metrics else 500
-
-        # Generate 30 days of simulated trend data
-        import random
-
-        for i in range(29, -1, -1):  # 30 days ago to today
-            target_date = date.today() - timedelta(days=i)
-            date_str = target_date.isoformat()
-
-            # Check if we have real data for this date
-            existing = next((r for r in rows if r["date"] == date_str), None)
-            if existing:
-                result_points.append(
-                    SalesTrendPoint(
-                        date=date_str,
-                        quantity=existing["quantity"],
-                        revenue=float(existing["revenue"]),
-                        simulated=False,
-                    )
-                )
-            else:
-                # Generate simulated data with some variance
-                variance = 0.3  # 30% variance
-                sim_orders = max(0, int(avg_orders * (1 + random.uniform(-variance, variance))))
-                sim_revenue = max(0, avg_revenue * (1 + random.uniform(-variance, variance)))
-
-                result_points.append(
-                    SalesTrendPoint(
-                        date=date_str, quantity=sim_orders, revenue=sim_revenue, simulated=True
-                    )
-                )
-    else:
-        # We have sufficient real data
-        result_points = [
-            SalesTrendPoint(
-                date=str(r["date"]),
-                quantity=r["quantity"],
-                revenue=float(r["revenue"]),
-                simulated=False,
-            )
-            for r in rows
-        ]
+    # If we only have 1 data point (today), that's fine — frontend handles it
+    # As daily sync accumulates, this will fill up automatically
 
     # Calculate growth rates (day-over-day)
     for i in range(1, len(result_points)):
         prev_revenue = result_points[i - 1].revenue
         curr_revenue = result_points[i].revenue
-
         if prev_revenue > 0:
-            growth_rate = ((curr_revenue - prev_revenue) / prev_revenue) * 100
-            result_points[i].growth_rate = round(growth_rate, 2)
+            result_points[i].growth_rate = round(
+                ((curr_revenue - prev_revenue) / prev_revenue) * 100, 2
+            )
         else:
             result_points[i].growth_rate = 0.0
 
