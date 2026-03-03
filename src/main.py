@@ -36,6 +36,7 @@ from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
 from src.api.selection import router as selection_router
+from src.api.selection_intelligence import router as selection_intel_router
 from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
@@ -670,6 +671,7 @@ app.include_router(competitors_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
 app.include_router(pricing_intel_router)
+app.include_router(selection_intel_router)
 # products_pricing_router moved above products_router
 app.include_router(analytics_router)
 app.include_router(inventory_router)
