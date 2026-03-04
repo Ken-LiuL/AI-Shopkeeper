@@ -130,18 +130,16 @@ async def _generate_action_items(
     action_items = []
 
     try:
-        # 1. Check for low stock items (high priority)
+        # 1. Check for low stock items (high priority) - 用 alerts 表真实数据
         with contextlib.suppress(Exception):
             low_stock_rows = await pool.fetch(
                 """
-                SELECT name,
-                       stock,
+                SELECT p.name, p.stock,
                        COUNT(*) OVER () AS total_low_stock
-                FROM products
-                WHERE status = 'active'
-                  AND stock IS NOT NULL
-                  AND stock < 10
-                ORDER BY stock ASC NULLS LAST
+                FROM alerts a
+                JOIN products p ON a.product_id = p.product_id
+                WHERE a.alert_type = 'low_stock' AND a.status = 'pending'
+                ORDER BY p.stock ASC NULLS LAST
                 LIMIT 3
                 """
             )
@@ -149,7 +147,7 @@ async def _generate_action_items(
 
             if low_stock_count:
                 product_names = [row["name"] for row in low_stock_rows if row["name"]]
-                detail = f"{low_stock_count}款商品库存不足10件"
+                detail = f"{low_stock_count}款商品库存不足"
                 if product_names:
                     detail += f"，包括：{', '.join(product_names[:2])}"
                     if len(product_names) > 2:
@@ -445,25 +443,12 @@ async def overview() -> APIResponse[DashboardOverview]:
             if expose_cnt > 0 and today_orders > 0:
                 conversion_rate = round(today_orders / expose_cnt * 100, 2)
 
-    # Fast alert count estimate (avoid expensive full alert generation in overview)
+    # Alert count from alerts table (真实数据)
     pending_alerts = 0
     with contextlib.suppress(Exception):
-        # Count low-stock products as proxy for alert count
-        low_stock = (
-            await pool.fetchval(
-                "SELECT COUNT(*) FROM products WHERE status = 'active' AND stock IS NOT NULL AND stock < 10"
-            )
-            or 0
+        pending_alerts = (
+            await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
         )
-        pending_alerts += low_stock
-    # Add store_rank based alerts
-    if store_records:
-        for rec in store_records:
-            if _parse_data_value(rec.get("stockout_loss_amt")) > 0:
-                pending_alerts += 1
-            ot = _parse_data_value(rec.get("overtime_ord_rate"))
-            if ot > 5:
-                pending_alerts += 1
 
     pending_tasks = 0
     with contextlib.suppress(Exception):
@@ -626,6 +611,27 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
 @router.get("/top-products", response_model=APIResponse[list[TopProduct]])
 async def top_products() -> APIResponse[list[TopProduct]]:
     pool = pg.get_pool()
+
+    # ── Priority 0: products 表 monthly_sales (美团真实数据) ──
+    mt_rows = []
+    with contextlib.suppress(Exception):
+        mt_rows = await pool.fetch(
+            """SELECT product_id, name, monthly_sales,
+                      ROUND(monthly_sales * retail_price, 2) AS revenue
+               FROM products
+               WHERE status = 'active' AND monthly_sales > 0
+               ORDER BY monthly_sales DESC
+               LIMIT 10"""
+        )
+    if mt_rows:
+        return APIResponse(data=[
+            TopProduct(
+                product_id=r["product_id"],
+                name=r["name"],
+                total_sales=r["monthly_sales"],
+                revenue=float(r["revenue"] or 0),
+            ) for r in mt_rows
+        ])
 
     # ── Priority 1: Read from qnh_dataset_records (hotsale_goods) ──
     hotsale = await _get_dataset_records(pool, "hotsale_goods")

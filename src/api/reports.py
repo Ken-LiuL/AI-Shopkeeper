@@ -144,6 +144,10 @@ async def _period_report(days: int) -> dict:
         )
     if dm_row and dm_row["order_count"] > 0:
         d = dict(dm_row)
+        # 精度处理
+        for k in ["total_revenue", "avg_order_value", "commission", "settlement"]:
+            if k in d and d[k] is not None:
+                d[k] = round(float(d[k]), 2)
         d["refund_rate"] = round(d["refund_count"] / max(d["order_count"], 1), 4)
         cs_count = (
             await pool.fetchval(
