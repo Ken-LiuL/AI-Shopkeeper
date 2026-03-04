@@ -128,17 +128,17 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         with contextlib.suppress(Exception):
             low_stock_count = (
                 await pool.fetchval("""
-                SELECT COUNT(*) FROM qnh_products
-                WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
+                SELECT COUNT(*) FROM products
+                WHERE status = 'active' AND stock IS NOT NULL AND stock < 10
             """)
                 or 0
             )
 
             if low_stock_count > 0:
                 sample_products = await pool.fetch("""
-                    SELECT name FROM qnh_products
-                    WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10
-                    ORDER BY stock_num ASC LIMIT 3
+                    SELECT name FROM products
+                    WHERE status = 'active' AND stock IS NOT NULL AND stock < 10
+                    ORDER BY stock ASC LIMIT 3
                 """)
                 product_names = [row["name"] for row in sample_products]
                 detail = f"{low_stock_count}款商品库存不足10件"
@@ -160,12 +160,12 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         with contextlib.suppress(Exception):
             overpriced_count = (
                 await pool.fetchval("""
-                SELECT COUNT(*) FROM qnh_products p
-                WHERE status = '在售' AND retail_price > 100
+                SELECT COUNT(*) FROM products p
+                WHERE status = 'active' AND retail_price > 100
                 AND retail_price > (
                     SELECT AVG(retail_price) * 1.2
-                    FROM qnh_products
-                    WHERE status = '在售' AND category = p.category AND retail_price > 0
+                    FROM products
+                    WHERE status = 'active' AND category = p.category AND retail_price > 0
                 )
             """)
                 or 0
@@ -292,9 +292,9 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         with contextlib.suppress(Exception):
             top_category = await pool.fetchrow("""
                 SELECT category, COUNT(*) as cnt,
-                       COUNT(*) * 100 / (SELECT COUNT(*) FROM qnh_products WHERE status = '在售') as percentage
-                FROM qnh_products
-                WHERE status = '在售' AND category != ''
+                       COUNT(*) * 100 / (SELECT COUNT(*) FROM products WHERE status = 'active') as percentage
+                FROM products
+                WHERE status = 'active' AND category != ''
                 GROUP BY category
                 ORDER BY cnt DESC
                 LIMIT 1
@@ -312,7 +312,7 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 
         # 5. Generate growth opportunities (low priority)
         total_products = (
-            await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
+            await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
         )
         if total_products < 50:
             action_items.append(
@@ -350,7 +350,7 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
 
     today_orders = 0
     today_gmv = 0.0
@@ -398,7 +398,7 @@ async def overview() -> APIResponse[DashboardOverview]:
         # Count low-stock products as proxy for alert count
         low_stock = (
             await pool.fetchval(
-                "SELECT COUNT(*) FROM qnh_products WHERE status = '在售' AND stock_num IS NOT NULL AND stock_num < 10"
+                "SELECT COUNT(*) FROM products WHERE status = 'active' AND stock IS NOT NULL AND stock < 10"
             )
             or 0
         )
@@ -598,11 +598,11 @@ async def top_products() -> APIResponse[list[TopProduct]]:
     if not rows:
         with contextlib.suppress(Exception):
             rows = await pool.fetch("""
-                SELECT spu_id AS product_id, name,
+                SELECT product_id, name,
                        COALESCE(retail_price, 0)::numeric AS revenue,
                        1 AS total_sales
-                FROM qnh_products
-                WHERE status = '在售' AND name != '' AND retail_price IS NOT NULL
+                FROM products
+                WHERE status = 'active' AND name != '' AND retail_price IS NOT NULL
                 ORDER BY retail_price DESC
                 LIMIT 10
             """)

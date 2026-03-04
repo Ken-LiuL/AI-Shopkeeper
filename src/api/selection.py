@@ -128,9 +128,9 @@ async def get_recommendations() -> APIResponse[list[dict]]:
     with contextlib.suppress(Exception):
         # Get diverse product samples for recommendation
         products = await pool.fetch(
-            """SELECT spu_id, name, category, brand, retail_price
-               FROM qnh_products
-               WHERE status = '在售'
+            """SELECT product_id, name, category, brand, retail_price
+               FROM products
+               WHERE status = 'active'
                  AND retail_price > 0
                  AND name != ''
                  AND category != ''
@@ -140,7 +140,8 @@ async def get_recommendations() -> APIResponse[list[dict]]:
 
         for p in products:
             product_data = {
-                "spu_id": p["spu_id"],
+                "product_id": p["product_id"],
+                "spu_id": p["product_id"],
                 "name": p["name"],
                 "category": p.get("category", ""),
                 "brand": p.get("brand", ""),
@@ -185,7 +186,7 @@ async def get_recommendations() -> APIResponse[list[dict]]:
 
             recs.append(
                 {
-                    "product_id": p["spu_id"],
+                    "product_id": p["product_id"],
                     "name": p["name"],
                     "category": category,
                     "brand": p.get("brand", ""),

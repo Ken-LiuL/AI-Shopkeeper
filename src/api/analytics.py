@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 async def get_overview() -> APIResponse:
     """返回店铺基本统计概览。"""
     pool = pg.get_pool()
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
     active_products = (
-        await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
+        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
     )
     total_orders = 0
     total_revenue = 0.0
@@ -241,11 +241,11 @@ async def sales_trend(days: int = Query(30, ge=1, le=90)) -> APIResponse:
 
 @router.get("/product-performance", response_model=APIResponse[list[dict]])
 async def product_performance() -> APIResponse:
-    """Product performance analysis from qnh_products."""
+    """Product performance analysis from products."""
     pool = pg.get_pool()
     rows = await pool.fetch(
-        """SELECT spu_id AS product_id, name, category, retail_price, channel_price, status
-           FROM qnh_products
+        """SELECT product_id, name, category, retail_price, cost_price, status
+           FROM products
            WHERE name != '' AND retail_price IS NOT NULL
            ORDER BY retail_price DESC
            LIMIT 50"""
@@ -258,7 +258,7 @@ async def product_performance() -> APIResponse:
                 "name": r["name"],
                 "category": r["category"],
                 "retail_price": float(r["retail_price"]) if r["retail_price"] else 0.0,
-                "channel_price": float(r["channel_price"]) if r["channel_price"] else 0.0,
+                "cost_price": float(r["cost_price"]) if r["cost_price"] else 0.0,
                 "status": r["status"],
                 "performance_score": float(r["retail_price"])
                 if r["retail_price"]
@@ -271,7 +271,7 @@ async def product_performance() -> APIResponse:
 
 @router.get("/category-analysis", response_model=APIResponse[list[dict]])
 async def category_analysis() -> APIResponse:
-    """Category analysis aggregated from qnh_products."""
+    """Category analysis aggregated from products."""
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT category,
@@ -279,8 +279,8 @@ async def category_analysis() -> APIResponse:
                   AVG(retail_price) AS avg_price,
                   MIN(retail_price) AS min_price,
                   MAX(retail_price) AS max_price,
-                  COUNT(CASE WHEN status = '在售' THEN 1 END)::int AS active_products
-           FROM qnh_products
+                  COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS active_products
+           FROM products
            WHERE category IS NOT NULL AND category != '' AND retail_price IS NOT NULL
            GROUP BY category
            ORDER BY product_count DESC"""

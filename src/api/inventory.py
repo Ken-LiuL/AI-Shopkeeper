@@ -32,23 +32,23 @@ class RestockSuggestion(BaseModel):
 
 
 async def _get_current_inventory(limit: int = 50):
-    """从qnh_products表获取当前库存数据（优化性能）"""
+    """从 products 表获取当前库存数据（优化性能）"""
     pool = pg.get_pool()
 
     # 优化：只获取在售商品，限制数量，添加索引字段
     inventory = await pool.fetch(
         """
         SELECT
-            spu_id as product_id,
+            product_id,
             name,
             retail_price,
-            channel_price,
             cost_price,
             category,
-            channel_status
-        FROM qnh_products
+            status,
+            stock
+        FROM products
         WHERE retail_price > 0  -- 只查询有价格的商品
-        ORDER BY retail_price DESC  -- 优先返回高价值商品
+        ORDER BY updated_at DESC NULLS LAST, retail_price DESC  -- 优先返回最新且高价值商品
         LIMIT $1
     """,
         limit,
@@ -57,37 +57,18 @@ async def _get_current_inventory(limit: int = 50):
     # Convert to mutable dicts
     inventory = [dict(row) for row in inventory]
 
-    # 为每个商品估算库存（修复JSONB状态判断）
+    # 为每个商品估算库存（缺失时使用价格估算）
     for item in inventory:
-        # 基于商品状态估算库存
-        channel_status = item["channel_status"]
-        price = item["retail_price"] or 0
-
-        # 判断是否在售（任一平台为"on"）
-        is_active = False
-        if channel_status and isinstance(channel_status, dict):
-            is_active = (
-                channel_status.get("meituan") == "on"
-                or channel_status.get("eleme") == "on"
-                or channel_status.get("jddj") == "on"
-            )
-        elif channel_status is None and price > 0:
-            # 如果没有渠道状态但有价格，认为是在售
-            is_active = True
-
-        if is_active:
-            # 在售商品假设有库存，根据价格估算
+        price = float(item.get("retail_price") or 0)
+        stock = item.get("stock")
+        if stock is None or stock <= 0:
             if price > 500:
-                estimated_stock = 20  # 高价商品库存较少
+                stock = 20  # 高价商品库存较少
             elif price > 100:
-                estimated_stock = 50  # 中价商品
+                stock = 50  # 中价商品
             else:
-                estimated_stock = 100  # 低价商品库存较多
-        else:
-            # 非在售商品
-            estimated_stock = 5  # 少量库存
-
-        item["stock"] = estimated_stock
+                stock = 100  # 低价商品库存较多
+        item["stock"] = int(stock)
 
     return inventory
 
@@ -129,8 +110,8 @@ async def _calculate_sales_velocity():
             "SELECT payload FROM qnh_dataset_records WHERE dataset = 'hotsale_goods'"
         )
         # Build name→product_id mapping
-        products = await pool.fetch("SELECT spu_id, name FROM qnh_products WHERE status = '在售'")
-        name_to_id = {p["name"].lower().strip(): p["spu_id"] for p in products}
+        products = await pool.fetch("SELECT product_id, name FROM products WHERE status = 'active'")
+        name_to_id = {p["name"].lower().strip(): p["product_id"] for p in products}
 
         for row in hotsale_rows:
             p = row["payload"]
@@ -392,86 +373,41 @@ async def get_restock_suggestions(
 
 @router.get("/overview", response_model=APIResponse[dict])
 async def get_inventory_overview() -> APIResponse[dict]:
-    """库存总览 - 从 qnh_products 表获取数据并估算库存"""
+    """库存总览 - 基于 products 表的数据"""
 
     try:
         pool = pg.get_pool()
 
-        # 从qnh_products表获取基本统计（修复JSONB查询）
         overview = await pool.fetchrow("""
             SELECT
                 COUNT(*) as total_products,
-                -- 修复：正确查询JSONB字段，检查任一平台为"on"状态
-                COUNT(CASE
-                    WHEN channel_status IS NOT NULL AND (
-                        channel_status->>'meituan' = 'on' OR
-                        channel_status->>'eleme' = 'on' OR
-                        channel_status->>'jddj' = 'on'
-                    ) THEN 1
-                    -- 如果channel_status为null，用retail_price>0作为在售判断
-                    WHEN channel_status IS NULL AND retail_price > 0 THEN 1
-                END) as active_products,
-                -- 缺货商品：任一平台标记为"off"且没有任何平台"on"
-                COUNT(CASE
-                    WHEN channel_status IS NOT NULL AND (
-                        channel_status->>'meituan' = 'off' OR
-                        channel_status->>'eleme' = 'off' OR
-                        channel_status->>'jddj' = 'off'
-                    ) AND NOT (
-                        channel_status->>'meituan' = 'on' OR
-                        channel_status->>'eleme' = 'on' OR
-                        channel_status->>'jddj' = 'on'
-                    ) THEN 1
-                END) as out_of_stock_count,
-                -- 非活跃：没有任何平台为"on"状态
-                COUNT(CASE
-                    WHEN channel_status IS NOT NULL AND NOT (
-                        channel_status->>'meituan' = 'on' OR
-                        channel_status->>'eleme' = 'on' OR
-                        channel_status->>'jddj' = 'on'
-                    ) THEN 1
-                    WHEN channel_status IS NULL AND (retail_price IS NULL OR retail_price <= 0) THEN 1
-                END) as inactive_products
-            FROM qnh_products
-            WHERE category IS NOT NULL AND category != ''
+                COUNT(*) FILTER (WHERE status = 'active') as active_products,
+                COUNT(*) FILTER (WHERE status != 'active') as inactive_products,
+                COUNT(*) FILTER (WHERE COALESCE(stock, 0) = 0) as out_of_stock_count,
+                AVG(COALESCE(stock, 0)) as avg_stock
+            FROM products
         """)
 
-        # 模拟库存数据：基于商品状态和价格估算库存
         estimated_inventory = await pool.fetch("""
             SELECT
                 category,
                 COUNT(*) as product_count,
-                COUNT(CASE WHEN channel_status::text LIKE '%在售%' THEN 1 END) as active_count,
-                COUNT(CASE WHEN channel_status::text LIKE '%缺货%' THEN 1 END) as out_of_stock_count,
-                AVG(retail_price) as avg_price,
-                -- 基于状态和价格估算库存
-                SUM(CASE
-                    WHEN channel_status::text LIKE '%在售%' THEN
-                        CASE
-                            WHEN retail_price > 500 THEN 20  -- 高价商品库存少
-                            WHEN retail_price > 100 THEN 50  -- 中价商品
-                            ELSE 100  -- 低价商品库存多
-                        END
-                    WHEN channel_status::text LIKE '%缺货%' THEN 0
-                    ELSE 5  -- 其他状态少量库存
-                END) as estimated_total_stock
-            FROM qnh_products
+                COUNT(*) FILTER (WHERE status = 'active') as active_count,
+                SUM(COALESCE(stock, 0)) as total_stock,
+                AVG(retail_price) as avg_price
+            FROM products
             WHERE category IS NOT NULL AND category != ''
             GROUP BY category
-            ORDER BY estimated_total_stock DESC
+            ORDER BY total_stock DESC NULLS LAST
         """)
 
-        # 计算总库存
-        total_estimated_stock = sum(
-            int(row["estimated_total_stock"] or 0) for row in estimated_inventory
-        )
+        total_estimated_stock = sum(int(row["total_stock"] or 0) for row in estimated_inventory)
 
-        # 估算低库存商品数量（在售商品中价格>200的，假设库存紧张）
         low_stock_estimate = (
             await pool.fetchval("""
             SELECT COUNT(*)
-            FROM qnh_products
-            WHERE channel_status::text LIKE '%在售%' AND retail_price > 200
+            FROM products
+            WHERE status = 'active' AND COALESCE(stock, 0) < 10
         """)
             or 0
         )
@@ -486,21 +422,15 @@ async def get_inventory_overview() -> APIResponse[dict]:
             high_priority = medium_priority = total_suggestions = 0
 
         result = {
-            "total_products": int(overview["total_products"]) if overview["total_products"] else 0,
-            "active_products": int(overview["active_products"])
-            if overview["active_products"]
-            else 0,
-            "total_stock": total_estimated_stock,
-            "low_stock_count": int(low_stock_estimate),
-            "out_of_stock_count": int(overview["out_of_stock_count"])
-            if overview["out_of_stock_count"]
-            else 0,
-            "avg_stock": round(
-                total_estimated_stock / max(int(overview["active_products"] or 1), 1), 2
-            ),
-            "restock_alerts": {
-                "high_priority": high_priority,
-                "medium_priority": medium_priority,
+                "total_products": int(overview["total_products"] or 0),
+                "active_products": int(overview["active_products"] or 0),
+                "total_stock": total_estimated_stock,
+                "low_stock_count": int(low_stock_estimate),
+                "out_of_stock_count": int(overview["out_of_stock_count"] or 0),
+                "avg_stock": round(float(overview["avg_stock"] or 0), 2),
+                "restock_alerts": {
+                    "high_priority": high_priority,
+                    "medium_priority": medium_priority,
                 "total": total_suggestions,
             },
             "category_breakdown": [
@@ -508,9 +438,13 @@ async def get_inventory_overview() -> APIResponse[dict]:
                     "category": row["category"],
                     "product_count": int(row["product_count"]),
                     "active_count": int(row["active_count"]),
-                    "estimated_stock": int(row["estimated_total_stock"] or 0),
+                    "estimated_stock": int(row["total_stock"] or 0),
                     "avg_price": round(float(row["avg_price"] or 0), 2),
-                    "out_of_stock": int(row["out_of_stock_count"]),
+                    "out_of_stock": int(
+                        row["product_count"] - row["active_count"]
+                        if row["product_count"] and row["active_count"] is not None
+                        else 0
+                    ),
                 }
                 for row in estimated_inventory
             ],
@@ -525,7 +459,7 @@ async def get_inventory_overview() -> APIResponse[dict]:
                     * 100,
                     1,
                 ),  # 有货率
-                "data_source": "qnh_products (estimated)",
+                "data_source": "products",
             },
         }
 
@@ -651,37 +585,34 @@ async def get_inventory_status() -> APIResponse[dict]:
                 }
             )
 
-        # Fallback：使用 qnh_products 并根据 channel_status 估算库存状态
-        qnh_rows = await pool.fetch("""
-            SELECT spu_id AS product_id, name, channel_status, retail_price, category
-            FROM qnh_products
+        # Fallback：使用 products 表并根据价格估算库存状态
+        fallback_rows = await pool.fetch("""
+            SELECT product_id, name, retail_price, status, stock
+            FROM products
             WHERE name IS NOT NULL AND name != ''
         """)
 
         normal_count, low_stock_list, out_of_stock_list = 0, [], []
-        for r in qnh_rows:
-            cs = r["channel_status"]
+        for r in fallback_rows:
             price = float(r["retail_price"] or 0)
-            is_active = False
-            is_out = False
-            if isinstance(cs, dict):
-                is_active = any(cs.get(k) == "on" for k in ("meituan", "eleme", "jddj"))
-                is_out = not is_active and any(
-                    cs.get(k) == "off" for k in ("meituan", "eleme", "jddj")
-                )
-            elif price > 0:
-                is_active = True
+            stock = int(r["stock"] or 0)
+            status = r["status"]
+            if stock <= 0:
+                if price > 0:
+                    stock = 20 if price > 500 else 10
+                else:
+                    stock = 0
 
             item = {
                 "id": r["product_id"],
                 "name": r["name"],
-                "stock": 0 if is_out else (20 if price > 500 else 50 if price > 100 else 100),
+                "stock": stock,
                 "threshold": 10,
             }
 
-            if is_out:
+            if stock == 0 or status != "active":
                 out_of_stock_list.append(item)
-            elif is_active and item["stock"] < 20:
+            elif stock < item["threshold"]:
                 low_stock_list.append(item)
             else:
                 normal_count += 1
@@ -695,7 +626,7 @@ async def get_inventory_status() -> APIResponse[dict]:
                 },
                 "low_stock_products": low_stock_list[:50],
                 "out_of_stock_products": out_of_stock_list[:50],
-                "data_source": "qnh_products (estimated)",
+                "data_source": "products (estimated)",
             }
         )
 

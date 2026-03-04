@@ -99,8 +99,8 @@ async def pricing_report() -> APIResponse[PricingReport]:
 
     # 2. 获取商品库数据（含成本价）
     products = await pool.fetch("""
-        SELECT spu_id, name, retail_price, cost_price, category
-        FROM qnh_products WHERE status = '在售' AND retail_price > 0
+        SELECT product_id, name, retail_price, cost_price, category
+        FROM products WHERE status = 'active' AND retail_price > 0
     """)
     product_map = {p["name"]: dict(p) for p in products}
 
@@ -338,8 +338,8 @@ async def quick_wins() -> APIResponse[list[dict]]:
     # 2. 低价高频商品提价（价格敏感度低）
     try:
         low_price_high_freq = await pool.fetch("""
-            SELECT name, retail_price FROM qnh_products
-            WHERE status = '在售' AND retail_price BETWEEN 1 AND 15 AND retail_price > 0
+            SELECT name, retail_price FROM products
+            WHERE status = 'active' AND retail_price BETWEEN 1 AND 15 AND retail_price > 0
             ORDER BY retail_price ASC LIMIT 10
         """)
         for p in low_price_high_freq:

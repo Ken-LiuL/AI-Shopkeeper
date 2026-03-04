@@ -51,8 +51,8 @@ async def category_gaps() -> APIResponse[list[dict]]:
     cats = await pool.fetch("""
         SELECT category, COUNT(*) as cnt,
                AVG(retail_price) as avg_price,
-               SUM(CASE WHEN status = '在售' THEN 1 ELSE 0 END) as active_cnt
-        FROM qnh_products
+               SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) as active_cnt
+        FROM products
         WHERE category IS NOT NULL AND category != ''
         GROUP BY category
         ORDER BY cnt DESC
@@ -130,7 +130,7 @@ async def selection_opportunities() -> APIResponse[dict]:
 
         # Match to category
         prod = await pool.fetchrow(
-            "SELECT category FROM qnh_products WHERE name = $1 LIMIT 1", name
+            "SELECT category FROM products WHERE name = $1 LIMIT 1", name
         )
         cat = prod["category"] if prod else "未分类"
         short_cat = cat.split(">")[0] if ">" in cat else cat
@@ -156,7 +156,7 @@ async def selection_opportunities() -> APIResponse[dict]:
     # 3. 低SKU高收入 = 选品不够
     cat_sku = await pool.fetch("""
         SELECT SPLIT_PART(category, '>', 1) as short_cat, COUNT(*) as sku_count
-        FROM qnh_products WHERE status = '在售' AND category != ''
+        FROM products WHERE status = 'active' AND category != ''
         GROUP BY SPLIT_PART(category, '>', 1)
     """)
     sku_map = {c["short_cat"]: c["sku_count"] for c in cat_sku}

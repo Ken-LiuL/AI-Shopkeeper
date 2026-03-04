@@ -208,7 +208,7 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
         try:
             cats = await pool.fetch("""
                 SELECT category, COUNT(*) as cnt, AVG(retail_price) as avg_price
-                FROM qnh_products WHERE status = '在售' AND category != ''
+                FROM products WHERE status = 'active' AND category != ''
                 GROUP BY category ORDER BY cnt DESC LIMIT 10
             """)
             business_data["categories"]["performance"] = [
@@ -275,12 +275,11 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
             rows = await pool.fetch(
                 """
                 SELECT sh.product_id,
-                       COALESCE(p.name, qp.name, sh.product_id) AS product_name,
+                       COALESCE(p.name, sh.product_id::text) AS product_name,
                        SUM(sh.quantity)::int AS qty,
                        SUM(sh.revenue) AS revenue
                 FROM sales_history sh
                 LEFT JOIN products p ON sh.product_id = p.product_id
-                LEFT JOIN qnh_products qp ON qp.spu_id = sh.product_id
                 WHERE sh.sale_date >= $1
                 GROUP BY sh.product_id, product_name
                 ORDER BY revenue DESC

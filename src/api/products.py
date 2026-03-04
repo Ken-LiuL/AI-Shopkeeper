@@ -178,7 +178,7 @@ async def list_categories() -> APIResponse[list[dict]]:
     pool = pg.get_pool()
     rows = await pool.fetch(
         """SELECT category, COUNT(*)::int AS product_count
-           FROM qnh_products WHERE category IS NOT NULL
+           FROM products WHERE category IS NOT NULL
            GROUP BY category ORDER BY product_count DESC"""
     )
     return APIResponse(data=[dict(r) for r in rows])
@@ -212,23 +212,20 @@ async def low_stock(
             offset,
         )
     else:
-        # Fallback: Generate low-stock alerts from qnh_products table
-        # Since qnh_products doesn't have stock data, we'll simulate based on retail_price and status
-        logger.info(
-            "No stock data in structured table, using qnh_products for low-stock simulation"
-        )
+        # Fallback: simulate low-stock alerts from products table when stock is missing
+        logger.info("No stock data available; simulating low-stock list from products table")
 
-        # Get products that might need restocking (lower priced items as proxy for fast-moving)
         rows = await pool.fetch(
-            """SELECT spu_id as product_id, name, brand, category, retail_price,
-                      CASE WHEN status = '在售' THEN 'active' ELSE 'inactive' END as status,
-                      -- Simulate low stock based on price (lower price = higher turnover)
-                      CASE WHEN retail_price < 20 THEN 5
-                           WHEN retail_price < 50 THEN 8
-                           ELSE 12 END as stock,
-                      'qnh_products' as source
-               FROM qnh_products
-               WHERE status = '在售'
+            """SELECT product_id, name, brand, category, retail_price, status,
+                      COALESCE(
+                          stock,
+                          CASE WHEN retail_price < 20 THEN 5
+                               WHEN retail_price < 50 THEN 8
+                               ELSE 12 END
+                      ) as stock,
+                      'products' as source
+               FROM products
+               WHERE status = 'active'
                  AND retail_price > 0
                  AND name != ''
                ORDER BY retail_price ASC
@@ -237,11 +234,10 @@ async def low_stock(
             offset,
         )
 
-        # Get total count for pagination
         total = (
             await pool.fetchval(
-                """SELECT COUNT(*) FROM qnh_products
-               WHERE status = '在售'
+                """SELECT COUNT(*) FROM products
+               WHERE status = 'active'
                  AND retail_price > 0
                  AND name != ''"""
             )
@@ -277,18 +273,20 @@ async def inventory_overview() -> APIResponse[dict]:
     """Inventory overview and status summary."""
     pool = pg.get_pool()
 
-    # Get inventory status summary from qnh_products
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    # Get inventory status summary from products table
+    total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
     active_products = (
-        await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 0
+        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
     )
     inactive_products = total_products - active_products
 
     # Simulate low stock products (using price as proxy for turnover)
     low_stock_count = (
         await pool.fetchval(
-            """SELECT COUNT(*) FROM qnh_products
-           WHERE status = '在售' AND retail_price > 0 AND retail_price < 30"""
+            """SELECT COUNT(*) FROM products
+           WHERE status = 'active'
+             AND COALESCE(stock, 0) > 0
+             AND COALESCE(stock, 0) < 30"""
         )
         or 0
     )
@@ -298,22 +296,21 @@ async def inventory_overview() -> APIResponse[dict]:
         """SELECT category,
                   COUNT(*)::int AS count,
                   COUNT(CASE WHEN status = '在售' THEN 1 END)::int AS active_count
-           FROM qnh_products
+           FROM products
            WHERE category IS NOT NULL AND category != ''
            GROUP BY category
            ORDER BY count DESC
            LIMIT 10"""
     )
 
-    # Get recent low stock items (simulated based on price)
+    # Get recent low stock items
     low_stock_items = await pool.fetch(
-        """SELECT spu_id AS product_id, name, category, retail_price,
-                  CASE WHEN retail_price < 20 THEN 5
-                       WHEN retail_price < 50 THEN 8
-                       ELSE 12 END AS estimated_stock
-           FROM qnh_products
-           WHERE status = '在售' AND retail_price > 0 AND retail_price < 30
-           ORDER BY retail_price ASC
+        """SELECT product_id, name, category, retail_price,
+                  COALESCE(stock, 0) AS estimated_stock
+           FROM products
+           WHERE status = 'active'
+             AND COALESCE(stock, 0) < 30
+           ORDER BY COALESCE(stock, 0) ASC, updated_at DESC NULLS LAST
            LIMIT 10"""
     )
 
@@ -377,9 +374,9 @@ async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[
     pool = pg.get_pool()
     query = f"%{body.query}%"
     rows = await pool.fetch(
-        """SELECT spu_id, name, brand, category, spec, retail_price, status
-           FROM qnh_products
-           WHERE name ILIKE $1 OR brand ILIKE $1 OR spec ILIKE $1 OR category ILIKE $1
+        """SELECT product_id, name, brand, category, description AS spec, retail_price, status
+           FROM products
+           WHERE name ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1 OR category ILIKE $1
            LIMIT $2""",
         query,
         body.limit,
@@ -389,7 +386,7 @@ async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[
 
 @router.post("/knowledge/build", response_model=APIResponse[dict])
 async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> APIResponse[dict]:
-    """触发商品知识库构建（从 qnh_products 同步 → embedding → pgvector）。"""
+    """触发商品知识库构建（从 products 同步 → embedding → pgvector）。"""
     from src.agents.customer_service.skills_registry import get_product_knowledge
 
     pk = get_product_knowledge()
@@ -411,13 +408,11 @@ async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> 
 async def knowledge_stats() -> APIResponse[dict]:
     """商品知识库统计信息。"""
     pool = pg.get_pool()
-    source_products = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+    source_products = await pool.fetchval("SELECT COUNT(*) FROM products")
     with_category = await pool.fetchval(
-        "SELECT COUNT(*) FROM qnh_products WHERE category IS NOT NULL AND category != ''"
+        "SELECT COUNT(*) FROM products WHERE category IS NOT NULL AND category != ''"
     )
-    with_embedding = await pool.fetchval(
-        "SELECT COUNT(*) FROM qnh_products WHERE embedding IS NOT NULL"
-    )
+    with_embedding = 0  # products table no longer stores embeddings directly
     return APIResponse(
         data={
             "source_products": source_products,
@@ -433,7 +428,7 @@ async def knowledge_stats() -> APIResponse[dict]:
 
 @router.get("/pricing-analysis", response_model=APIResponse[dict])
 async def get_pricing_analysis() -> APIResponse[dict]:
-    """商品定价分析 - 从 qnh_products 表分析各品类价格分布和利润率
+    """商品定价分析 - 从 products 表分析各品类价格分布和利润率
 
     当 cost_price 缺失时，按医疗器械行业平均利润率估算：
     - 高价设备(>500): 35% 毛利
@@ -449,7 +444,6 @@ async def get_pricing_analysis() -> APIResponse[dict]:
                 category,
                 COUNT(*) as product_count,
                 AVG(retail_price::numeric) as avg_retail_price,
-                AVG(channel_price::numeric) as avg_channel_price,
                 AVG(CASE
                     WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
                     WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
@@ -463,7 +457,7 @@ async def get_pricing_analysis() -> APIResponse[dict]:
                     WHEN retail_price::numeric > 100 THEN 30.0
                     ELSE 25.0
                 END) as avg_margin_percent
-            FROM qnh_products
+            FROM products
             WHERE retail_price::numeric > 0 AND category IS NOT NULL AND category != ''
             GROUP BY category
             HAVING COUNT(*) >= 3
@@ -484,7 +478,7 @@ async def get_pricing_analysis() -> APIResponse[dict]:
                     THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
                     ELSE NULL
                 END) as avg_margin_percent
-            FROM qnh_products
+            FROM products
             WHERE retail_price::numeric > 0
             GROUP BY
                 CASE
@@ -501,17 +495,17 @@ async def get_pricing_analysis() -> APIResponse[dict]:
         # 估算成本价：有真实数据用真实，没有则按品类估算
         low_margin_products = await pool.fetch("""
             WITH products_with_cost AS (
-                SELECT spu_id, name, category, retail_price::numeric as rp,
+                SELECT product_id, name, category, retail_price::numeric as rp,
                     CASE
                         WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
                         WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
                         WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
                         ELSE retail_price::numeric * 0.75
                     END as cp
-                FROM qnh_products
+                FROM products
                 WHERE retail_price::numeric > 0
             )
-            SELECT spu_id, name, category, rp as retail_price, cp as cost_price,
+            SELECT product_id, name, category, rp as retail_price, cp as cost_price,
                    (rp - cp) / rp * 100 as margin_percent
             FROM products_with_cost
             WHERE (rp - cp) / rp * 100 < 15
@@ -521,17 +515,17 @@ async def get_pricing_analysis() -> APIResponse[dict]:
 
         high_margin_products = await pool.fetch("""
             WITH products_with_cost AS (
-                SELECT spu_id, name, category, retail_price::numeric as rp,
+                SELECT product_id, name, category, retail_price::numeric as rp,
                     CASE
                         WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
                         WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
                         WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
                         ELSE retail_price::numeric * 0.75
                     END as cp
-                FROM qnh_products
+                FROM products
                 WHERE retail_price::numeric > 0
             )
-            SELECT spu_id, name, category, rp as retail_price, cp as cost_price,
+            SELECT product_id, name, category, rp as retail_price, cp as cost_price,
                    (rp - cp) / rp * 100 as margin_percent
             FROM products_with_cost
             WHERE (rp - cp) / rp * 100 > 40
@@ -543,7 +537,7 @@ async def get_pricing_analysis() -> APIResponse[dict]:
             suggested_price = float(product["cost_price"]) * 1.25
             pricing_suggestions.append(
                 {
-                    "product_id": product["spu_id"],
+                    "product_id": product["product_id"],
                     "name": product["name"],
                     "current_price": float(product["retail_price"]),
                     "suggested_price": round(suggested_price, 2),
@@ -558,7 +552,6 @@ async def get_pricing_analysis() -> APIResponse[dict]:
                     "category": row["category"],
                     "product_count": int(row["product_count"]),
                     "avg_retail_price": round(float(row["avg_retail_price"] or 0), 2),
-                    "avg_channel_price": round(float(row["avg_channel_price"] or 0), 2),
                     "avg_cost_price": round(float(row["avg_cost_price"] or 0), 2),
                     "avg_margin_percent": round(float(row["avg_margin_percent"] or 0), 2),
                 }
@@ -856,11 +849,11 @@ async def get_product_analysis() -> APIResponse[dict]:
                     }
                 )
 
-        # Fallback：若无订单数据，使用 qnh_products 估算
+        # Fallback：若无订单数据，使用 products 表估算
         if not top_sellers and not slow_movers:
             fallback = await pool.fetch("""
-                SELECT spu_id AS product_id, name, retail_price, cost_price, category
-                FROM qnh_products
+                SELECT product_id, name, retail_price, cost_price, category
+                FROM products
                 WHERE retail_price > 0
                 ORDER BY retail_price DESC
                 LIMIT 40

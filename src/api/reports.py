@@ -226,18 +226,18 @@ async def product_performance(
         limit,
     )
 
-    # Fallback: generate from qnh_products table by price ranking
+    # Fallback: generate from products table by price ranking
     if not rows:
         with contextlib.suppress(Exception):
             rows = await pool.fetch(
-                """SELECT spu_id AS product_id,
+                """SELECT product_id,
                           name,
                           category,
                           1::int AS total_qty,
                           COALESCE(retail_price, 0) AS total_revenue,
                           1::int AS order_count
-                   FROM qnh_products
-                   WHERE status = '在售' AND name != ''
+                   FROM products
+                   WHERE status = 'active' AND name != ''
                    ORDER BY retail_price DESC NULLS LAST
                    LIMIT $1""",
                 limit,
@@ -266,7 +266,7 @@ async def category_analysis(
         days,
     )
 
-    # Fallback: generate from qnh_products table by category aggregation
+    # Fallback: generate from products table by category aggregation
     if not rows:
         with contextlib.suppress(Exception):
             rows = await pool.fetch(
@@ -274,8 +274,8 @@ async def category_analysis(
                           COUNT(*)::int AS product_count,
                           COUNT(*)::int AS total_qty,
                           SUM(COALESCE(retail_price, 0)) AS total_revenue
-                   FROM qnh_products
-                   WHERE status = '在售' AND category IS NOT NULL AND category != ''
+                   FROM products
+                   WHERE status = 'active' AND category IS NOT NULL AND category != ''
                    GROUP BY category
                    ORDER BY total_revenue DESC""",
             )

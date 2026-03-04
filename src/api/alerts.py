@@ -114,19 +114,19 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     # 2. Product alerts - low revenue products (filter out promotional items < ¥1)
     with contextlib.suppress(Exception):
         low_revenue_products = await pool.fetch(
-            """SELECT spu_id, name, retail_price FROM qnh_products
-               WHERE status = '在售' AND retail_price BETWEEN 1 AND 10
+            """SELECT product_id, name, retail_price FROM products
+               WHERE status = 'active' AND retail_price BETWEEN 1 AND 10
                ORDER BY retail_price ASC LIMIT 3"""
         )
         for product in low_revenue_products:
             alerts.append(
                 {
-                    "alert_id": f"low_revenue_{product['spu_id']}",
+                    "alert_id": f"low_revenue_{product['product_id']}",
                     "type": "pricing",
                     "severity": "low",
                     "title": "低价商品提醒",
                     "description": f"商品 {product['name']} 售价偏低 (¥{product['retail_price']})",
-                    "product_id": product["spu_id"],
+                    "product_id": product["product_id"],
                     "status": "pending",
                     "created_at": "2026-03-01T06:00:00Z",
                     "resolved_at": None,
@@ -137,13 +137,13 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     # 3. High price alerts - products with unusually high prices (only if significantly higher than category average)
     with contextlib.suppress(Exception):
         high_price_products = await pool.fetch(
-            """SELECT p.spu_id, p.name, p.retail_price,
+            """SELECT p.product_id, p.name, p.retail_price,
                       AVG(p2.retail_price) as category_avg_price
-               FROM qnh_products p
-               JOIN qnh_products p2 ON p.category = p2.category
-               WHERE p.status = '在售' AND p.retail_price > 200
-                     AND p2.status = '在售' AND p2.retail_price > 0
-               GROUP BY p.spu_id, p.name, p.retail_price
+               FROM products p
+               JOIN products p2 ON p.category = p2.category
+               WHERE p.status = 'active' AND p.retail_price > 200
+                     AND p2.status = 'active' AND p2.retail_price > 0
+               GROUP BY p.product_id, p.name, p.retail_price
                HAVING p.retail_price > AVG(p2.retail_price) * 1.5
                ORDER BY p.retail_price / AVG(p2.retail_price) DESC
                LIMIT 2"""
@@ -152,12 +152,12 @@ async def _generate_smart_alerts(pool) -> list[dict]:
             suggested_price = product["category_avg_price"] * 1.2  # 20% premium
             alerts.append(
                 {
-                    "alert_id": f"high_price_{product['spu_id']}",
+                    "alert_id": f"high_price_{product['product_id']}",
                     "type": "pricing",
                     "severity": "medium",
                     "title": "高价商品提醒",
                     "description": f"商品 {product['name']} 售价¥{product['retail_price']}，高于同类均价{product['retail_price'] / product['category_avg_price']:.1f}倍",
-                    "product_id": product["spu_id"],
+                    "product_id": product["product_id"],
                     "status": "pending",
                     "created_at": "2026-03-01T06:30:00Z",
                     "resolved_at": None,
@@ -200,11 +200,11 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     # 5. Category concentration alert - too many products in one category
     with contextlib.suppress(Exception):
         top_cat = await pool.fetchrow(
-            """SELECT category, COUNT(*)::int AS cnt FROM qnh_products
-               WHERE status = '在售' AND category != ''
+            """SELECT category, COUNT(*)::int AS cnt FROM products
+               WHERE status = 'active' AND category != ''
                GROUP BY category ORDER BY cnt DESC LIMIT 1"""
         )
-        total = await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE status = '在售'") or 1
+        total = await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 1
         if top_cat and top_cat["cnt"] > total * 0.4:  # Raised threshold to 40% to reduce noise
             alerts.append(
                 {
@@ -222,7 +222,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
             )
 
     # 6. System alerts (only show if actionable)
-    product_count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products") or 0
+    product_count = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
     if product_count < 50:  # Only alert if too few products (actionable)
         alerts.append(
             {

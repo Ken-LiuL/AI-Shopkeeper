@@ -39,10 +39,10 @@ async def search_product_knowledge_v1(
         try:
             # Search products by name/category/brand
             fallback_results = await pool.fetch(
-                """SELECT spu_id, name, category, brand, spec, retail_price, status
-                   FROM qnh_products
-                   WHERE (name ILIKE $1 OR category ILIKE $1 OR brand ILIKE $1 OR spec ILIKE $1)
-                   AND status = '在售'
+                """SELECT product_id, name, category, brand, description AS spec, retail_price, status
+                   FROM products
+                   WHERE (name ILIKE $1 OR category ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)
+                   AND status = 'active'
                    ORDER BY
                      CASE WHEN name ILIKE $1 THEN 1
                           WHEN category ILIKE $1 THEN 2
@@ -57,7 +57,7 @@ async def search_product_knowledge_v1(
             # Convert to knowledge format
             results = [
                 {
-                    "product_id": str(r["spu_id"]),
+                    "product_id": str(r["product_id"]),
                     "name": r["name"],
                     "category": r.get("category", ""),
                     "brand": r.get("brand", ""),
@@ -117,9 +117,9 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
 
     stats: dict = {}
     try:
-        stats["source_products"] = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
+        stats["source_products"] = await pool.fetchval("SELECT COUNT(*) FROM products")
         stats["source_with_images"] = await pool.fetchval(
-            "SELECT COUNT(*) FROM qnh_products WHERE image_url IS NOT NULL AND image_url != ''"
+            "SELECT COUNT(*) FROM products WHERE image_url IS NOT NULL AND image_url != ''"
         )
     except Exception:
         stats["source_products"] = 0
@@ -164,20 +164,20 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
 async def list_knowledge_products(
     limit: int = Query(50, ge=1, le=200),
 ) -> APIResponse[list[dict]]:
-    # Neo4j is not available, use qnh_products as fallback
+    # Neo4j is not available, use products table as fallback
     try:
         pool = pg.get_pool()
         rows = await pool.fetch(
-            """SELECT spu_id as id, name, category, brand, spec as description, retail_price, status
-               FROM qnh_products
-               WHERE status = '在售'
+            """SELECT product_id as id, name, category, brand, description as description, retail_price, status
+               FROM products
+               WHERE status = 'active'
                ORDER BY retail_price DESC
                LIMIT $1""",
             limit,
         )
         return APIResponse(data=[dict(r) for r in rows])
     except Exception as e:
-        logger.error(f"Failed to fetch products from qnh_products: {e}")
+        logger.error(f"Failed to fetch products from products table: {e}")
         return APIResponse(data=[], message="Product database unavailable")
 
 
@@ -378,10 +378,10 @@ async def search_knowledge(
         try:
             pool = pg.get_pool()
             rows = await pool.fetch(
-                """SELECT spu_id, name, category, brand, spec, retail_price
-                   FROM qnh_products
+                """SELECT product_id, name, category, brand, description AS spec, retail_price
+                   FROM products
                    WHERE (name ILIKE $1 OR category ILIKE $1 OR brand ILIKE $1)
-                   AND status = '在售'
+                   AND status = 'active'
                    ORDER BY retail_price DESC
                    LIMIT $2""",
                 f"%{q}%",

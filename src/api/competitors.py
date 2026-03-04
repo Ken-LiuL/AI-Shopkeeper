@@ -123,8 +123,8 @@ async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
 
         # 获取主要商品信息
         products = await pool.fetch("""
-            SELECT spu_id, name, retail_price, category, brand
-            FROM qnh_products
+            SELECT product_id, name, retail_price, category, brand
+            FROM products
             WHERE retail_price > 0
             ORDER BY retail_price DESC
             LIMIT 20
@@ -138,7 +138,7 @@ async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
         demo_data_count = 0
 
         for product in products:
-            product_id = product["spu_id"]
+            product_id = product["product_id"]
             product_name = product["name"]
             our_price = float(product["retail_price"])
             category = product["category"] or ""
@@ -303,9 +303,9 @@ async def get_product_competitor_analysis(
 
         product = await pool.fetchrow(
             """
-            SELECT spu_id, name, retail_price, category, brand
-            FROM qnh_products
-            WHERE spu_id = $1
+            SELECT product_id, name, retail_price, category, brand
+            FROM products
+            WHERE product_id = $1
         """,
             product_id,
         )
