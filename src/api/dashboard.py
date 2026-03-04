@@ -358,28 +358,27 @@ async def overview() -> APIResponse[DashboardOverview]:
     total_customers = 0
     conversion_rate = 0.0
 
-    # ── Priority 1: Read from qnh_dataset_records (store_rank aggregated) ──
+    # ── Priority 1: real orders from meituan syncer ──
+    with contextlib.suppress(Exception):
+        row = await pool.fetchrow(
+            """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
+               FROM orders
+               WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
+        )
+        if row and row["cnt"] > 0:
+            today_orders = int(row["cnt"])
+            today_gmv = float(row["gmv"])
+            avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
+
+    # ── Priority 2 (fallback): Read from qnh_dataset_records (store_rank aggregated) ──
     store_records = await _get_dataset_records(pool, "store_rank")
-    if store_records:
+    if today_orders == 0 and store_records:
         for rec in store_records:
             today_orders += int(_parse_data_value(rec.get("eff_ord_cnt")))
             today_gmv += _parse_data_value(rec.get("sale_amt_gmv"))
             total_customers += int(_parse_data_value(rec.get("user_cnt")))
         if today_orders > 0 and today_gmv > 0:
             avg_order_value = today_gmv / today_orders
-
-    # ── Priority 2: real orders from meituan syncer ──
-    if today_orders == 0:
-        with contextlib.suppress(Exception):
-            row = await pool.fetchrow(
-                """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
-                   FROM orders
-                   WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
-            )
-            if row and row["cnt"] > 0:
-                today_orders = int(row["cnt"])
-                today_gmv = float(row["gmv"])
-                avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
 
     # ── Fallback: old raw metrics table ──
     if today_orders == 0:
