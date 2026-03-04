@@ -36,6 +36,7 @@ from src.api.products import router as products_router
 from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
+from src.api.store_config import router as store_config_router
 from src.api.selection import router as selection_router
 from src.api.selection_intelligence import router as selection_intel_router
 from src.api.stores import router as stores_router
@@ -681,6 +682,7 @@ app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
 app.include_router(reports_router)
+app.include_router(store_config_router)
 app.include_router(system_router)
 app.include_router(competitors_router)
 app.include_router(replenishment_router)

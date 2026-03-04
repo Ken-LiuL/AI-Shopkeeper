@@ -251,6 +251,51 @@ def _resolve_database_url() -> str | None:
     )
 
 
+async def meituan_product_sync_task() -> None:
+    """美团买药商品同步 (主数据源)."""
+    logger.info("Starting Meituan product sync task")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip Meituan sync")
+        return
+    try:
+        import asyncpg
+
+        from src.sync.meituan_client import MeituanBrowserClient
+        from src.sync.meituan_products import MeituanProductSyncer
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            # 从 store_configs 获取活跃门店
+            async with pool.acquire() as conn:
+                stores = await conn.fetch(
+                    "SELECT wm_poi_id, cookie_json FROM store_configs WHERE sync_status = 'active' AND platform = 'meituan_yiyao'"
+                )
+
+            for store in stores:
+                wm_poi_id = store["wm_poi_id"]
+                logger.info("Syncing Meituan store %s", wm_poi_id)
+                client = MeituanBrowserClient(wm_poi_id=wm_poi_id)
+                syncer = MeituanProductSyncer(client, pool, wm_poi_id)
+                result = await syncer.full_sync()
+                logger.info(
+                    "Meituan product sync for %s: success=%s records=%s",
+                    wm_poi_id, result.success, result.records_synced,
+                )
+                # 更新 sync 状态
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE store_configs SET last_sync_at = NOW(), last_sync_error = $1 WHERE wm_poi_id = $2",
+                        result.error if not result.success else None,
+                        wm_poi_id,
+                    )
+                await client.close()
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Meituan product sync task failed")
+
+
 async def qnh_data_sync_task() -> None:
     """运行 QNH 数据同步 + 门店库存同步."""
     logger.info("Starting scheduled QNH data + store stock sync task")
@@ -368,7 +413,18 @@ def init_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # QNH 数据同步 + 门店库存 (凌晨2:00, CST)
+    # 美团买药商品同步 (凌晨1:30, CST) — 主数据源
+    scheduler.add_job(
+        meituan_product_sync_task,
+        CronTrigger.from_crontab(
+            tasks.get("meituan_product_sync", "30 1 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_product_sync",
+        replace_existing=True,
+    )
+
+    # QNH 数据同步 + 门店库存 (凌晨2:00, CST) — 补充数据源
     scheduler.add_job(
         qnh_data_sync_task,
         CronTrigger.from_crontab(
