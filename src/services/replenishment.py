@@ -113,15 +113,77 @@ class ReplenishmentService:
         """扫描所有活跃商品，找出需要补货的"""
         pool = pg.get_pool()
 
-        # Try structured products table first
-        products = await pool.fetch(
-            "SELECT product_id, name, stock, cost_price FROM products WHERE status = 'active'"
-        )
-
         suggestions = []
 
-        # If no structured data, use qnh_products as fallback
-        if not products:
+        # Priority 1: Use alerts table (pre-computed by ETL) for fast response
+        try:
+            alert_rows = await pool.fetch(
+                """SELECT a.product_id, a.metrics, a.severity, a.recommended_action,
+                          p.name, p.stock, p.cost_price
+                   FROM alerts a
+                   LEFT JOIN products p ON a.product_id = p.product_id
+                   WHERE a.alert_type = 'low_stock' AND a.status = 'pending'
+                   ORDER BY a.severity DESC, (a.metrics->>'current_stock')::int ASC
+                   LIMIT 50"""
+            )
+            if alert_rows:
+                for row in alert_rows:
+                    metrics = row["metrics"] if isinstance(row["metrics"], dict) else {}
+                    current_stock = int(metrics.get("current_stock", row["stock"] or 0))
+                    safety_stock = int(metrics.get("safety_stock", 15))
+                    gap = max(safety_stock - current_stock, 0)
+                    cost = float(row["cost_price"] or 0)
+                    suggestions.append(
+                        ReplenishmentItem(
+                            product_id=row["product_id"] or "",
+                            product_name=row["name"] or metrics.get("product_name", ""),
+                            current_stock=current_stock,
+                            safety_stock=safety_stock,
+                            suggested_qty=max(gap + 5, 10),
+                            cost_price=cost,
+                            estimated_cost=round(cost * max(gap + 5, 10), 2),
+                            supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={row['name'] or ''}",
+                        )
+                    )
+                return suggestions
+        except Exception as e:
+            logger.warning(f"Failed to read alerts for replenishment: {e}")
+
+        # Priority 2: Direct query on products with low stock (batch, not per-item)
+        products = await pool.fetch(
+            """SELECT product_id, name, stock, cost_price
+               FROM products
+               WHERE status = 'active' AND stock < 20
+               ORDER BY stock ASC
+               LIMIT 50"""
+        )
+
+        if products:
+            for p in products:
+                stock = int(p["stock"] or 0)
+                safety = 15
+                gap = safety - stock
+                cost = float(p["cost_price"] or 0)
+                if gap > 0:
+                    suggested = math.ceil(gap * 1.5)
+                    suggestions.append(
+                        ReplenishmentItem(
+                            product_id=p["product_id"],
+                            product_name=p["name"],
+                            current_stock=stock,
+                            safety_stock=safety,
+                            suggested_qty=suggested,
+                            cost_price=cost,
+                            estimated_cost=round(cost * suggested, 2),
+                            supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={p['name']}",
+                        )
+                    )
+            if suggestions:
+                return suggestions
+
+        # Priority 3: Fallback to qnh_products
+        products = None  # reset for fallback check below
+        if not suggestions:
             logger.info(
                 "No active products in structured table, using qnh_products for replenishment suggestions"
             )
@@ -158,30 +220,7 @@ class ReplenishmentService:
                             supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={p['name']}",
                         )
                     )
-        else:
-            # Original logic for structured data
-            for p in products:
-                try:
-                    ss = await self.calculate_safety_stock(p["product_id"])
-                    if ss.current_stock < ss.safety_stock:
-                        gap = ss.safety_stock - ss.current_stock
-                        # 建议补到安全库存的1.5倍
-                        suggested = math.ceil(gap * 1.5)
-                        cost = float(p["cost_price"] or 0)
-                        suggestions.append(
-                            ReplenishmentItem(
-                                product_id=p["product_id"],
-                                product_name=p["name"],
-                                current_stock=p["stock"],
-                                safety_stock=ss.safety_stock,
-                                suggested_qty=suggested,
-                                cost_price=cost,
-                                estimated_cost=round(cost * suggested, 2),
-                                supplier_link=f"https://s.1688.com/selloffer/offer_search.htm?keywords={p['name']}",
-                            )
-                        )
-                except Exception as e:
-                    logger.warning(f"Failed to calculate safety stock for {p['product_id']}: {e}")
+        # (Old per-product safety stock loop removed — too slow with 1900+ products)
 
         # 新增: 从 qnh_inventory_raw 补充实时库存数据
         inventory_raw = await fetch_latest_raw(pool, "qnh_inventory_raw")
