@@ -825,6 +825,95 @@ async def list_products(
     )
 
 
+@router.post("/batch-cost-price", response_model=APIResponse[dict])
+async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
+    """批量更新成本价。Body: [{product_id, cost_price}, ...]"""
+    pool = pg.get_pool()
+    updated = 0
+    not_found = []
+    for item in items:
+        pid = item.get("product_id", "")
+        barcode = item.get("barcode", "")
+        cost = item.get("cost_price")
+        if cost is None:
+            continue
+        row = None
+        if pid:
+            row = await pool.fetchrow(
+                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE product_id = $2 RETURNING product_id",
+                float(cost), str(pid))
+        if not row and barcode:
+            row = await pool.fetchrow(
+                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE barcode = $2 RETURNING product_id",
+                float(cost), str(barcode))
+        if row:
+            updated += 1
+        else:
+            not_found.append(pid or barcode)
+    return APIResponse(data={"updated": updated, "not_found": not_found[:20], "total": len(items)})
+
+
+@router.get("/profit-analysis", response_model=APIResponse[dict])
+async def profit_analysis() -> APIResponse[dict]:
+    """利润分析：按商品维度的利润率、毛利贡献"""
+    pool = pg.get_pool()
+    rows = await pool.fetch("""
+        SELECT product_id, name, category,
+               retail_price, cost_price, monthly_sales, stock,
+               CASE WHEN COALESCE(cost_price, 0) > 0 THEN cost_price
+                    ELSE retail_price * 0.6 END AS effective_cost,
+               CASE WHEN COALESCE(cost_price, 0) > 0 THEN 'real' ELSE 'estimated' END AS cost_source
+        FROM products WHERE status = 'active' AND retail_price > 0
+        ORDER BY monthly_sales DESC NULLS LAST
+    """)
+    products = []
+    total_revenue = total_profit = 0
+    real_cost_count = 0
+    for r in rows:
+        price = float(r["retail_price"])
+        cost = float(r["effective_cost"])
+        sales = r["monthly_sales"] or 0
+        margin = round((price - cost) / price, 4) if price > 0 else 0
+        monthly_revenue = round(price * sales, 2)
+        monthly_profit = round((price - cost) * sales, 2)
+        total_revenue += monthly_revenue
+        total_profit += monthly_profit
+        if r["cost_source"] == "real":
+            real_cost_count += 1
+        products.append({
+            "product_id": r["product_id"], "name": r["name"],
+            "category": r["category"] or "", "retail_price": price,
+            "cost_price": cost, "cost_source": r["cost_source"],
+            "margin": margin, "monthly_sales": sales,
+            "monthly_revenue": monthly_revenue, "monthly_profit": monthly_profit,
+        })
+    cat_profit = {}
+    for p in products:
+        cat = p["category"] or "未分类"
+        if cat not in cat_profit:
+            cat_profit[cat] = {"category": cat, "revenue": 0, "profit": 0, "products": 0}
+        cat_profit[cat]["revenue"] += p["monthly_revenue"]
+        cat_profit[cat]["profit"] += p["monthly_profit"]
+        cat_profit[cat]["products"] += 1
+    categories = sorted(cat_profit.values(), key=lambda x: x["profit"], reverse=True)
+    for c in categories:
+        c["margin"] = round(c["profit"] / c["revenue"], 4) if c["revenue"] > 0 else 0
+        c["revenue"] = round(c["revenue"], 2)
+        c["profit"] = round(c["profit"], 2)
+    return APIResponse(data={
+        "summary": {
+            "total_products": len(products), "real_cost_count": real_cost_count,
+            "estimated_cost_count": len(products) - real_cost_count,
+            "total_monthly_revenue": round(total_revenue, 2),
+            "total_monthly_profit": round(total_profit, 2),
+            "avg_margin": round(total_profit / total_revenue, 4) if total_revenue > 0 else 0,
+        },
+        "top_profit": sorted(products, key=lambda x: x["monthly_profit"], reverse=True)[:20],
+        "low_margin": sorted([p for p in products if p["monthly_sales"] > 0], key=lambda x: x["margin"])[:20],
+        "by_category": categories[:15],
+    })
+
+
 @router.get("/{product_id}", response_model=APIResponse[dict])
 async def get_product(product_id: str) -> APIResponse[dict]:
     pool = pg.get_pool()
@@ -954,109 +1043,6 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
             for r in rows
         ]
     )
-
-
-@router.post("/batch-cost-price", response_model=APIResponse[dict])
-async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
-    """批量更新成本价。Body: [{product_id, cost_price}, ...]
-    支持按 barcode 或 product_id 匹配。"""
-    pool = pg.get_pool()
-    updated = 0
-    not_found = []
-    for item in items:
-        pid = item.get("product_id", "")
-        barcode = item.get("barcode", "")
-        cost = item.get("cost_price")
-        if cost is None:
-            continue
-        # 先按 product_id，再按 barcode
-        row = None
-        if pid:
-            row = await pool.fetchrow(
-                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE product_id = $2 RETURNING product_id",
-                float(cost), str(pid),
-            )
-        if not row and barcode:
-            row = await pool.fetchrow(
-                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE barcode = $2 RETURNING product_id",
-                float(cost), str(barcode),
-            )
-        if row:
-            updated += 1
-        else:
-            not_found.append(pid or barcode)
-    return APIResponse(data={"updated": updated, "not_found": not_found[:20], "total": len(items)})
-
-
-@router.get("/profit-analysis", response_model=APIResponse[dict])
-async def profit_analysis() -> APIResponse[dict]:
-    """利润分析：按商品维度的利润率、毛利贡献"""
-    pool = pg.get_pool()
-    # 有真实成本价的用真实值，没有的用估算
-    rows = await pool.fetch("""
-        SELECT product_id, name, category,
-               retail_price, cost_price, monthly_sales, stock,
-               CASE WHEN COALESCE(cost_price, 0) > 0 THEN cost_price
-                    ELSE retail_price * 0.6 END AS effective_cost,
-               CASE WHEN COALESCE(cost_price, 0) > 0 THEN 'real' ELSE 'estimated' END AS cost_source
-        FROM products
-        WHERE status = 'active' AND retail_price > 0
-        ORDER BY monthly_sales DESC NULLS LAST
-    """)
-    products = []
-    total_revenue = 0
-    total_profit = 0
-    real_cost_count = 0
-    for r in rows:
-        price = float(r["retail_price"])
-        cost = float(r["effective_cost"])
-        sales = r["monthly_sales"] or 0
-        margin = round((price - cost) / price, 4) if price > 0 else 0
-        monthly_revenue = round(price * sales, 2)
-        monthly_profit = round((price - cost) * sales, 2)
-        total_revenue += monthly_revenue
-        total_profit += monthly_profit
-        if r["cost_source"] == "real":
-            real_cost_count += 1
-        products.append({
-            "product_id": r["product_id"],
-            "name": r["name"],
-            "category": r["category"] or "",
-            "retail_price": price,
-            "cost_price": cost,
-            "cost_source": r["cost_source"],
-            "margin": margin,
-            "monthly_sales": sales,
-            "monthly_revenue": monthly_revenue,
-            "monthly_profit": monthly_profit,
-        })
-    # 分类汇总
-    cat_profit = {}
-    for p in products:
-        cat = p["category"] or "未分类"
-        if cat not in cat_profit:
-            cat_profit[cat] = {"category": cat, "revenue": 0, "profit": 0, "products": 0}
-        cat_profit[cat]["revenue"] += p["monthly_revenue"]
-        cat_profit[cat]["profit"] += p["monthly_profit"]
-        cat_profit[cat]["products"] += 1
-    categories = sorted(cat_profit.values(), key=lambda x: x["profit"], reverse=True)
-    for c in categories:
-        c["margin"] = round(c["profit"] / c["revenue"], 4) if c["revenue"] > 0 else 0
-        c["revenue"] = round(c["revenue"], 2)
-        c["profit"] = round(c["profit"], 2)
-    return APIResponse(data={
-        "summary": {
-            "total_products": len(products),
-            "real_cost_count": real_cost_count,
-            "estimated_cost_count": len(products) - real_cost_count,
-            "total_monthly_revenue": round(total_revenue, 2),
-            "total_monthly_profit": round(total_profit, 2),
-            "avg_margin": round(total_profit / total_revenue, 4) if total_revenue > 0 else 0,
-        },
-        "top_profit": sorted(products, key=lambda x: x["monthly_profit"], reverse=True)[:20],
-        "low_margin": sorted([p for p in products if p["monthly_sales"] > 0], key=lambda x: x["margin"])[:20],
-        "by_category": categories[:15],
-    })
 
 
 @router.get("/analysis", response_model=APIResponse[dict])
