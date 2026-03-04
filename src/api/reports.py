@@ -123,7 +123,38 @@ async def _get_aggregated_metrics(pool, days: int) -> dict:
 async def _period_report(days: int) -> dict:
     pool = pg.get_pool()
 
-    # Try structured tables first
+    # Priority 0: store_daily_metrics (美团经营数据)
+    dm_row = None
+    with contextlib.suppress(Exception):
+        dm_row = await pool.fetchrow(
+            """SELECT COALESCE(SUM(transaction_volume), 0)::int AS order_count,
+                      COALESCE(SUM(deal_amount), 0) AS total_revenue,
+                      CASE WHEN SUM(transaction_volume) > 0
+                           THEN SUM(deal_amount) / SUM(transaction_volume)
+                           ELSE 0 END AS avg_order_value,
+                      COALESCE(SUM(refund_count), 0)::int AS refund_count,
+                      COALESCE(SUM(total_customers), 0)::int AS total_customers,
+                      COALESCE(SUM(new_customers), 0)::int AS new_customers,
+                      COALESCE(AVG(exposure_uv), 0)::int AS avg_exposure_uv,
+                      COALESCE(SUM(commission_amount), 0) AS commission,
+                      COALESCE(SUM(settlement_amount), 0) AS settlement
+               FROM store_daily_metrics
+               WHERE metric_date >= CURRENT_DATE - make_interval(days => $1)""",
+            days,
+        )
+    if dm_row and dm_row["order_count"] > 0:
+        d = dict(dm_row)
+        d["refund_rate"] = round(d["refund_count"] / max(d["order_count"], 1), 4)
+        cs_count = (
+            await pool.fetchval(
+                "SELECT COUNT(*)::int FROM cs_sessions WHERE created_at >= CURRENT_DATE - make_interval(days => $1)",
+                days,
+            ) or 0
+        )
+        d["cs_responses"] = cs_count
+        return d
+
+    # Fallback: orders table
     row = await pool.fetchrow(
         """SELECT COUNT(*)::int AS order_count,
                   COALESCE(SUM(total_amount), 0) AS total_revenue,

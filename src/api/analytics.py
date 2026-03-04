@@ -27,17 +27,38 @@ async def get_overview() -> APIResponse:
     )
     total_orders = 0
     total_revenue = 0.0
-    try:
-        total_orders = await pool.fetchval("SELECT COUNT(*) FROM qnh_orders") or 0
-        total_revenue = float(
-            await pool.fetchval("SELECT COALESCE(SUM(total_amount), 0) FROM qnh_orders") or 0
+
+    # Priority 0: store_daily_metrics (美团真实数据)
+    with contextlib.suppress(Exception):
+        dm = await pool.fetchrow(
+            """SELECT COALESCE(SUM(transaction_volume), 0)::int AS orders,
+                      COALESCE(SUM(deal_amount), 0) AS revenue
+               FROM store_daily_metrics
+               WHERE metric_date >= CURRENT_DATE - INTERVAL '30 days'"""
         )
-    except Exception:
-        pass
-    # Fallback: raw metrics with complex JSON structure
+        if dm and dm["orders"] > 0:
+            total_orders = dm["orders"]
+            total_revenue = float(dm["revenue"])
+
+    # Fallback: orders table
+    if total_orders == 0:
+        with contextlib.suppress(Exception):
+            total_orders = await pool.fetchval("SELECT COUNT(*) FROM orders WHERE customer_paid IS NOT NULL") or 0
+            total_revenue = float(
+                await pool.fetchval("SELECT COALESCE(SUM(customer_paid), 0) FROM orders WHERE customer_paid IS NOT NULL") or 0
+            )
+
+    # Fallback 2: raw metrics with complex JSON structure
     if total_orders == 0:
         try:
-            # Try to extract from complex JSON structure
+            total_orders = await pool.fetchval("SELECT COUNT(*) FROM qnh_orders") or 0
+            total_revenue = float(
+                await pool.fetchval("SELECT COALESCE(SUM(total_amount), 0) FROM qnh_orders") or 0
+            )
+        except Exception:
+            pass
+    if total_orders == 0:
+        try:
             row = await pool.fetchrow("""
                 SELECT raw_data FROM qnh_store_metrics_raw
                 ORDER BY created_at DESC LIMIT 1
@@ -49,12 +70,10 @@ async def get_overview() -> APIResponse:
 
                     data = json.loads(data)
                 if isinstance(data, dict):
-                    # Extract from current values or fallback to lastPeriodValue
                     eff_ord_cnt = data.get("eff_ord_cnt", {})
                     if eff_ord_cnt and isinstance(eff_ord_cnt, dict):
                         current_val = eff_ord_cnt.get("indicValue", {}).get("originValue", 0)
                         if current_val == 0:
-                            # Use reference data as fallback
                             ref_val = (
                                 eff_ord_cnt.get("reference", {})
                                 .get("lastPeriodValue", {})
