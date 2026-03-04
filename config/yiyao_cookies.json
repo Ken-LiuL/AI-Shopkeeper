@@ -1,0 +1,248 @@
+[
+  {
+    "name": "_lxsdk_cuid",
+    "value": "19c8e6b672cc8-0ed22b796e96e9-1a525631-1fa400-19c8e6b672cc8",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "_lxsdk",
+    "value": "19c8e6b672cc8-0ed22b796e96e9-1a525631-1fa400-19c8e6b672cc8",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "uuid_update",
+    "value": "true",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "wpush_server_url",
+    "value": "wss://wpush.meituan.com",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "WEBDFPID",
+    "value": "2u4ux1uv603650460y3xyy2657436y4u80x7vz6vz955795871u9xywv-1772679955944-1770309007883AGSMSAU75613c134b6a252faa6802015be905512900",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "acctId",
+    "value": "264097650",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "token",
+    "value": "0bCTw78ZanYwD-9g0Y3Hp6V210tFw33jp_2-NRdU5Ta0*",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "brandId",
+    "value": "-1",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "wmPoiId",
+    "value": "30850916",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "isOfflineSelfOpen",
+    "value": "2",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "city_id",
+    "value": "0",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "shopCategory",
+    "value": "medicine",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "isChain",
+    "value": "0",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "existBrandPoi",
+    "value": "true",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "region_id",
+    "value": "0",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "region_version",
+    "value": "0",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "newCategory",
+    "value": "true",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "bsid",
+    "value": "rkH_5hMrkvq55-Y2i88Wfdldmeljn6YIdYhXChIpfhsUprmp2ovNgmTip4zZUvF5XL5h5WuJtLbuz2m5EyZrhA",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "device_uuid",
+    "value": "!3456923d-29e8-4368-8fc9-85cbf6dccae2",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "logistics_support",
+    "value": "1",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "cityId",
+    "value": "440300",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "provinceId",
+    "value": "440000",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "city_location_id",
+    "value": "420100",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "location_id",
+    "value": "420111",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "account_businesstype",
+    "value": "1",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "single_poi_businesstype",
+    "value": "1",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "accountAllPoiBusinessType",
+    "value": "1",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "acct_id",
+    "value": "264097650",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "acct_name",
+    "value": "mt773204p",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "poi_id",
+    "value": "30850916",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "account_second_type",
+    "value": "200",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "poi_first_category_id",
+    "value": "22",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "poi_second_category_id",
+    "value": "6006",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "pushToken",
+    "value": "0bCTw78ZanYwD-9g0Y3Hp6V210tFw33jp_2-NRdU5Ta0*",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "cacheTimeMark",
+    "value": "2026-03-04",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "pharmacistAccount",
+    "value": "0",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "set_info",
+    "value": "{\"wmPoiId\":30850916,\"region_id\":\"1000420100\",\"region_version\":1763630401}",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "yy-epassport-accessToken",
+    "value": "rkH_5hMrkvq55-Y2i88Wfdldmeljn6YIdYhXChIpfhsUprmp2ovNgmTip4zZUvF5XL5h5WuJtLbuz2m5EyZrhA",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "logan_session_token",
+    "value": "0wibypy4de7a2x57m9r2",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "terminal",
+    "value": "bizCenter",
+    "domain": ".meituan.com",
+    "path": "/"
+  },
+  {
+    "name": "igateApp",
+    "value": "igate",
+    "domain": ".meituan.com",
+    "path": "/"
+  }
+]
