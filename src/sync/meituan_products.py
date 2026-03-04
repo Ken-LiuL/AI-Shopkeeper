@@ -193,6 +193,11 @@ class MeituanProductSyncer(BaseSyncer):
                 columns.append("upc_code")
                 for idx, row in enumerate(product_rows):
                     values[idx].append(row["upc_code"])
+            # store_id for multi-tenant
+            columns.append("store_id")
+            for row in values:
+                row.append(self.wm_poi_id)
+
             columns.extend(["updated_at"])
             for row in values:
                 row.append(now)
@@ -208,15 +213,20 @@ class MeituanProductSyncer(BaseSyncer):
             await conn.executemany(insert_sql, [tuple(v) for v in values])
 
             if sales_rows:
+                # 加 store_id 到 sales_history
+                sales_rows_with_store = [
+                    (pid, date, qty, rev, ts, self.wm_poi_id)
+                    for pid, date, qty, rev, ts in sales_rows
+                ]
                 await conn.executemany(
                     """
-                    INSERT INTO sales_history (product_id, sale_date, quantity, revenue, created_at)
-                    VALUES ($1,$2,$3,$4,$5)
-                    ON CONFLICT (product_id, sale_date)
+                    INSERT INTO sales_history (product_id, sale_date, quantity, revenue, created_at, store_id)
+                    VALUES ($1,$2,$3,$4,$5,$6)
+                    ON CONFLICT (product_id, store_id, sale_date)
                     DO UPDATE SET quantity = EXCLUDED.quantity,
                                    revenue = EXCLUDED.revenue
                     """,
-                    sales_rows,
+                    sales_rows_with_store,
                 )
 
     async def _ensure_product_columns(self) -> None:
