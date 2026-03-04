@@ -144,8 +144,7 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
                       COALESCE(SUM(commission_amount), 0) AS commission,
                       COALESCE(SUM(settlement_amount), 0) AS settlement
                FROM store_daily_metrics
-               WHERE metric_date >= $1 - INTERVAL '1 day' AND metric_date <= $1""",
-            today,
+               WHERE metric_date >= CURRENT_DATE - INTERVAL '2 days'"""
         )
         if dm and dm["orders"] > 0:
             business_data["orders"] = {
@@ -172,9 +171,8 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
         trend_rows = await pool.fetch(
             """SELECT metric_date, transaction_volume, deal_amount, total_customers, exposure_uv
                FROM store_daily_metrics
-               WHERE metric_date >= $1 - INTERVAL '7 days'
-               ORDER BY metric_date""",
-            today,
+               WHERE metric_date >= CURRENT_DATE - INTERVAL '7 days'
+               ORDER BY metric_date"""
         )
         if trend_rows:
             business_data["trends"]["weekly"] = [
