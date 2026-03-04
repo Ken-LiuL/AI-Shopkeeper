@@ -347,3 +347,20 @@ async def trigger_scan(
     task_id = gen_id("scan_")
     bg.add_task(_run_alert_scan, task_id, orch)
     return APIResponse(data=AlertScanResponse(task_id=task_id, message="Alert scan started"))
+
+
+@router.post("/push", response_model=APIResponse[dict])
+async def push_alerts() -> APIResponse[dict]:
+    """手动触发告警推送（Telegram/Webhook）"""
+    from src.services.notification import check_and_push_alerts
+    pool = pg.get_pool()
+    result = await check_and_push_alerts(pool)
+    return APIResponse(data=result)
+
+
+@router.post("/test-push", response_model=APIResponse[dict])
+async def test_push(message: str = "这是一条测试告警") -> APIResponse[dict]:
+    """测试推送通道"""
+    from src.services.notification import send_alert
+    sent = await send_alert("测试告警", message, "medium")
+    return APIResponse(data={"sent": sent})
