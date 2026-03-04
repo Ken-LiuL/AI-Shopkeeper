@@ -35,6 +35,12 @@ async def bundle_recommendations() -> APIResponse[list[dict]]:
         return APIResponse(data=[], message=f"推荐生成失败: {e}")
 
 
+@router.get("/suggestions", response_model=APIResponse[list[dict]])
+async def bundle_suggestions() -> APIResponse[list[dict]]:
+    """套餐建议 — /recommendations 的别名"""
+    return await bundle_recommendations()
+
+
 @router.get("/{bundle_id}", response_model=APIResponse[dict])
 async def get_bundle(bundle_id: str) -> APIResponse[dict]:
     pool = pg.get_pool()
