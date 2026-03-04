@@ -225,6 +225,137 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
     except Exception as e:
         logger.warning(f"Failed to get business data from dataset_records: {e}")
 
+    # ── Fallback: structured tables for orders/products/trends ──
+    orders_snapshot = business_data.get("orders") or {}
+    if not orders_snapshot.get("today_count"):
+        try:
+            metrics_rows = await pool.fetch(
+                """
+                SELECT metric_date, valid_order_count, valid_order_amount, avg_order_value,
+                       net_profit, customer_count
+                FROM qnh_daily_metrics
+                WHERE channel IS NULL
+                ORDER BY metric_date DESC
+                LIMIT 2
+            """
+            )
+            if metrics_rows:
+                today_metrics = metrics_rows[0]
+                prev_metrics = metrics_rows[1] if len(metrics_rows) > 1 else None
+                today_orders = int(today_metrics["valid_order_count"] or 0)
+                today_revenue = float(today_metrics["valid_order_amount"] or 0)
+                avg_order_value = float(today_metrics["avg_order_value"] or 0)
+                if not avg_order_value and today_orders > 0:
+                    avg_order_value = today_revenue / today_orders
+                yesterday_orders = int(prev_metrics["valid_order_count"]) if prev_metrics else 0
+                yesterday_revenue = (
+                    float(prev_metrics["valid_order_amount"] or 0) if prev_metrics else 0
+                )
+                growth_rate = (
+                    round((today_orders - yesterday_orders) / yesterday_orders * 100, 2)
+                    if yesterday_orders > 0
+                    else 0
+                )
+                business_data["orders"] = {
+                    "today_count": today_orders,
+                    "today_gmv": round(today_revenue, 2),
+                    "avg_order_value": round(avg_order_value, 2),
+                    "yesterday_count": yesterday_orders,
+                    "yesterday_gmv": round(yesterday_revenue, 2),
+                    "growth_rate": growth_rate,
+                    "net_profit": round(float(today_metrics["net_profit"] or 0), 2),
+                    "customers": int(today_metrics["customer_count"] or 0),
+                }
+        except Exception as e:
+            logger.warning("Failed to fallback orders from qnh_daily_metrics: %s", e)
+
+    if not business_data.get("products", {}).get("top_selling"):
+        try:
+            week_start = today - timedelta(days=7)
+            rows = await pool.fetch(
+                """
+                SELECT sh.product_id,
+                       COALESCE(p.name, qp.name, sh.product_id) AS product_name,
+                       SUM(sh.quantity)::int AS qty,
+                       SUM(sh.revenue) AS revenue
+                FROM sales_history sh
+                LEFT JOIN products p ON sh.product_id = p.product_id
+                LEFT JOIN qnh_products qp ON qp.spu_id = sh.product_id
+                WHERE sh.sale_date >= $1
+                GROUP BY sh.product_id, product_name
+                ORDER BY revenue DESC
+                LIMIT 10
+            """,
+                week_start,
+            )
+            if rows:
+                business_data["products"]["top_selling"] = [
+                    {
+                        "product_id": row["product_id"],
+                        "name": row["product_name"],
+                        "quantity_sold": row["qty"],
+                        "revenue": round(float(row["revenue"] or 0), 2),
+                        "actual_pay": round(float(row["revenue"] or 0), 2),
+                        "rank": idx + 1,
+                    }
+                    for idx, row in enumerate(rows)
+                ]
+        except Exception as e:
+            logger.debug("Fallback top_selling failed: %s", e)
+
+    if not business_data.get("trends", {}).get("weekly"):
+        try:
+            last_week = today - timedelta(days=7)
+            trend_rows = await pool.fetch(
+                """
+                SELECT metric_date AS date,
+                       COALESCE(valid_order_count, 0) AS orders,
+                       COALESCE(valid_order_amount, 0) AS gmv
+                FROM qnh_daily_metrics
+                WHERE channel IS NULL AND metric_date >= $1
+                ORDER BY metric_date
+            """,
+                last_week,
+            )
+            if trend_rows:
+                business_data["trends"]["weekly"] = [
+                    {
+                        "date": str(row["date"]),
+                        "order_count": int(row["orders"]),
+                        "gmv": round(float(row["gmv"]), 2),
+                    }
+                    for row in trend_rows
+                ]
+        except Exception as e:
+            logger.debug("Fallback weekly trend failed: %s", e)
+
+    if not business_data.get("trends", {}).get("weekly"):
+        try:
+            last_week = today - timedelta(days=7)
+            sale_rows = await pool.fetch(
+                """
+                SELECT sale_date AS date,
+                       SUM(quantity)::int AS orders,
+                       SUM(revenue) AS gmv
+                FROM sales_history
+                WHERE sale_date >= $1
+                GROUP BY sale_date
+                ORDER BY sale_date
+            """,
+                last_week,
+            )
+            if sale_rows:
+                business_data["trends"]["weekly"] = [
+                    {
+                        "date": str(row["date"]),
+                        "order_count": row["orders"],
+                        "gmv": round(float(row["gmv"] or 0), 2),
+                    }
+                    for row in sale_rows
+                ]
+        except Exception as e:  # pragma: no cover - fallback logging
+            logger.debug("sales_history trend fallback failed: %s", e)
+
     # ── Fallback: fill in missing data from old tables ──
     if not business_data.get("categories", {}).get("performance"):
         try:

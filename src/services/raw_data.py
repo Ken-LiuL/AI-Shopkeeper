@@ -9,6 +9,8 @@ import json
 import logging
 from typing import Any
 
+import asyncpg
+
 logger = logging.getLogger(__name__)
 
 
@@ -25,24 +27,29 @@ async def fetch_latest_raw(pool, table: str, source: str | None = None) -> dict 
     """
     if not pool:
         return None
-    try:
-        if source:
+    params: tuple[Any, ...] = (source,) if source else ()
+    where_clause = "WHERE source = $1" if source else ""
+    order_columns = ("created_at", "synced_at", "id")
+    for column in order_columns:
+        try:
             row = await pool.fetchrow(
-                f"SELECT raw_data FROM {table} WHERE source = $1 ORDER BY created_at DESC LIMIT 1",
-                source,
+                f"SELECT raw_data FROM {table} {where_clause} ORDER BY {column} DESC LIMIT 1",
+                *params,
             )
-        else:
-            row = await pool.fetchrow(
-                f"SELECT raw_data FROM {table} ORDER BY created_at DESC LIMIT 1"
-            )
-        if row and row["raw_data"]:
-            data = row["raw_data"]
-            # asyncpg 自动解析 JSONB 为 Python 对象
-            if isinstance(data, str):
-                return json.loads(data)
-            return data
-    except Exception as e:
-        logger.warning(f"读取 {table} 失败: {e}")
+            if row and row["raw_data"]:
+                data = row["raw_data"]
+                if isinstance(data, str):
+                    return json.loads(data)
+                return data
+        except asyncpg.UndefinedColumnError:
+            logger.debug("%s 缺少列 %s，改用下一个排序列", table, column)
+            continue
+        except asyncpg.UndefinedTableError as e:
+            logger.warning("表 %s 不存在: %s", table, e)
+            return None
+        except Exception as e:  # pragma: no cover - logging fallback
+            logger.warning(f"读取 {table} 失败: {e}")
+            return None
     return None
 
 
@@ -62,27 +69,32 @@ async def fetch_all_raw(
     """
     if not pool:
         return []
-    try:
-        if source:
-            rows = await pool.fetch(
-                f"SELECT raw_data, synced_at, created_at FROM {table} "
-                f"WHERE source = $1 ORDER BY created_at DESC LIMIT $2",
-                source,
-                limit,
-            )
-        else:
-            rows = await pool.fetch(
-                f"SELECT raw_data, synced_at, created_at FROM {table} "
-                f"ORDER BY created_at DESC LIMIT $1",
-                limit,
-            )
-        results = []
-        for row in rows:
-            data = row["raw_data"]
-            if isinstance(data, str):
-                data = json.loads(data)
-            results.append(data)
-        return results
-    except Exception as e:
-        logger.warning(f"读取 {table} 多条数据失败: {e}")
+    params: tuple[Any, ...] = (source, limit) if source else (limit,)
+    where_clause = "WHERE source = $1" if source else ""
+    limit_placeholder = "$2" if source else "$1"
+    default_query = (
+        f"SELECT raw_data, synced_at, created_at FROM {table} "
+        f"{where_clause} ORDER BY created_at DESC LIMIT {limit_placeholder}"
+    )
+    fallback_query = (
+        f"SELECT raw_data, synced_at FROM {table} {where_clause} "
+        f"ORDER BY synced_at DESC, id DESC LIMIT {limit_placeholder}"
+    )
+
+    for query in (default_query, fallback_query):
+        try:
+            rows = await pool.fetch(query, *params)
+            results = []
+            for row in rows:
+                data = row["raw_data"]
+                if isinstance(data, str):
+                    data = json.loads(data)
+                results.append(data)
+            return results
+        except asyncpg.UndefinedColumnError:
+            logger.debug("%s 缺少 created_at 列，使用 synced_at/id 排序", table)
+            continue
+        except Exception as e:
+            logger.warning(f"读取 {table} 多条数据失败: {e}")
+            break
     return []

@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
@@ -16,6 +17,7 @@ from .schemas import APIResponse, PaginatedResponse
 
 router = APIRouter(prefix="/api/orders", tags=["orders"])
 logger = logging.getLogger(__name__)
+_DATA_VALUE_CLEAN = re.compile(r"[,%\s]")
 
 
 def _extract_metric(raw_data: dict, key: str, use_reference: bool = True) -> float:
@@ -43,6 +45,39 @@ def _extract_metric(raw_data: dict, key: str, use_reference: bool = True) -> flo
                 current = float(lp.get("originValue", 0) or 0)
 
     return current
+
+
+def _parse_rank_value(field) -> float:
+    """Parse dataValue style numbers from dataset payloads."""
+    if field is None:
+        return 0.0
+    if isinstance(field, int | float):
+        return float(field)
+    if isinstance(field, dict):
+        raw = field.get("dataValue") or field.get("value") or ""
+    else:
+        raw = str(field)
+    if not raw:
+        return 0.0
+    cleaned = _DATA_VALUE_CLEAN.sub("", str(raw))
+    if not cleaned:
+        return 0.0
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _parse_rank_str(field) -> str:
+    """Extract string dataValue."""
+    if field is None:
+        return ""
+    if isinstance(field, str):
+        return field.strip()
+    if isinstance(field, dict):
+        val = field.get("dataValue") or field.get("dataName") or ""
+        return str(val).strip()
+    return str(field).strip()
 
 
 async def _get_latest_metrics(pool) -> dict:
@@ -135,6 +170,61 @@ async def list_orders(
                     raw_orders.append(order)
         except Exception:
             pass  # Fallback to synthetic data
+
+        # 如果raw orders表没有有效数据，尝试从 customer_rank 数据集生成订单
+        if not raw_orders:
+            dataset_rows = await pool.fetch(
+                """SELECT payload, synced_at
+                   FROM qnh_dataset_records
+                   WHERE dataset = 'customer_rank'
+                   ORDER BY synced_at DESC
+                   LIMIT $1""",
+                limit * 3,
+            )
+            customer_orders = []
+            for row in dataset_rows:
+                payload = row["payload"]
+                if isinstance(payload, str):
+                    payload = json.loads(payload)
+                if not isinstance(payload, dict):
+                    continue
+                customer_name = _parse_rank_str(payload.get("user_name")) or "重点客户"
+                customer_addr = _parse_rank_str(payload.get("user_address"))
+                total_amount = _parse_rank_value(
+                    payload.get("actual_pay_amt")
+                ) or _parse_rank_value(payload.get("sale_amt_gmv"))
+                order_count = max(int(round(_parse_rank_value(payload.get("eff_ord_cnt")))), 1)
+                order_time = row["synced_at"] or datetime.now()
+                avg_item_price = round(total_amount / order_count, 2) if total_amount else 0
+                order_id = f"CR_{abs(hash(customer_name)) % 1_000_000:06d}_{order_time:%Y%m%d}"
+
+                customer_orders.append(
+                    {
+                        "order_id": order_id,
+                        "order_time": order_time.isoformat(),
+                        "total_amount": round(total_amount, 2),
+                        "status": "completed",
+                        "customer_id": customer_name,
+                        "delivery_time": None,
+                        "items": [
+                            {
+                                "product_name": "高频热销组合",
+                                "quantity": order_count,
+                                "price": avg_item_price,
+                            }
+                        ],
+                        "payment_method": "美团支付",
+                        "delivery_address": customer_addr,
+                        "synced_at": order_time,
+                        "raw_created_at": order_time,
+                        "synthetic": True,
+                        "source": "customer_rank",
+                        "notes": f"近7天有效订单 {order_count} 单",
+                    }
+                )
+
+            if customer_orders:
+                raw_orders = customer_orders
 
         # 如果raw orders表没有有效数据，从metrics生成合成数据
         if not raw_orders:
@@ -393,7 +483,7 @@ async def get_order(order_id: str) -> APIResponse[dict]:
         raise
     except Exception as e:
         logger.error(f"Failed to get order {order_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to get order: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get order: {str(e)}") from e
 
 
 # 保留原有API兼容性
