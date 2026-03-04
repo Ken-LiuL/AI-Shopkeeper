@@ -359,7 +359,7 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
     if not business_data.get("categories", {}).get("performance"):
         try:
             cats = await pool.fetch("""
-                SELECT category, COUNT(*) as cnt FROM qnh_products
+                SELECT category, COUNT(*) as cnt FROM products
                 WHERE status = '在售' AND category != ''
                 GROUP BY category ORDER BY cnt DESC LIMIT 10
             """)
