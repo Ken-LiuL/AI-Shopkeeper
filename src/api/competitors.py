@@ -55,12 +55,37 @@ class CompetitorMonitorResult(BaseModel):
     products: list[ProductCompetitorAnalysis]
 
 
+_monitor_cache: dict[str, tuple[float, APIResponse]] = {}
+_CACHE_TTL = 300  # 5 minutes
+
+
 @router.get("/", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitors_root(limit: int = 20) -> APIResponse[CompetitorMonitorResult]:
     """竞品监控根端点 - 默认返回监控结果，支持 limit 参数"""
     try:
+        import time
+
+        cache_key = "monitor"
+        now = time.time()
+        if cache_key in _monitor_cache:
+            cached_at, cached_result = _monitor_cache[cache_key]
+            if now - cached_at < _CACHE_TTL:
+                result = cached_result
+                if result.success and result.data and limit < len(result.data.products):
+                    limited_result = CompetitorMonitorResult(
+                        total_monitored=result.data.total_monitored,
+                        price_alerts=result.data.price_alerts,
+                        competitive_products=result.data.competitive_products,
+                        overpriced_products=result.data.overpriced_products,
+                        underpriced_products=result.data.underpriced_products,
+                        products=result.data.products[:limit],
+                    )
+                    return APIResponse(data=limited_result)
+                return result
+
         # 复用 monitor 端点的逻辑
         result = await get_competitor_monitor()
+        _monitor_cache[cache_key] = (now, result)
         if result.success and result.data and limit < len(result.data.products):
             # 应用 limit 参数
             limited_result = CompetitorMonitorResult(
