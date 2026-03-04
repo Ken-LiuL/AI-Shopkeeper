@@ -140,13 +140,68 @@ async def list_orders(
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
     status: str = Query("all"),
+    store_id: str = Query(None, description="按门店 ID 过滤"),
 ) -> PaginatedResponse[dict]:
-    """基于qnh_store_metrics_raw生成订单列表（因为raw orders表是IM任务不是订单）"""
+    """订单列表 — 优先从 orders 表查真实美团订单"""
     pool = pg.get_pool()
     offset = (page - 1) * limit
 
     try:
-        # 先尝试从raw表获取真实订单数据
+        # 优先从 orders 表查真实订单 (美团 syncer 写入)
+        real_orders = []
+        try:
+            conditions = ["order_id IS NOT NULL"]
+            params: list = []
+            idx = 1
+
+            if store_id:
+                conditions.append(f"store_id = ${idx}")
+                params.append(store_id)
+                idx += 1
+
+            if status and status != "all":
+                conditions.append(f"status = ${idx}")
+                params.append(status)
+                idx += 1
+
+            where = " AND ".join(conditions)
+
+            total_real = await pool.fetchval(
+                f"SELECT COUNT(*) FROM orders WHERE {where} AND customer_paid IS NOT NULL",
+                *params,
+            ) or 0
+
+            if total_real > 0:
+                rows = await pool.fetch(
+                    f"""SELECT order_id, store_id, customer_name, total_amount,
+                               customer_paid, status, order_time, order_date,
+                               commission, delivery_fee, merchant_discount,
+                               day_seq, items, created_at
+                        FROM orders
+                        WHERE {where} AND customer_paid IS NOT NULL
+                        ORDER BY order_time DESC
+                        LIMIT ${idx} OFFSET ${idx + 1}""",
+                    *params, limit, offset,
+                )
+                for r in rows:
+                    order_dict = dict(r)
+                    # 解析 items JSONB
+                    items_data = order_dict.get("items")
+                    if isinstance(items_data, str):
+                        items_data = json.loads(items_data)
+                    products = items_data.get("products", []) if isinstance(items_data, dict) else []
+                    order_dict["items"] = products
+                    order_dict["synthetic"] = False
+                    order_dict["source"] = "meituan_yiyao"
+                    real_orders.append(order_dict)
+
+                return PaginatedResponse(
+                    data=real_orders, total=total_real, page=page, page_size=limit,
+                )
+        except Exception:
+            pass  # Fallback to legacy data
+
+        # Fallback: 老的 QNH synthetic 数据
         raw_orders = []
         try:
             raw_rows = await pool.fetch(
