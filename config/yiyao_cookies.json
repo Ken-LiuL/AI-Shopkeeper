@@ -1,248 +1,614 @@
 [
   {
+    "name": "com.sankuai.jsprotect.h5guard_strategy",
+    "value": "",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": true
+  },
+  {
     "name": "_lxsdk_cuid",
-    "value": "19c8e6b672cc8-0ed22b796e96e9-1a525631-1fa400-19c8e6b672cc8",
+    "value": "19cb858537cc8-0dfb8e8b32aa2c8-1a525631-1fa400-19cb858537cc8",
     "domain": ".meituan.com",
-    "path": "/"
+    "path": "/",
+    "expires": "1807179322.236696",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "_lxsdk",
-    "value": "19c8e6b672cc8-0ed22b796e96e9-1a525631-1fa400-19c8e6b672cc8",
+    "value": "19cb858537cc8-0dfb8e8b32aa2c8-1a525631-1fa400-19cb858537cc8",
     "domain": ".meituan.com",
-    "path": "/"
+    "path": "/",
+    "expires": "1807179322.237336",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "device_uuid",
+    "value": "!663150ec-f6ac-40fa-92c7-3713e957bf19",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1807179323.257985",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "uuid_update",
     "value": "true",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1807179323.258005",
+    "httpOnly": false,
+    "secure": false
   },
   {
-    "name": "wpush_server_url",
-    "value": "wss://wpush.meituan.com",
-    "domain": ".meituan.com",
-    "path": "/"
+    "name": "JSESSIONID",
+    "value": "1mw5079hq0h64xo3qekltr3ca",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": true
   },
   {
     "name": "WEBDFPID",
-    "value": "2u4ux1uv603650460y3xyy2657436y4u80x7vz6vz955795871u9xywv-1772679955944-1770309007883AGSMSAU75613c134b6a252faa6802015be905512900",
+    "value": "u28xw348511v507z0w38v4yw33339v5u80xy141423457958v3w1331y-1772705723412-1772619321787GICIMKW75613c134b6a252faa6802015be905512041",
     "domain": ".meituan.com",
-    "path": "/"
+    "path": "/",
+    "expires": "1807179470.481735",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "utm_source_rg",
+    "value": "AM%25feENmNu%25268%250JEYehiE3yy435fr5ehE4imehhhhZ430E5YmyiyiJhi3fZ3E4heyhhym",
+    "domain": ".meituan.com",
+    "path": "/",
+    "expires": "1807179323.0",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "logan_session_token",
+    "value": "u2f91q4g2kjrpt51z187",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "eplt",
+    "value": "OAxsHY6JPi_hTyStdBhi_Kd8eeX8AMyPJilumwqv7Te0ZtWeWv6J3BcRxlrbjXdIXLZdihCj1-QgGe5EwvTRrQ",
+    "domain": "epassport.meituan.com",
+    "path": "/",
+    "expires": "1778321865.700817",
+    "httpOnly": true,
+    "secure": true
+  },
+  {
+    "name": "eprt",
+    "value": "oVs_4c-5T6tzZhCIDZVvr1_HhXGW39wa-S-SU0i08nBVcPl6HQGyqnu0QYrtnzP5FBbrMzD7-HHH-_gDhyEzXA",
+    "domain": "epassport.meituan.com",
+    "path": "/",
+    "expires": "1778321865.701026",
+    "httpOnly": true,
+    "secure": true
   },
   {
     "name": "acctId",
     "value": "264097650",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "token",
-    "value": "0bCTw78ZanYwD-9g0Y3Hp6V210tFw33jp_2-NRdU5Ta0*",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "brandId",
-    "value": "-1",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "wmPoiId",
-    "value": "30850916",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "isOfflineSelfOpen",
-    "value": "2",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "city_id",
-    "value": "0",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.217561",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "shopCategory",
     "value": "medicine",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1772623066.217762",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "token",
+    "value": "0bKaTlDsbJ_sNU3Hxqmgt0ICZW9ey6GqnIMiVaEufI7Y*",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.217836",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "wmPoiId",
+    "value": "30850916",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.217886",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "isOfflineSelfOpen",
+    "value": "0",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.217925",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "city_id",
+    "value": "420100",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.217964",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "isChain",
     "value": "0",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218001",
+    "httpOnly": false,
+    "secure": false
   },
   {
-    "name": "existBrandPoi",
-    "value": "true",
-    "domain": ".meituan.com",
-    "path": "/"
+    "name": "ignore_set_router_proxy",
+    "value": "false",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.21804",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "region_id",
-    "value": "0",
-    "domain": ".meituan.com",
-    "path": "/"
+    "value": "1000420100",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218081",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "region_version",
-    "value": "0",
-    "domain": ".meituan.com",
-    "path": "/"
+    "value": "1763630401",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218121",
+    "httpOnly": false,
+    "secure": false
   },
   {
-    "name": "newCategory",
-    "value": "true",
-    "domain": ".meituan.com",
-    "path": "/"
+    "name": "set_info",
+    "value": "%7B%22ignoreSetRouterProxy%22%3Afalse%2C%22region_id%22%3A%221000420100%22%2C%22region_version%22%3A1763630401%2C%22wmPoiId%22%3A30850916%7D",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218161",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "bsid",
-    "value": "rkH_5hMrkvq55-Y2i88Wfdldmeljn6YIdYhXChIpfhsUprmp2ovNgmTip4zZUvF5XL5h5WuJtLbuz2m5EyZrhA",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "device_uuid",
-    "value": "!3456923d-29e8-4368-8fc9-85cbf6dccae2",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "logistics_support",
-    "value": "1",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "cityId",
-    "value": "440300",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "provinceId",
-    "value": "440000",
-    "domain": ".meituan.com",
-    "path": "/"
+    "value": "OAxsHY6JPi_hTyStdBhi_Kd8eeX8AMyPJilumwqv7Te0ZtWeWv6J3BcRxlrbjXdIXLZdihCj1-QgGe5EwvTRrQ",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218232",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "city_location_id",
     "value": "420100",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218279",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "location_id",
     "value": "420111",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218318",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "wpush_server_url",
+    "value": "wss%3A%2F%2Fwpush.meituan.com",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "has_not_waimai_poi",
+    "value": "1",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218453",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "onlyForDaoDianAcct",
+    "value": "0",
+    "domain": "waimaie.meituan.com",
+    "path": "/",
+    "expires": "1775211466.218505",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "uuid_update",
+    "value": "true",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1807179466.818004",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "wpush_server_url",
+    "value": "wss://wpush.meituan.com",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "acctId",
+    "value": "264097650",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818394",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "token",
+    "value": "0bKaTlDsbJ_sNU3Hxqmgt0ICZW9ey6GqnIMiVaEufI7Y*",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818482",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "brandId",
+    "value": "-1",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818577",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "wmPoiId",
+    "value": "30850916",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818666",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "isOfflineSelfOpen",
+    "value": "2",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818749",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "city_id",
+    "value": "0",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.818877",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "shopCategory",
+    "value": "medicine",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1772623066.819067",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "isChain",
+    "value": "0",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819162",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "existBrandPoi",
+    "value": "true",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819248",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "ignore_set_router_proxy",
+    "value": "false",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819333",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "region_id",
+    "value": "0",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819421",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "region_version",
+    "value": "0",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819509",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "newCategory",
+    "value": "true",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.980464",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "bsid",
+    "value": "OAxsHY6JPi_hTyStdBhi_Kd8eeX8AMyPJilumwqv7Te0ZtWeWv6J3BcRxlrbjXdIXLZdihCj1-QgGe5EwvTRrQ",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211466.819775",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "device_uuid",
+    "value": "!663150ec-f6ac-40fa-92c7-3713e957bf19",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1807179466.819941",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "logistics_support",
+    "value": "1",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046877",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "cityId",
+    "value": "440300",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046908",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "provinceId",
+    "value": "440000",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046926",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "city_location_id",
+    "value": "420100",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046948",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "location_id",
+    "value": "420111",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046969",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "account_businesstype",
     "value": "1",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.046993",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "single_poi_businesstype",
     "value": "1",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.047013",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "accountAllPoiBusinessType",
     "value": "1",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.047034",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "com.sankuai.yiyao.shangjia.main_strategy",
+    "value": "",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": true
   },
   {
     "name": "acct_id",
     "value": "264097650",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218541",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "acct_name",
     "value": "mt773204p",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218608",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "poi_id",
     "value": "30850916",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218686",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "account_second_type",
     "value": "200",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218717",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "poi_first_category_id",
     "value": "22",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218745",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "poi_second_category_id",
     "value": "6006",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.218773",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "pushToken",
-    "value": "0bCTw78ZanYwD-9g0Y3Hp6V210tFw33jp_2-NRdU5Ta0*",
-    "domain": ".meituan.com",
-    "path": "/"
+    "value": "0bKaTlDsbJ_sNU3Hxqmgt0ICZW9ey6GqnIMiVaEufI7Y*",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1807179468.27854",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "cacheTimeMark",
     "value": "2026-03-04",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1772705869.0",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "pharmacistAccount",
     "value": "0",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211469.98049",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "set_info",
     "value": "{\"wmPoiId\":30850916,\"region_id\":\"1000420100\",\"region_version\":1763630401}",
-    "domain": ".meituan.com",
-    "path": "/"
-  },
-  {
-    "name": "yy-epassport-accessToken",
-    "value": "rkH_5hMrkvq55-Y2i88Wfdldmeljn6YIdYhXChIpfhsUprmp2ovNgmTip4zZUvF5XL5h5WuJtLbuz2m5EyZrhA",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "1775211470.0",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "logan_session_token",
-    "value": "0wibypy4de7a2x57m9r2",
-    "domain": ".meituan.com",
-    "path": "/"
+    "value": "s4w6e7p2vt9p2lpgpaqp",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
+  },
+  {
+    "name": "yy-epassport-accessToken",
+    "value": "OAxsHY6JPi_hTyStdBhi_Kd8eeX8AMyPJilumwqv7Te0ZtWeWv6J3BcRxlrbjXdIXLZdihCj1-QgGe5EwvTRrQ",
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
   },
   {
     "name": "terminal",
     "value": "bizCenter",
-    "domain": ".meituan.com",
-    "path": "/"
+    "domain": "yiyao.meituan.com",
+    "path": "/",
+    "expires": "-1.0",
+    "httpOnly": false,
+    "secure": false
   },
   {
-    "name": "igateApp",
-    "value": "igate",
+    "name": "_lxsdk_s",
+    "value": "19cb858537c-e5-f9a-de6%7C%7C18",
     "domain": ".meituan.com",
-    "path": "/"
+    "path": "/",
+    "expires": "1772621271.0",
+    "httpOnly": false,
+    "secure": false
   }
 ]

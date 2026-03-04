@@ -381,17 +381,35 @@ async def overview() -> APIResponse[DashboardOverview]:
     total_customers = 0
     conversion_rate = 0.0
 
-    # ── Priority 1: real orders from meituan syncer ──
+    # ── Priority 0: store_daily_metrics (meituan scraper) ──
     with contextlib.suppress(Exception):
-        row = await pool.fetchrow(
-            """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
-               FROM orders
-               WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
+        dm = await pool.fetchrow(
+            """SELECT deal_amount, transaction_volume, avg_order_value, total_customers,
+                      conversion_rate, exposure_uv
+               FROM store_daily_metrics
+               WHERE store_id = '30850916' AND metric_date = CURRENT_DATE"""
         )
-        if row and row["cnt"] > 0:
-            today_orders = int(row["cnt"])
-            today_gmv = float(row["gmv"])
-            avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
+        if dm and dm["transaction_volume"] and dm["transaction_volume"] > 0:
+            today_orders = dm["transaction_volume"]
+            today_gmv = float(dm["deal_amount"] or 0)
+            avg_order_value = float(dm["avg_order_value"] or 0)
+            total_customers = dm["total_customers"] or 0
+            exposure = dm["exposure_uv"] or 0
+            if exposure > 0 and today_orders > 0:
+                conversion_rate = round(today_orders / exposure * 100, 2)
+
+    # ── Priority 1: real orders from meituan syncer ──
+    if today_orders == 0:
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
+                   FROM orders
+                   WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
+            )
+            if row and row["cnt"] > 0:
+                today_orders = int(row["cnt"])
+                today_gmv = float(row["gmv"])
+                avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
 
     # ── Priority 2 (fallback): Read from qnh_dataset_records (store_rank aggregated) ──
     store_records = await _get_dataset_records(pool, "store_rank")
@@ -672,6 +690,39 @@ async def top_products() -> APIResponse[list[TopProduct]]:
 async def store_kpis() -> APIResponse[dict]:
     """Return parsed store KPIs from dataset records or raw metrics."""
     pool = pg.get_pool()
+
+    # ── Priority 0: store_daily_metrics from meituan scraper ──
+    daily_metrics = None
+    with contextlib.suppress(Exception):
+        daily_metrics = await pool.fetchrow(
+            """SELECT * FROM store_daily_metrics
+               WHERE store_id = '30850916' AND metric_date = CURRENT_DATE"""
+        )
+    if daily_metrics and daily_metrics.get("transaction_volume", 0) > 0:
+        dm = daily_metrics
+        return APIResponse(
+            data={
+                "orders": dm["transaction_volume"],
+                "gmv": round(float(dm["deal_amount"] or 0), 2),
+                "actual_revenue": round(float(dm["settlement_amount"] or 0), 2),
+                "product_sales": round(float(dm["deal_amount"] or 0), 2),
+                "avg_order_value": round(float(dm["avg_order_value"] or 0), 2),
+                "actual_avg_order_value": round(float(dm["avg_order_value"] or 0), 2),
+                "net_profit": round(float(dm["settlement_amount"] or 0) - float(dm["commission_amount"] or 0), 2),
+                "customers": dm["total_customers"] or 0,
+                "new_customers": dm["new_customers"] or 0,
+                "old_customers": dm["old_customers"] or 0,
+                "delivery_fee": 0.0,
+                "package_fee": 0.0,
+                "stockout_loss": 0.0,
+                "exposure_uv": dm["exposure_uv"] or 0,
+                "exposure_pv": dm["exposure_pv"] or 0,
+                "conversion_rate": round(float(dm["conversion_rate"] or 0), 2),
+                "refund_amount": round(float(dm["refund_amount"] or 0), 2),
+                "refund_count": dm["refund_count"] or 0,
+                "commission_amount": round(float(dm["commission_amount"] or 0), 2),
+            }
+        )
 
     orders_row = None
     with contextlib.suppress(Exception):
