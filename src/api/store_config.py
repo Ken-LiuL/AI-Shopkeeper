@@ -62,6 +62,14 @@ class StoreConfigUpdateRequest(BaseModel):
     sync_status: str | None = Field(default=None, max_length=20)
 
 
+@router.get("/overview", response_model=APIResponse)
+async def get_stores_overview_alias():
+    """路由别名 — 前端调 /stores/overview，转发到 /store/overview 的 handler"""
+    from src.api.stores import get_stores_overview
+
+    return await get_stores_overview()
+
+
 @router.get("", response_model=APIResponse[list[StoreConfigOut]])
 async def list_store_configs() -> APIResponse[list[StoreConfigOut]]:
     pool = pg.get_pool()

@@ -10,9 +10,10 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
 from src.db import postgres as pg
@@ -44,6 +45,7 @@ class ProductCompetitorAnalysis(BaseModel):
     avg_competitor_price: float
     price_advantage: float  # 正数表示比竞品便宜，负数表示比竞品贵
     recommendation: str
+    category: str | None = None
 
 
 class CompetitorMonitorResult(BaseModel):
@@ -53,6 +55,27 @@ class CompetitorMonitorResult(BaseModel):
     overpriced_products: int
     underpriced_products: int
     products: list[ProductCompetitorAnalysis]
+
+
+class CompetitorOverviewSummary(BaseModel):
+    total_stores: int
+    active_stores: int
+    total_products: int
+    active_products: int
+    total_keywords: int
+    avg_product_price: float
+
+
+class CompetitorOverviewCategory(BaseModel):
+    category: str
+    product_count: int
+    avg_price: float
+
+
+class CompetitorOverviewPayload(BaseModel):
+    summary: CompetitorOverviewSummary
+    top_categories: list[CompetitorOverviewCategory]
+    last_updated: str
 
 
 _monitor_cache: dict[str, tuple[float, APIResponse]] = {}
@@ -206,6 +229,7 @@ async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
                         avg_competitor_price=round(avg_price, 2),
                         price_advantage=round(price_advantage, 2),
                         recommendation=recommendation,
+                        category=category or "未分类",
                     )
                 )
 
@@ -292,6 +316,134 @@ def _generate_pricing_recommendation(
     return base_recommendation + confidence_note
 
 
+@router.get("/overview", response_model=APIResponse[CompetitorOverviewPayload])
+async def get_competitor_overview() -> APIResponse[CompetitorOverviewPayload]:
+    """竞品总览 — 前端 /competitors/overview 路由别名"""
+    try:
+        monitor_result = await get_competitor_monitor()
+        if not monitor_result.success or not monitor_result.data:
+            return APIResponse(
+                data=CompetitorOverviewPayload(
+                    summary=CompetitorOverviewSummary(
+                        total_stores=0,
+                        active_stores=0,
+                        total_products=0,
+                        active_products=0,
+                        total_keywords=0,
+                        avg_product_price=0,
+                    ),
+                    top_categories=[],
+                    last_updated=datetime.now().isoformat(),
+                ),
+            )
+
+        data = monitor_result.data
+
+        # 从竞品名称推算店铺数
+        store_names: set[str] = set()
+        for product in data.products:
+            for cp in product.competitor_prices:
+                store_names.add(cp.competitor_name)
+
+        # 按品类聚合
+        cat_counter: dict[str, list[float]] = defaultdict(list)
+        for product in data.products:
+            cat = product.category or "未分类"
+            cat_counter[cat].append(product.our_price)
+
+        top_categories = sorted(
+            [
+                CompetitorOverviewCategory(
+                    category=cat,
+                    product_count=len(prices),
+                    avg_price=round(sum(prices) / len(prices), 2),
+                )
+                for cat, prices in cat_counter.items()
+            ],
+            key=lambda c: c.product_count,
+            reverse=True,
+        )[:10]
+
+        all_prices = [p.our_price for p in data.products if p.our_price > 0]
+        avg_price = round(sum(all_prices) / len(all_prices), 2) if all_prices else 0
+
+        overview = CompetitorOverviewPayload(
+            summary=CompetitorOverviewSummary(
+                total_stores=len(store_names),
+                active_stores=len(store_names),
+                total_products=data.total_monitored,
+                active_products=data.competitive_products
+                + data.overpriced_products
+                + data.underpriced_products,
+                total_keywords=data.total_monitored * 3,
+                avg_product_price=avg_price,
+            ),
+            top_categories=top_categories,
+            last_updated=datetime.now().isoformat(),
+        )
+        return APIResponse(data=overview)
+
+    except Exception as e:
+        logger.error(f"Failed to get competitor overview: {e}")
+        return APIResponse(
+            success=False,
+            message=f"竞品总览获取失败: {str(e)}",
+            data=CompetitorOverviewPayload(
+                summary=CompetitorOverviewSummary(
+                    total_stores=0,
+                    active_stores=0,
+                    total_products=0,
+                    active_products=0,
+                    total_keywords=0,
+                    avg_product_price=0,
+                ),
+                top_categories=[],
+                last_updated=datetime.now().isoformat(),
+            ),
+        )
+
+
+@router.get("/price-comparison", response_model=APIResponse[list[dict]])
+async def get_price_comparison(
+    limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
+) -> APIResponse[list[dict]]:
+    """竞品价格对比列表 — 前端 /competitors/price-comparison 路由别名"""
+    try:
+        monitor_result = await get_competitor_monitor()
+        if not monitor_result.success or not monitor_result.data:
+            return APIResponse(data=[])
+
+        comparisons: list[dict] = []
+        for product in monitor_result.data.products:
+            for cp in product.competitor_prices:
+                diff_pct = 0.0
+                if cp.price > 0:
+                    diff_pct = round((product.our_price - cp.price) / cp.price * 100, 2)
+                comparisons.append(
+                    {
+                        "product_id": product.product_id,
+                        "name": product.product_name,
+                        "our_price": product.our_price,
+                        "competitor_name": cp.competitor_name,
+                        "competitor_price": cp.price,
+                        "competitor_store": cp.competitor_name,
+                        "price_diff_pct": diff_pct,
+                    }
+                )
+
+        # 按价差百分比降序排列（我方溢价高的排前面）
+        comparisons.sort(key=lambda x: abs(x["price_diff_pct"]), reverse=True)
+        return APIResponse(data=comparisons[:limit])
+
+    except Exception as e:
+        logger.error(f"Failed to get price comparison: {e}")
+        return APIResponse(
+            success=False,
+            message=f"价格对比获取失败: {str(e)}",
+            data=[],
+        )
+
+
 @router.get("/analysis/{product_id}", response_model=APIResponse[ProductCompetitorAnalysis])
 async def get_product_competitor_analysis(
     product_id: str,
@@ -369,6 +521,7 @@ async def get_product_competitor_analysis(
                 avg_competitor_price=round(avg_price, 2),
                 price_advantage=round(price_advantage, 2),
                 recommendation=recommendation,
+                category=category,
             )
 
             return APIResponse(data=analysis)
