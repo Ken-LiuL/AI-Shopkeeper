@@ -198,8 +198,8 @@ async def list_orders(
                 return PaginatedResponse(
                     data=real_orders, total=total_real, page=page, page_size=limit,
                 )
-        except Exception:
-            pass  # Fallback to legacy data
+        except Exception as exc:
+            logger.exception("Real orders query failed, falling back: %s", exc)
 
         # Fallback: 老的 QNH synthetic 数据
         raw_orders = []
