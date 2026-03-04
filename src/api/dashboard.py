@@ -963,35 +963,63 @@ async def raw_data_debug() -> dict:
 async def sales_trends(
     days: int = 7,
 ) -> APIResponse[list[dict]]:
-    """查询近 N 天销售趋势（从 orders 表）"""
+    """查询近 N 天销售趋势 — 优先 store_daily_metrics (美团)"""
     pool = pg.get_pool()
     try:
-        rows = []
+        # Priority 0: store_daily_metrics (美团真实数据)
+        trends = []
         with contextlib.suppress(Exception):
-            rows = await pool.fetch(
-                """
-                SELECT
-                    DATE(order_time) AS date,
-                    COUNT(*) AS order_count,
-                    COALESCE(SUM(total_amount), 0) AS revenue,
-                    COALESCE(AVG(total_amount), 0) AS avg_order_value
-                FROM orders
-                WHERE order_time >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day'
-                GROUP BY DATE(order_time)
-                ORDER BY date
-                """,
+            dm_rows = await pool.fetch(
+                """SELECT metric_date AS date,
+                          transaction_volume AS order_count,
+                          deal_amount AS revenue,
+                          CASE WHEN transaction_volume > 0
+                               THEN deal_amount / transaction_volume ELSE 0 END AS avg_order_value,
+                          total_customers AS customers,
+                          exposure_uv AS exposure,
+                          new_customers
+                   FROM store_daily_metrics
+                   WHERE metric_date >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day'
+                   ORDER BY metric_date""",
                 days,
             )
+            if dm_rows:
+                trends = [
+                    {
+                        "date": str(r["date"]),
+                        "order_count": int(r["order_count"] or 0),
+                        "revenue": round(float(r["revenue"] or 0), 2),
+                        "avg_order_value": round(float(r["avg_order_value"] or 0), 2),
+                        "customers": int(r["customers"] or 0),
+                        "exposure": int(r["exposure"] or 0),
+                        "new_customers": int(r["new_customers"] or 0),
+                    }
+                    for r in dm_rows
+                ]
 
-        trends = [
-            {
-                "date": str(r["date"]),
-                "order_count": int(r["order_count"]),
-                "revenue": round(float(r["revenue"]), 2),
-                "avg_order_value": round(float(r["avg_order_value"]), 2),
-            }
-            for r in rows
-        ]
+        # Fallback: orders table
+        if not trends:
+            rows = []
+            with contextlib.suppress(Exception):
+                rows = await pool.fetch(
+                    """SELECT DATE(order_time) AS date,
+                              COUNT(*) AS order_count,
+                              COALESCE(SUM(total_amount), 0) AS revenue,
+                              COALESCE(AVG(total_amount), 0) AS avg_order_value
+                       FROM orders
+                       WHERE order_time >= CURRENT_DATE - ($1 - 1) * INTERVAL '1 day'
+                       GROUP BY DATE(order_time) ORDER BY date""",
+                    days,
+                )
+            trends = [
+                {
+                    "date": str(r["date"]),
+                    "order_count": int(r["order_count"]),
+                    "revenue": round(float(r["revenue"]), 2),
+                    "avg_order_value": round(float(r["avg_order_value"]), 2),
+                }
+                for r in rows
+            ]
 
         if not trends:
             # 数据库无订单数据，尝试从 metrics_raw 中提取

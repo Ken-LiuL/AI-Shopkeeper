@@ -262,10 +262,34 @@ def build_optimized_user_message_with_context(
     conversation_history: list[dict] | None = None,
     product_results: list[dict] | None = None,
     conversation_context: str | None = None,
+    business_context: dict | None = None,
 ) -> str:
     """构建优化版用户消息（包含上下文）"""
     sk = _load_structured_knowledge()
     parts = []
+
+    # 实时经营数据
+    if business_context:
+        biz_lines = ["## 📊 店铺实时经营数据（用这些数据回答业务问题）"]
+        orders = business_context.get("orders", {})
+        if orders:
+            biz_lines.append(f"- 今日订单: {orders.get('count', 0)}单，GMV ¥{orders.get('gmv', 0)}")
+            biz_lines.append(f"- 客单价: ¥{orders.get('avg_order_value', 0)}")
+        customers = business_context.get("customers", {})
+        if customers:
+            biz_lines.append(f"- 今日顾客: {customers.get('total', 0)}人 (新客{customers.get('new', 0)}+老客{customers.get('old', 0)})")
+        inventory = business_context.get("inventory", {})
+        if inventory:
+            biz_lines.append(f"- 商品: {inventory.get('total', 0)}款在售, {inventory.get('low_stock', 0)}款低库存, {inventory.get('out_of_stock', 0)}款缺货")
+        top_products = business_context.get("top_products", [])
+        if top_products:
+            biz_lines.append("- 热销TOP5:")
+            for tp in top_products[:5]:
+                biz_lines.append(f"  {tp['name'][:25]} 月销{tp['sales']}件 ¥{tp['price']}")
+        exposure = business_context.get("exposure", {})
+        if exposure:
+            biz_lines.append(f"- 曝光: UV {exposure.get('uv', 0)}, PV {exposure.get('pv', 0)}")
+        parts.append("\n".join(biz_lines))
 
     # 对话历史
     if conversation_history:
@@ -284,7 +308,12 @@ def build_optimized_user_message_with_context(
             name = p.get("name", "")
             desc = p.get("description", p.get("name", ""))
             price = p.get("retail_price", "")
-            product_lines.append(f"{i}. {name} - ¥{price} - {desc[:80]}...")
+            stock = p.get("stock", "")
+            sales = p.get("monthly_sales", "")
+            line = f"{i}. {name} - ¥{price}"
+            if stock: line += f" (库存{stock})"
+            if sales: line += f" (月销{sales})"
+            product_lines.append(line)
         parts.append("## 店内相关商品\n" + "\n".join(product_lines))
 
     # 对话状态上下文
@@ -297,7 +326,7 @@ def build_optimized_user_message_with_context(
 
     # 评分提醒
     parts.append(
-        "## ⚠️ 评分提醒\n你的回复将被评分，目标≥0.85。必须：回答核心问题+提供解决方案+体现专业度+合规安全。"
+        "## ⚠️ 评分提醒\n你的回复将被评分，目标≥0.85。必须：用真实数据回答、回答核心问题+提供解决方案+体现专业度+合规安全。不要编造数据！"
     )
 
     # 用户问题

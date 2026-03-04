@@ -128,8 +128,91 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
         "raw_orders": {},
     }
 
-    # ── Priority 1: qnh_dataset_records (store_rank + hotsale_goods) ──
+    # ── Priority 0: store_daily_metrics (美团真实经营数据) ──
     try:
+        dm = await pool.fetchrow(
+            """SELECT COALESCE(SUM(transaction_volume), 0)::int AS orders,
+                      COALESCE(SUM(deal_amount), 0) AS gmv,
+                      CASE WHEN SUM(transaction_volume) > 0
+                           THEN SUM(deal_amount) / SUM(transaction_volume) ELSE 0 END AS avg_ov,
+                      COALESCE(SUM(refund_count), 0)::int AS refunds,
+                      COALESCE(SUM(refund_amount), 0) AS refund_amt,
+                      COALESCE(SUM(total_customers), 0)::int AS customers,
+                      COALESCE(SUM(new_customers), 0)::int AS new_cust,
+                      COALESCE(AVG(exposure_uv), 0)::int AS exposure,
+                      COALESCE(AVG(exposure_pv), 0)::int AS pv,
+                      COALESCE(SUM(commission_amount), 0) AS commission,
+                      COALESCE(SUM(settlement_amount), 0) AS settlement
+               FROM store_daily_metrics
+               WHERE metric_date >= $1 - INTERVAL '1 day' AND metric_date <= $1""",
+            today,
+        )
+        if dm and dm["orders"] > 0:
+            business_data["orders"] = {
+                "today_count": dm["orders"],
+                "today_gmv": round(float(dm["gmv"]), 2),
+                "avg_order_value": round(float(dm["avg_ov"]), 2),
+                "yesterday_count": 0,
+                "yesterday_gmv": 0,
+                "growth_rate": 0,
+                "net_profit": round(float(dm["settlement"]) - float(dm["commission"]), 2),
+                "customers": dm["customers"],
+                "new_customers": dm["new_cust"],
+                "old_customers": dm["customers"] - dm["new_cust"],
+                "exposure_uv": dm["exposure"],
+                "exposure_pv": dm["pv"],
+                "commission": round(float(dm["commission"]), 2),
+                "settlement": round(float(dm["settlement"]), 2),
+                "refund_count": dm["refunds"],
+                "refund_amount": round(float(dm["refund_amt"]), 2),
+            }
+            logger.info(f"Insights: loaded store_daily_metrics — {dm['orders']} orders, ¥{dm['gmv']}")
+
+        # 7天趋势
+        trend_rows = await pool.fetch(
+            """SELECT metric_date, transaction_volume, deal_amount, total_customers, exposure_uv
+               FROM store_daily_metrics
+               WHERE metric_date >= $1 - INTERVAL '7 days'
+               ORDER BY metric_date""",
+            today,
+        )
+        if trend_rows:
+            business_data["trends"]["weekly"] = [
+                {
+                    "date": str(r["metric_date"]),
+                    "orders": r["transaction_volume"] or 0,
+                    "gmv": round(float(r["deal_amount"] or 0), 2),
+                    "customers": r["total_customers"] or 0,
+                    "exposure": r["exposure_uv"] or 0,
+                }
+                for r in trend_rows
+            ]
+
+        # 热销商品 (products 表 monthly_sales)
+        top_rows = await pool.fetch(
+            """SELECT name, category, monthly_sales, retail_price,
+                      ROUND(monthly_sales * retail_price, 2) AS revenue
+               FROM products WHERE status = 'active' AND monthly_sales > 0
+               ORDER BY monthly_sales DESC LIMIT 10"""
+        )
+        if top_rows:
+            business_data["products"]["top_selling"] = [
+                {
+                    "name": r["name"],
+                    "category": r["category"] or "",
+                    "quantity_sold": r["monthly_sales"],
+                    "revenue": round(float(r["revenue"] or 0), 2),
+                    "price": round(float(r["retail_price"] or 0), 2),
+                }
+                for r in top_rows
+            ]
+
+    except Exception as e:
+        logger.warning(f"Failed to load store_daily_metrics for insights: {e}")
+
+    # ── Priority 1: qnh_dataset_records (store_rank + hotsale_goods) — fallback ──
+    if not business_data.get("orders", {}).get("today_count"):
+      try:
         store_rows = await pool.fetch(
             "SELECT payload FROM qnh_dataset_records WHERE dataset = 'store_rank'"
         )
@@ -223,7 +306,7 @@ async def _get_daily_business_data(target_date: datetime = None) -> dict[str, An
         except Exception:
             pass
 
-    except Exception as e:
+      except Exception as e:
         logger.warning(f"Failed to get business data from dataset_records: {e}")
 
     # ── Fallback: structured tables for orders/products/trends ──

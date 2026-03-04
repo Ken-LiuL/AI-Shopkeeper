@@ -166,6 +166,50 @@ async def chat(
         if pool:
             product_results = await search_products_with_embedding(message, pool)
 
+        # 2.5 获取实时经营数据（用于回答业务问题）
+        business_context = {}
+        if pool:
+            try:
+                import contextlib
+                # 订单/经营数据
+                with contextlib.suppress(Exception):
+                    dm = await pool.fetchrow("""
+                        SELECT COALESCE(SUM(transaction_volume),0)::int AS orders,
+                               COALESCE(SUM(deal_amount),0) AS gmv,
+                               CASE WHEN SUM(transaction_volume)>0 THEN SUM(deal_amount)/SUM(transaction_volume) ELSE 0 END AS avg_ov,
+                               COALESCE(SUM(total_customers),0)::int AS customers,
+                               COALESCE(SUM(new_customers),0)::int AS new_cust,
+                               COALESCE(AVG(exposure_uv),0)::int AS uv,
+                               COALESCE(AVG(exposure_pv),0)::int AS pv
+                        FROM store_daily_metrics
+                        WHERE metric_date >= CURRENT_DATE - INTERVAL '1 day'
+                    """)
+                    if dm and dm["orders"] > 0:
+                        business_context["orders"] = {"count": dm["orders"], "gmv": round(float(dm["gmv"]),2), "avg_order_value": round(float(dm["avg_ov"]),2)}
+                        business_context["customers"] = {"total": dm["customers"], "new": dm["new_cust"], "old": dm["customers"]-dm["new_cust"]}
+                        business_context["exposure"] = {"uv": dm["uv"], "pv": dm["pv"]}
+
+                # 库存状况
+                with contextlib.suppress(Exception):
+                    inv = await pool.fetchrow("""
+                        SELECT COUNT(*) FILTER (WHERE status='active') AS total,
+                               COUNT(*) FILTER (WHERE status='active' AND stock<5) AS low_stock,
+                               COUNT(*) FILTER (WHERE status='active' AND stock=0) AS oos
+                        FROM products
+                    """)
+                    if inv:
+                        business_context["inventory"] = {"total": inv["total"], "low_stock": inv["low_stock"], "out_of_stock": inv["oos"]}
+
+                # 热销商品
+                with contextlib.suppress(Exception):
+                    tops = await pool.fetch("SELECT name, monthly_sales, retail_price FROM products WHERE status='active' AND monthly_sales>0 ORDER BY monthly_sales DESC LIMIT 5")
+                    if tops:
+                        business_context["top_products"] = [{"name": r["name"], "sales": r["monthly_sales"], "price": float(r["retail_price"] or 0)} for r in tops]
+
+                logger.info(f"Business context loaded: {list(business_context.keys())}")
+            except Exception as e:
+                logger.warning(f"Failed to load business context: {e}")
+
         # 3. 构建优化版系统提示词
         try:
             from ..prompts.customer_service import AFTER_SALES_SCRIPTS
@@ -213,6 +257,7 @@ async def chat(
                 conversation_history=conversation_history,
                 product_results=product_results,
                 conversation_context=conversation_context,
+                business_context=business_context,
             )
         else:
             from ..prompts.customer_service import build_user_message_with_context
