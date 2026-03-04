@@ -11,15 +11,24 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from scripts.daily_sync_and_etl import (
+    run_etl_pipeline,
+    run_qnh_data_sync,
+    run_store_stock_sync,
+    trigger_daily_insights,
+)
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 _scheduler: AsyncIOScheduler | None = None
+SH_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -91,15 +100,26 @@ async def alert_scan_task() -> None:
 
         # 更新活跃预警数量
         pool = pg.get_pool()
-        counts = await pool.fetch(
-            "SELECT severity, COUNT(*) as cnt FROM alerts WHERE status = 'pending' GROUP BY severity"
-        )
-        count_map = {r["severity"]: r["cnt"] for r in counts}
-        update_active_alerts(
-            count_map.get("critical", 0),
-            count_map.get("warning", 0),
-            count_map.get("info", 0),
-        )
+        count_map: dict[str, int] = {}
+        try:
+            counts = await pool.fetch(
+                """
+                SELECT severity, COUNT(*) as cnt
+                FROM alerts
+                WHERE status = 'pending'
+                GROUP BY severity
+                """
+            )
+            count_map = {r["severity"]: r["cnt"] for r in counts}
+        except Exception:
+            # alerts 表可能尚未创建，静默跳过避免刷屏日志
+            logger.debug("alerts table unavailable, skip active alert count update")
+        finally:
+            update_active_alerts(
+                count_map.get("critical", 0),
+                count_map.get("warning", 0),
+                count_map.get("info", 0),
+            )
 
         logger.info(f"Alert scan completed: {len(anomalies)} anomalies in {duration:.1f}s")
 
@@ -217,6 +237,73 @@ async def competitor_crawl_task() -> None:
         logger.exception("Competitor crawl task failed")
 
 
+def _resolve_database_url() -> str | None:
+    dsn = os.environ.get("DATABASE_URL")
+    if dsn:
+        return dsn
+    cfg = get_settings().system.database.get("postgres", {})
+    required = ("user", "password", "host", "port", "database")
+    if not all(k in cfg for k in required):
+        return None
+    return (
+        f"postgresql://{cfg['user']}:{cfg['password']}"
+        f"@{cfg['host']}:{cfg['port']}/{cfg['database']}"
+    )
+
+
+async def qnh_data_sync_task() -> None:
+    """运行 QNH 数据同步 + 门店库存同步."""
+    logger.info("Starting scheduled QNH data + store stock sync task")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip QNH data sync job")
+        return
+    try:
+        dataset_result = await run_qnh_data_sync(dsn)
+        logger.info(
+            "QNH dataset sync completed (datasets=%d, errors=%d)",
+            len(dataset_result["summary"]),
+            len(dataset_result["errors"]),
+        )
+        stock_result = await run_store_stock_sync(dsn)
+        logger.info(
+            "Store stock sync completed (records=%s, success=%s)",
+            stock_result.get("records_synced"),
+            stock_result.get("success"),
+        )
+    except Exception:
+        logger.exception("Scheduled QNH data sync task failed")
+
+
+async def etl_pipeline_task() -> None:
+    """运行 ETL，同步业务表."""
+    logger.info("Starting scheduled ETL pipeline task")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip ETL job")
+        return
+    try:
+        result = await run_etl_pipeline(dsn)
+        logger.info(
+            "ETL pipeline completed (products=%s, sales_history=%s)",
+            result["products"].get("upserts"),
+            result["sales_history"].get("upserts"),
+        )
+    except Exception:
+        logger.exception("Scheduled ETL pipeline task failed")
+
+
+async def daily_insights_warmup_task() -> None:
+    """调用 /api/insights/daily 预热日报缓存."""
+    logger.info("Starting daily insights warmup task")
+    base_url = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
+    try:
+        result = await trigger_daily_insights(base_url)
+        logger.info("Daily insights warmup completed (status=%s)", result["status_code"])
+    except Exception:
+        logger.exception("Daily insights warmup task failed")
+
+
 # ── 调度器初始化 ────────────────────────────────────────────────────────────
 
 
@@ -278,6 +365,39 @@ def init_scheduler() -> AsyncIOScheduler:
         competitor_crawl_task,
         CronTrigger.from_crontab(tasks.get("competitor_crawl_pm", "0 14 * * *")),
         id="competitor_crawl_pm",
+        replace_existing=True,
+    )
+
+    # QNH 数据同步 + 门店库存 (凌晨2:00, CST)
+    scheduler.add_job(
+        qnh_data_sync_task,
+        CronTrigger.from_crontab(
+            tasks.get("qnh_data_sync", "0 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="qnh_data_sync",
+        replace_existing=True,
+    )
+
+    # ETL (凌晨2:30, CST)
+    scheduler.add_job(
+        etl_pipeline_task,
+        CronTrigger.from_crontab(
+            tasks.get("etl_pipeline", "30 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="etl_pipeline",
+        replace_existing=True,
+    )
+
+    # 日报预热 (凌晨3:00, CST)
+    scheduler.add_job(
+        daily_insights_warmup_task,
+        CronTrigger.from_crontab(
+            tasks.get("daily_insights_warmup", "0 3 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="daily_insights_warmup",
         replace_existing=True,
     )
 

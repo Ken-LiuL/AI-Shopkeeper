@@ -16,6 +16,7 @@ from .qnh_client import QNHClient
 from .refunds import RefundSyncer
 from .reviews import ReviewSyncer
 from .scheduler import SyncScheduler
+from .store_stock import StoreStockSyncer
 from .traffic import TrafficSyncer
 from .utils import RateLimitedSession, load_cookies_from_file, save_cookies_to_file
 
@@ -38,6 +39,7 @@ __all__ = [
     "FinanceSyncer",
     "IMHistorySyncer",
     "ChannelSyncer",
+    "StoreStockSyncer",
     "SyncScheduler",
     "RateLimitedSession",
     "load_cookies_from_file",
