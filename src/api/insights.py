@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -691,20 +692,32 @@ async def get_daily_insights(
                 cached_result["cache_key"] = cache_key
                 return APIResponse(data=cached_result)
 
-        # 缓存未命中或强制刷新 — 异步后台生成，立即返回"生成中"状态
-        logger.info(f"Cache miss for {cache_key}, dispatching background generation")
+        # 缓存未命中 — 先返回基础业务数据(秒回), 后台补充AI分析
+        logger.info(f"Cache miss for {cache_key}, returning business data + dispatching AI")
+        try:
+            business_data = await asyncio.wait_for(
+                _get_daily_business_data(target_date), timeout=8.0
+            )
+        except (asyncio.TimeoutError, Exception) as exc:
+            logger.warning(f"Business data fetch failed: {exc}")
+            business_data = {}
+
+        base_result = {
+            "analysis_date": str(target_date.date()),
+            "generated_at": datetime.now().isoformat(),
+            "status": "partial",
+            "business_data": business_data,
+            "data_completeness": _calculate_data_completeness(business_data),
+            "ai_insights": None,
+            "message": "基础数据已返回，AI 洞察在后台生成中",
+            "from_cache": False,
+            "cache_key": cache_key,
+        }
+
+        # 后台生成完整版 (含 AI 分析) 并写缓存
         background_tasks.add_task(_async_generate_and_cache, cache_key, target_date)
 
-        return APIResponse(
-            data={
-                "analysis_date": str(target_date.date()),
-                "generated_at": datetime.now().isoformat(),
-                "status": "generating",
-                "message": "AI 洞察正在后台生成，通常需要 10-20 秒，请稍后重新请求（将命中缓存直接返回）",
-                "from_cache": False,
-                "cache_key": cache_key,
-            }
-        )
+        return APIResponse(data=base_result)
 
     except Exception as e:
         logger.error(f"Failed to generate daily insights: {e}")
