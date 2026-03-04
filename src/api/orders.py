@@ -630,8 +630,9 @@ async def list_orders_compat(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     status: str | None = Query(None),
+    store_id: str | None = Query(None),
     start_date: str | None = Query(None, description="YYYY-MM-DD"),
     end_date: str | None = Query(None, description="YYYY-MM-DD"),
 ) -> PaginatedResponse[dict]:
     """兼容性API - 重定向到新的list接口"""
-    return await list_orders(page=page, limit=page_size, status=status or "all")
+    return await list_orders(page=page, limit=page_size, status=status or "all", store_id=store_id)
