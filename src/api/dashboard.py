@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -119,28 +120,35 @@ async def _get_latest_metrics(pool) -> dict:
     return {}
 
 
-async def _generate_action_items(pool) -> list[ActionItem]:
+async def _generate_action_items(
+    pool,
+    *,
+    total_products: int | None = None,
+    store_records: list[dict] | None = None,
+) -> list[ActionItem]:
     """Generate actionable recommendations based on current business data."""
     action_items = []
 
     try:
         # 1. Check for low stock items (high priority)
         with contextlib.suppress(Exception):
-            low_stock_count = (
-                await pool.fetchval("""
-                SELECT COUNT(*) FROM products
-                WHERE status = 'active' AND stock IS NOT NULL AND stock < 10
-            """)
-                or 0
+            low_stock_rows = await pool.fetch(
+                """
+                SELECT name,
+                       stock,
+                       COUNT(*) OVER () AS total_low_stock
+                FROM products
+                WHERE status = 'active'
+                  AND stock IS NOT NULL
+                  AND stock < 10
+                ORDER BY stock ASC NULLS LAST
+                LIMIT 3
+                """
             )
+            low_stock_count = low_stock_rows[0]["total_low_stock"] if low_stock_rows else 0
 
-            if low_stock_count > 0:
-                sample_products = await pool.fetch("""
-                    SELECT name FROM products
-                    WHERE status = 'active' AND stock IS NOT NULL AND stock < 10
-                    ORDER BY stock ASC LIMIT 3
-                """)
-                product_names = [row["name"] for row in sample_products]
+            if low_stock_count:
+                product_names = [row["name"] for row in low_stock_rows if row["name"]]
                 detail = f"{low_stock_count}款商品库存不足10件"
                 if product_names:
                     detail += f"，包括：{', '.join(product_names[:2])}"
@@ -159,15 +167,22 @@ async def _generate_action_items(pool) -> list[ActionItem]:
         # 2. Check for pricing issues from competitor analysis (medium priority)
         with contextlib.suppress(Exception):
             overpriced_count = (
-                await pool.fetchval("""
-                SELECT COUNT(*) FROM products p
-                WHERE status = 'active' AND retail_price > 100
-                AND retail_price > (
-                    SELECT AVG(retail_price) * 1.2
-                    FROM products
-                    WHERE status = 'active' AND category = p.category AND retail_price > 0
+                await pool.fetchval(
+                    """
+                    WITH category_avg AS (
+                        SELECT category, AVG(retail_price) AS avg_price
+                        FROM products
+                        WHERE status = 'active' AND retail_price > 0
+                        GROUP BY category
+                    )
+                    SELECT COUNT(*)
+                    FROM products p
+                    JOIN category_avg c ON p.category = c.category
+                    WHERE p.status = 'active'
+                      AND p.retail_price > 100
+                      AND p.retail_price > c.avg_price * 1.2
+                    """
                 )
-            """)
                 or 0
             )
 
@@ -182,7 +197,8 @@ async def _generate_action_items(pool) -> list[ActionItem]:
                 )
 
         # 3. Check performance metrics from dataset records (priority) or raw data
-        store_records = await _get_dataset_records(pool, "store_rank")
+        if store_records is None:
+            store_records = await _get_dataset_records(pool, "store_rank")
         if store_records:
             # Aggregate KPIs across stores
             total_overtime = sum(
@@ -290,17 +306,21 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 
         # 4. Check for category concentration (low priority)
         with contextlib.suppress(Exception):
-            top_category = await pool.fetchrow("""
+            top_category = await pool.fetchrow(
+                """
                 SELECT category, COUNT(*) as cnt,
-                       COUNT(*) * 100 / (SELECT COUNT(*) FROM products WHERE status = 'active') as percentage
+                       COUNT(*) * 100.0 / NULLIF(
+                           (SELECT COUNT(*) FROM products WHERE status = 'active'), 0
+                       ) as percentage
                 FROM products
                 WHERE status = 'active' AND category != ''
                 GROUP BY category
                 ORDER BY cnt DESC
                 LIMIT 1
-            """)
+                """
+            )
 
-            if top_category and top_category["percentage"] > 40:
+            if top_category and top_category["percentage"] and top_category["percentage"] > 40:
                 action_items.append(
                     ActionItem(
                         priority="low",
@@ -311,9 +331,10 @@ async def _generate_action_items(pool) -> list[ActionItem]:
                 )
 
         # 5. Generate growth opportunities (low priority)
-        total_products = (
-            await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
-        )
+        if total_products is None:
+            total_products = (
+                await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+            )
         if total_products < 50:
             action_items.append(
                 ActionItem(
@@ -350,7 +371,9 @@ async def _generate_action_items(pool) -> list[ActionItem]:
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
+    total_products = (
+        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+    )
 
     today_orders = 0
     today_gmv = 0.0
@@ -425,20 +448,33 @@ async def overview() -> APIResponse[DashboardOverview]:
                 pending_alerts += 1
 
     pending_tasks = 0
-    for q in [
-        "SELECT COUNT(*) FROM selection_runs WHERE status = 'running'",
-        "SELECT COUNT(*) FROM bundle_tasks WHERE status = 'running'",
-        "SELECT COUNT(*) FROM listings WHERE status = 'processing'",
-    ]:
-        with contextlib.suppress(Exception):
-            pending_tasks += await pool.fetchval(q) or 0
+    with contextlib.suppress(Exception):
+        task_counts = await pool.fetchrow(
+            """
+            SELECT
+                COALESCE((SELECT COUNT(*) FROM selection_runs WHERE status = 'running'), 0) AS selection_runs,
+                COALESCE((SELECT COUNT(*) FROM bundle_tasks WHERE status = 'running'), 0) AS bundle_tasks,
+                COALESCE((SELECT COUNT(*) FROM listings WHERE status = 'processing'), 0) AS listings
+            """
+        )
+        if task_counts:
+            pending_tasks = (
+                int(task_counts["selection_runs"])
+                + int(task_counts["bundle_tasks"])
+                + int(task_counts["listings"])
+            )
 
     # Generate action items
     # Timeout action_items generation to prevent overview from hanging
-    import asyncio
-
     try:
-        action_items = await asyncio.wait_for(_generate_action_items(pool), timeout=10.0)
+        action_items = await asyncio.wait_for(
+            _generate_action_items(
+                pool,
+                total_products=total_products,
+                store_records=store_records,
+            ),
+            timeout=10.0,
+        )
     except TimeoutError:
         logger.warning("action_items generation timed out")
         action_items = []
@@ -637,10 +673,132 @@ async def store_kpis() -> APIResponse[dict]:
     """Return parsed store KPIs from dataset records or raw metrics."""
     pool = pg.get_pool()
 
-    # ── Priority 1: Aggregate from qnh_dataset_records (store_rank) ──
+    orders_row = None
+    with contextlib.suppress(Exception):
+        orders_row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*)::int AS order_count,
+                COALESCE(SUM(total_amount), 0) AS gmv,
+                COALESCE(SUM(customer_paid), 0) AS actual_revenue,
+                COALESCE(SUM(commission), 0) AS commission_fee,
+                COALESCE(SUM(delivery_fee), 0) AS delivery_fee,
+                COALESCE(SUM(merchant_discount), 0) AS package_fee,
+                COUNT(DISTINCT customer_name) FILTER (WHERE customer_name IS NOT NULL) AS customers
+            FROM orders
+            WHERE order_date = CURRENT_DATE
+              AND customer_paid IS NOT NULL
+            """
+        )
+
+    product_stats = None
+    with contextlib.suppress(Exception):
+        product_stats = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*)::int AS active_products,
+                COALESCE(SUM(COALESCE(monthly_sales, 0)), 0) AS total_units,
+                COALESCE(
+                    SUM(COALESCE(monthly_sales, 0)::numeric * COALESCE(retail_price, 0)),
+                    0
+                ) AS sales_amount,
+                COALESCE(
+                    SUM(
+                        COALESCE(monthly_sales, 0)::numeric
+                        * GREATEST(COALESCE(retail_price, 0) - COALESCE(cost_price, 0), 0)
+                    ),
+                    0
+                ) AS gross_profit,
+                COALESCE(
+                    SUM(
+                        GREATEST(0, 10 - COALESCE(stock, 0)) * COALESCE(cost_price, 0)
+                    ),
+                    0
+                ) AS stockout_loss
+            FROM products
+            WHERE status = 'active'
+            """
+        )
+
+    orders = int(orders_row["order_count"]) if orders_row and orders_row["order_count"] else 0
+    gmv = float(orders_row["gmv"]) if orders_row and orders_row["gmv"] is not None else 0.0
+    actual_revenue = (
+        float(orders_row["actual_revenue"])
+        if orders_row and orders_row["actual_revenue"] is not None
+        else 0.0
+    )
+    delivery_fee = (
+        float(orders_row["delivery_fee"])
+        if orders_row and orders_row["delivery_fee"] is not None
+        else 0.0
+    )
+    package_fee = (
+        float(orders_row["package_fee"])
+        if orders_row and orders_row["package_fee"] is not None
+        else 0.0
+    )
+    customers = (
+        int(orders_row["customers"]) if orders_row and orders_row["customers"] is not None else 0
+    )
+    commission_total = (
+        float(orders_row["commission_fee"])
+        if orders_row and orders_row["commission_fee"] is not None
+        else 0.0
+    )
+
+    avg_order_value = gmv / orders if orders else 0.0
+    actual_avg_order_value = actual_revenue / orders if orders else 0.0
+
+    product_sales = (
+        float(product_stats["sales_amount"])
+        if product_stats and product_stats["sales_amount"] is not None
+        else 0.0
+    )
+    stockout_loss = (
+        float(product_stats["stockout_loss"])
+        if product_stats and product_stats["stockout_loss"] is not None
+        else 0.0
+    )
+    gross_profit = (
+        float(product_stats["gross_profit"])
+        if product_stats and product_stats["gross_profit"] is not None
+        else 0.0
+    )
+    active_products = (
+        int(product_stats["active_products"])
+        if product_stats and product_stats["active_products"] is not None
+        else 0
+    )
+
+    has_real_orders = orders > 0
+    has_product_stats = active_products > 0
+
+    if has_real_orders or has_product_stats:
+        net_profit = actual_revenue - commission_total - delivery_fee if has_real_orders else 0.0
+        if net_profit == 0.0:
+            net_profit = gross_profit
+        if product_sales == 0.0 and has_real_orders:
+            product_sales = gmv
+
+        return APIResponse(
+            data={
+                "orders": orders,
+                "gmv": round(gmv, 2),
+                "actual_revenue": round(actual_revenue, 2),
+                "product_sales": round(product_sales, 2),
+                "avg_order_value": round(avg_order_value, 2),
+                "actual_avg_order_value": round(actual_avg_order_value, 2),
+                "net_profit": round(net_profit, 2),
+                "customers": customers,
+                "delivery_fee": round(delivery_fee, 2),
+                "package_fee": round(package_fee, 2),
+                "stockout_loss": round(stockout_loss, 2),
+            }
+        )
+
+    # ── Fallback: dataset records ──
     store_records = await _get_dataset_records(pool, "store_rank")
     if store_records:
-        # Aggregate across all stores
         agg: dict[str, float] = {}
         kpi_keys = [
             "eff_ord_cnt",
@@ -655,7 +813,6 @@ async def store_kpis() -> APIResponse[dict]:
             "package_fee",
             "stockout_loss_amt",
         ]
-        # Percentage-based fields: take weighted average, not sum
         pct_keys = {"overtime_ord_rate", "stockout_refund_rate"}
 
         for key in kpi_keys:
@@ -663,7 +820,6 @@ async def store_kpis() -> APIResponse[dict]:
         for key in pct_keys:
             vals = [_parse_data_value(rec.get(key)) for rec in store_records]
             agg[key] = sum(vals) / len(vals) if vals else 0.0
-        # Avg order value = GMV / orders (not sum)
         if agg["eff_ord_cnt"] > 0:
             agg["unit_price"] = agg["sale_amt_gmv"] / agg["eff_ord_cnt"]
             agg["actual_unit_price"] = agg["actual_pay_amt"] / agg["eff_ord_cnt"]
@@ -701,8 +857,6 @@ async def store_kpis() -> APIResponse[dict]:
         "user_cnt",
         "delivery_fee",
         "package_fee",
-        "overtime_ord_rate",
-        "stockout_refund_rate",
         "stockout_loss_amt",
     ]:
         kpis[key] = _extract_metric(metrics, key)
