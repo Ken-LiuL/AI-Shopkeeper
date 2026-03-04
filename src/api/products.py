@@ -35,6 +35,7 @@ async def list_products_v1(
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None),
     status: str | None = Query(None),
+    store_id: str | None = Query(None, description="按门店 ID 过滤"),
 ) -> PaginatedResponse[dict]:
     """V1 API compatibility endpoint for products list."""
     pool = pg.get_pool()
@@ -47,15 +48,16 @@ async def list_products_v1(
         params.append(f"%{search}%")
         idx += 1
     if status:
-        # Map v1 status to qnh_products status
-        qnh_status = "在售" if status == "active" else "下架"
         conditions.append(f"status = ${idx}")
-        params.append(qnh_status)
+        params.append(status)
+        idx += 1
+    if store_id:
+        conditions.append(f"store_id = ${idx}")
+        params.append(store_id)
         idx += 1
 
     try:
-        # Read from qnh_products (synced from QNH platform)
-        count_query = "SELECT COUNT(*) FROM qnh_products"
+        count_query = "SELECT COUNT(*) FROM products"
         if conditions:
             count_query += " WHERE " + " AND ".join(conditions)
         total = await pool.fetchval(count_query, *params) or 0
@@ -64,31 +66,33 @@ async def list_products_v1(
         params_page = params + [page_size, offset]
 
         select_query = """SELECT
-            spu_id AS product_id,
+            product_id,
             name,
             brand,
             category,
             retail_price,
-            channel_price,
             cost_price,
+            stock,
+            monthly_sales,
             status,
-            synced_at AS created_at,
-            synced_at AS updated_at
-        FROM qnh_products"""
+            store_id,
+            image_url,
+            upc_code,
+            created_at,
+            updated_at
+        FROM products"""
 
         if conditions:
             select_query += " WHERE " + " AND ".join(conditions)
-        select_query += f" ORDER BY synced_at DESC LIMIT ${idx} OFFSET ${idx + 1}"
+        select_query += f" ORDER BY monthly_sales DESC NULLS LAST LIMIT ${idx} OFFSET ${idx + 1}"
 
         rows = await pool.fetch(select_query, *params_page)
 
-        # Convert to expected format and handle data types
         processed_rows = []
         for row in rows:
             try:
                 row_dict = dict(row)
-                # Ensure numeric fields are properly converted
-                for price_field in ["retail_price", "channel_price", "cost_price"]:
+                for price_field in ["retail_price", "cost_price"]:
                     if row_dict.get(price_field) is not None:
                         row_dict[price_field] = float(row_dict[price_field])
                 processed_rows.append(row_dict)
@@ -596,6 +600,7 @@ async def list_products(
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = Query(None),
     status: str | None = Query(None),
+    store_id: str | None = Query(None, description="按门店 ID 过滤"),
 ) -> PaginatedResponse[dict]:
     pool = pg.get_pool()
     conditions: list[str] = []
@@ -610,16 +615,19 @@ async def list_products(
         conditions.append(f"status = ${idx}")
         params.append(status)
         idx += 1
+    if store_id:
+        conditions.append(f"store_id = ${idx}")
+        params.append(store_id)
+        idx += 1
 
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    # Read from qnh_products (synced from QNH platform)
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM qnh_products{where}", *params)
+    total = await pool.fetchval(f"SELECT COUNT(*) FROM products{where}", *params)
 
     offset = (page - 1) * page_size
     params_page = params + [page_size, offset]
     rows = await pool.fetch(
-        f"SELECT *, spu_id AS product_id, synced_at AS created_at, synced_at AS updated_at FROM qnh_products{where} ORDER BY synced_at DESC LIMIT ${idx} OFFSET ${idx + 1}",
+        f"SELECT * FROM products{where} ORDER BY monthly_sales DESC NULLS LAST LIMIT ${idx} OFFSET ${idx + 1}",
         *params_page,
     )
     return PaginatedResponse(
