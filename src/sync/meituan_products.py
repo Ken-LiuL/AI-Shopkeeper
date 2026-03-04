@@ -60,6 +60,13 @@ class MeituanProductSyncer(BaseSyncer):
     async def incremental_sync(self, since: datetime) -> SyncResult:  # noqa: ARG002
         return await self.full_sync()
 
+    async def sync(self) -> SyncResult:
+        """Override to persist sync logs per store."""
+        log_id = await self._insert_sync_log_start()
+        result = await super().sync()
+        await self._update_sync_log_finish(log_id, result)
+        return result
+
     # ── Internal ─────────────────────────────────────────────
 
     async def _sync_all_products(self) -> int:
@@ -269,3 +276,62 @@ class MeituanProductSyncer(BaseSyncer):
         if dec > Decimal("1000") and dec == dec.to_integral_value():
             dec = dec / Decimal("100")
         return dec.quantize(Decimal("0.01"))
+
+    async def _insert_sync_log_start(self) -> int | None:
+        """Insert a 'running' sync_log record at the start of sync."""
+        if not self.pool:
+            return None
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO sync_logs (store_id, sync_type, status, started_at)
+                    VALUES ($1, $2, 'running', NOW())
+                    RETURNING id
+                    """,
+                    self.wm_poi_id,
+                    self.name,
+                )
+                return row["id"] if row else None
+        except Exception:
+            logger.warning(
+                "Failed to insert sync_log start for store %s", self.wm_poi_id, exc_info=True
+            )
+            return None
+
+    async def _update_sync_log_finish(self, log_id: int | None, result: SyncResult) -> None:
+        """Update the sync_log record with final status after sync completes."""
+        if not self.pool:
+            return
+        status = "success" if result.success else "failed"
+        try:
+            async with self.pool.acquire() as conn:
+                if log_id is not None:
+                    await conn.execute(
+                        """
+                        UPDATE sync_logs
+                        SET status = $1, records_count = $2, error_msg = $3, finished_at = NOW()
+                        WHERE id = $4
+                        """,
+                        status,
+                        result.records_synced,
+                        result.error,
+                        log_id,
+                    )
+                else:
+                    # Fallback: insert a new record if start insert failed
+                    await conn.execute(
+                        """
+                        INSERT INTO sync_logs (store_id, sync_type, status, records_count,
+                                               error_msg, started_at, finished_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+                        """,
+                        self.wm_poi_id,
+                        self.name,
+                        status,
+                        result.records_synced,
+                        result.error,
+                        result.started_at,
+                    )
+        except Exception:
+            logger.warning("Failed to update sync_log for store %s", self.wm_poi_id, exc_info=True)

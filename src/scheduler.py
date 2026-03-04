@@ -10,8 +10,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from collections.abc import Iterable
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -27,8 +29,25 @@ from src.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Invalid int for %s=%s, fallback to %d", name, value, default)
+        return default
+
+
 _scheduler: AsyncIOScheduler | None = None
 SH_TZ = ZoneInfo("Asia/Shanghai")
+LOW_STOCK_MIN_UNITS = _env_int("ALERT_LOW_STOCK_MIN_UNITS", 5)
+LOW_STOCK_SAFETY_DAYS = _env_int("ALERT_LOW_STOCK_SAFETY_DAYS", 5)
+ORDER_ALERT_DELAY_MINUTES = _env_int("ORDER_ALERT_DELAY_MINUTES", 30)
+ORDER_ALERT_CRITICAL_MINUTES = _env_int("ORDER_ALERT_CRITICAL_MINUTES", 120)
+ALERT_SCAN_MAX_ROWS = _env_int("ALERT_SCAN_MAX_ROWS", 50)
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -79,27 +98,140 @@ async def alert_scan_task() -> None:
     try:
         import time
 
-        from src.agents import Orchestrator
         from src.db import postgres as pg
-        from src.metrics import record_agent_execution, record_alert_triggered, update_active_alerts
+        from src.metrics import (
+            record_agent_execution,
+            record_alert_triggered,
+            update_active_alerts,
+        )
 
-        orch = Orchestrator()
         start = time.time()
+        pool = pg.get_pool()
+        anomalies: list[dict[str, str]] = []
 
-        result = await orch.run_alert()
+        async with pool.acquire() as conn:
+            # 库存告警：基于月销量比例判断
+            # 高优先级: monthly_sales >= 100 且 stock < monthly_sales * 0.5
+            # 中优先级: monthly_sales >= 30 且 stock < monthly_sales * 0.3
+            low_stock_rows = await conn.fetch(
+                """
+                SELECT
+                    product_id,
+                    name,
+                    COALESCE(stock, 0) AS stock,
+                    COALESCE(monthly_sales, 0) AS monthly_sales,
+                    CASE
+                        WHEN COALESCE(monthly_sales, 0) >= 100
+                             AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5
+                            THEN 'critical'
+                        WHEN COALESCE(monthly_sales, 0) >= 30
+                             AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3
+                            THEN 'warning'
+                    END AS computed_severity
+                FROM products
+                WHERE status = 'active'
+                  AND (
+                      (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+                      OR
+                      (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+                  )
+                ORDER BY monthly_sales DESC, stock ASC
+                LIMIT $1
+                """,
+                ALERT_SCAN_MAX_ROWS,
+            )
+
+            low_stock_alert_ids: list[str] = []
+            for row in low_stock_rows:
+                stock = int(row["stock"])
+                monthly_sales = int(row["monthly_sales"])
+                severity = row["computed_severity"]
+                alert_id = f"low_stock_{row['product_id']}"
+                if severity == "critical":
+                    threshold = int(monthly_sales * 0.5)
+                else:
+                    threshold = int(monthly_sales * 0.3)
+                deficit = threshold - stock
+                metrics_payload = {
+                    "stock": stock,
+                    "threshold": threshold,
+                    "monthly_sales": monthly_sales,
+                    "deficit": deficit,
+                }
+                description = (
+                    f"库存 {stock} 件，月销 {monthly_sales} 件，低于安全库存 {threshold} 件"
+                )
+                await _upsert_scheduler_alert(
+                    conn,
+                    alert_id=alert_id,
+                    product_id=row["product_id"],
+                    alert_type="inventory_low_stock",
+                    severity=severity,
+                    title=f"{row['name']} 库存不足",
+                    description=description,
+                    metrics=metrics_payload,
+                )
+                low_stock_alert_ids.append(alert_id)
+                record_alert_triggered("inventory_low_stock", severity)
+                anomalies.append({"anomaly_type": "inventory_low_stock", "severity": severity})
+
+            await _resolve_stale_alerts(conn, "low_stock_%", low_stock_alert_ids)
+
+            pending_orders = await conn.fetch(
+                """
+                SELECT order_id,
+                       COALESCE(status, 'unknown') AS status,
+                       total_amount,
+                       order_time,
+                       EXTRACT(EPOCH FROM (NOW() - order_time)) / 60 AS age_minutes
+                FROM orders
+                WHERE order_time IS NOT NULL
+                  AND COALESCE(status, '') NOT IN ('completed', 'cancelled', 'closed', 'refunded')
+                  AND order_time < NOW() - ($1::int || ' minutes')::interval
+                ORDER BY order_time ASC
+                LIMIT $2
+                """,
+                ORDER_ALERT_DELAY_MINUTES,
+                ALERT_SCAN_MAX_ROWS,
+            )
+
+            order_alert_ids: list[str] = []
+            for row in pending_orders:
+                age_minutes = float(row["age_minutes"] or 0)
+                if age_minutes >= ORDER_ALERT_CRITICAL_MINUTES:
+                    severity = "critical"
+                else:
+                    severity = "warning"
+                alert_id = f"order_delay_{row['order_id']}"
+                metrics_payload = {
+                    "status": row["status"],
+                    "total_amount": float(row["total_amount"] or 0),
+                    "order_time": row["order_time"].isoformat() if row["order_time"] else None,
+                    "age_minutes": age_minutes,
+                }
+                description = (
+                    f"订单已等待 {age_minutes:.0f} 分钟 (状态: {row['status']})，请关注配送/履约"
+                )
+                await _upsert_scheduler_alert(
+                    conn,
+                    alert_id=alert_id,
+                    product_id=None,
+                    alert_type="order_delay",
+                    severity=severity,
+                    title=f"订单 {row['order_id']} 异常延迟",
+                    description=description,
+                    metrics=metrics_payload,
+                )
+                order_alert_ids.append(alert_id)
+                record_alert_triggered("order_delay", severity)
+                anomalies.append({"anomaly_type": "order_delay", "severity": severity})
+
+            await _resolve_stale_alerts(conn, "order_delay_%", order_alert_ids)
 
         duration = time.time() - start
         record_agent_execution("alert", duration, success=True)
 
-        # 记录触发的预警
-        anomalies = result.get("anomalies", {}).get("anomalies", [])
-        for anomaly in anomalies:
-            record_alert_triggered(
-                anomaly.get("anomaly_type", "unknown"), anomaly.get("severity", "info")
-            )
-
         # 更新活跃预警数量
-        pool = pg.get_pool()
         count_map: dict[str, int] = {}
         try:
             counts = await pool.fetch(
@@ -121,7 +253,12 @@ async def alert_scan_task() -> None:
                 count_map.get("info", 0),
             )
 
-        logger.info(f"Alert scan completed: {len(anomalies)} anomalies in {duration:.1f}s")
+        logger.info(
+            "Alert scan completed: %d low-stock, %d pending-order anomalies in %.1fs",
+            len(low_stock_alert_ids),
+            len(order_alert_ids),
+            duration,
+        )
 
     except Exception:
         logger.exception("Alert scan task failed")
@@ -277,10 +414,12 @@ async def meituan_product_sync_task() -> None:
                 logger.info("Syncing Meituan store %s", wm_poi_id)
                 client = MeituanBrowserClient(wm_poi_id=wm_poi_id)
                 syncer = MeituanProductSyncer(client, pool, wm_poi_id)
-                result = await syncer.full_sync()
+                result = await syncer.sync()
                 logger.info(
                     "Meituan product sync for %s: success=%s records=%s",
-                    wm_poi_id, result.success, result.records_synced,
+                    wm_poi_id,
+                    result.success,
+                    result.records_synced,
                 )
                 # 更新 sync 状态
                 async with pool.acquire() as conn:
@@ -358,14 +497,101 @@ def init_scheduler() -> AsyncIOScheduler:
 
     settings = get_settings()
     tasks = settings.system.scheduled_tasks
+    sync_mode = os.environ.get("SYNC_MODE", "remote").strip().lower()
 
-    # 每日选品 (6:00)
-    scheduler.add_job(
-        daily_selection_task,
-        CronTrigger.from_crontab(tasks.get("daily_selection", "0 6 * * *")),
-        id="daily_selection",
-        replace_existing=True,
+    _register_remote_safe_jobs(scheduler, tasks)
+    if sync_mode == "local":
+        _register_local_only_jobs(scheduler, tasks)
+    else:
+        logger.info("SYNC_MODE=remote, browser-dependent jobs are disabled by default")
+
+    logger.info(
+        "Scheduler initialized in %s mode with %d jobs",
+        sync_mode,
+        len(scheduler.get_jobs()),
     )
+    return scheduler
+
+
+def start_scheduler() -> None:
+    """启动调度器"""
+    scheduler = get_scheduler()
+    if not scheduler.running:
+        scheduler.start()
+        logger.info("Scheduler started")
+
+
+def shutdown_scheduler() -> None:
+    """关闭调度器"""
+    scheduler = get_scheduler()
+    if scheduler.running:
+        scheduler.shutdown(wait=True)
+        logger.info("Scheduler shutdown")
+
+
+async def _upsert_scheduler_alert(
+    conn,
+    *,
+    alert_id: str,
+    product_id: str | None,
+    alert_type: str,
+    severity: str,
+    title: str,
+    description: str,
+    metrics: dict | None,
+) -> None:
+    metrics_json = json.dumps(metrics, ensure_ascii=False) if metrics is not None else None
+    await conn.execute(
+        """
+        INSERT INTO alerts (alert_id, product_id, alert_type, severity, detection_method,
+                            metrics, title, description, status, created_at)
+        VALUES ($1, $2, $3, $4, 'scheduler', $5::jsonb, $6, $7, 'pending', NOW())
+        ON CONFLICT (alert_id) DO UPDATE SET
+            severity = EXCLUDED.severity,
+            metrics = EXCLUDED.metrics,
+            title = EXCLUDED.title,
+            description = EXCLUDED.description,
+            detection_method = 'scheduler',
+            status = 'pending',
+            resolved_at = NULL,
+            root_cause = NULL,
+            suggestion = NULL
+        """,
+        alert_id,
+        product_id,
+        alert_type,
+        severity,
+        metrics_json,
+        title,
+        description,
+    )
+
+
+async def _resolve_stale_alerts(conn, prefix: str, active_ids: Iterable[str]) -> None:
+    ids = list(active_ids)
+    if ids:
+        await conn.execute(
+            """
+            UPDATE alerts
+            SET status = 'resolved', resolved_at = NOW()
+            WHERE alert_id LIKE $1 AND status = 'pending' AND alert_id <> ALL($2::text[])
+            """,
+            prefix,
+            ids,
+        )
+    else:
+        await conn.execute(
+            """
+            UPDATE alerts
+            SET status = 'resolved', resolved_at = NOW()
+            WHERE alert_id LIKE $1 AND status = 'pending'
+            """,
+            prefix,
+        )
+
+
+def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
+    """Jobs that can safely run on remote (browser-less) environments."""
 
     # 预警扫描 (每5分钟)
     scheduler.add_job(
@@ -375,7 +601,34 @@ def init_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # 套餐挖掘 (23:00)
+    # 每日报告 (22:00)
+    scheduler.add_job(
+        daily_report_task,
+        CronTrigger.from_crontab(tasks.get("daily_report", "0 22 * * *")),
+        id="daily_report",
+        replace_existing=True,
+    )
+
+    # ETL (凌晨2:30, CST)
+    scheduler.add_job(
+        etl_pipeline_task,
+        CronTrigger.from_crontab(
+            tasks.get("etl_pipeline", "30 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="etl_pipeline",
+        replace_existing=True,
+    )
+
+    # 每日选品 (6:00) — 不依赖浏览器
+    scheduler.add_job(
+        daily_selection_task,
+        CronTrigger.from_crontab(tasks.get("daily_selection", "0 6 * * *")),
+        id="daily_selection",
+        replace_existing=True,
+    )
+
+    # 套餐挖掘 (23:00) — 不依赖浏览器
     scheduler.add_job(
         bundle_mining_task,
         CronTrigger.from_crontab(tasks.get("bundle_mining", "0 23 * * *")),
@@ -383,19 +636,15 @@ def init_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
+
+def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
+    """Jobs that require local resources (browser/nodriver/agent warmups)."""
+
     # Prophet 重训练 (每周日3:00)
     scheduler.add_job(
         prophet_retrain_task,
         CronTrigger.from_crontab(tasks.get("prophet_retrain", "0 3 * * 0")),
         id="prophet_retrain",
-        replace_existing=True,
-    )
-
-    # 每日报告 (22:00)
-    scheduler.add_job(
-        daily_report_task,
-        CronTrigger.from_crontab(tasks.get("daily_report", "0 22 * * *")),
-        id="daily_report",
         replace_existing=True,
     )
 
@@ -435,17 +684,6 @@ def init_scheduler() -> AsyncIOScheduler:
         replace_existing=True,
     )
 
-    # ETL (凌晨2:30, CST)
-    scheduler.add_job(
-        etl_pipeline_task,
-        CronTrigger.from_crontab(
-            tasks.get("etl_pipeline", "30 2 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="etl_pipeline",
-        replace_existing=True,
-    )
-
     # 日报预热 (凌晨3:00, CST)
     scheduler.add_job(
         daily_insights_warmup_task,
@@ -456,22 +694,3 @@ def init_scheduler() -> AsyncIOScheduler:
         id="daily_insights_warmup",
         replace_existing=True,
     )
-
-    logger.info("Scheduler initialized with %d jobs", len(scheduler.get_jobs()))
-    return scheduler
-
-
-def start_scheduler() -> None:
-    """启动调度器"""
-    scheduler = get_scheduler()
-    if not scheduler.running:
-        scheduler.start()
-        logger.info("Scheduler started")
-
-
-def shutdown_scheduler() -> None:
-    """关闭调度器"""
-    scheduler = get_scheduler()
-    if scheduler.running:
-        scheduler.shutdown(wait=True)
-        logger.info("Scheduler shutdown")
