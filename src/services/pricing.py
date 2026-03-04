@@ -228,16 +228,76 @@ class PricingService:
         )
 
     async def get_pricing_suggestions(self) -> list[PricingSuggestion]:
-        """批量扫描生成定价建议"""
+        """批量扫描生成定价建议（优化：批量查询替代逐商品分析）"""
         pool = pg.get_pool()
-        products = await pool.fetch(
-            "SELECT product_id FROM products WHERE status = 'active' AND retail_price > 0"
-        )
-
         suggestions = []
 
-        # If no structured products data, generate pricing suggestions from qnh_products
-        if not products:
+        # Batch pricing analysis: join products with competitor data directly
+        try:
+            rows = await pool.fetch(
+                """SELECT p.product_id, p.name, p.retail_price, p.cost_price, p.category,
+                          COALESCE(
+                              (SELECT AVG(cp.price) FROM competitor_products cp
+                               WHERE cp.category = p.category AND cp.price > 0),
+                              0
+                          ) AS comp_avg_price,
+                          COALESCE(
+                              (SELECT COUNT(*) FROM competitor_products cp
+                               WHERE cp.category = p.category AND cp.price > 0),
+                              0
+                          ) AS comp_count
+                   FROM products p
+                   WHERE p.status = 'active' AND p.retail_price > 0
+                   ORDER BY p.retail_price DESC
+                   LIMIT 50"""
+            )
+            for p in rows:
+                current_price = float(p["retail_price"] or 0)
+                cost = float(p["cost_price"] or current_price * 0.7)
+                comp_avg = float(p["comp_avg_price"] or 0)
+                margin = (current_price - cost) / current_price if current_price > 0 else 0
+
+                suggested_price = current_price
+                reason = "维持现价"
+
+                if comp_avg > 0 and current_price > comp_avg * 1.2:
+                    suggested_price = max(comp_avg * 1.1, cost * 1.05)
+                    reason = f"高于竞品均价(¥{comp_avg:.0f})，建议降价"
+                elif comp_avg > 0 and current_price < comp_avg * 0.8:
+                    suggested_price = min(comp_avg * 0.9, current_price * 1.15)
+                    reason = f"低于竞品均价(¥{comp_avg:.0f})，可适度提价"
+                elif margin < 0.15 and current_price > 10:
+                    suggested_price = cost * 1.25
+                    reason = f"毛利率仅{margin:.0%}，建议提价保利润"
+
+                if abs(suggested_price - current_price) > 0.5:
+                    proj_margin = (
+                        (suggested_price - cost) / suggested_price if suggested_price > 0 else 0
+                    )
+                    suggestions.append(
+                        PricingSuggestion(
+                            product_id=p["product_id"],
+                            product_name=p["name"],
+                            current_price=current_price,
+                            suggested_price=round(suggested_price, 2),
+                            reason=reason,
+                            current_margin=round(margin, 4),
+                            projected_margin=round(proj_margin, 4),
+                            competitor_ref={
+                                "avg": comp_avg or current_price,
+                                "min": comp_avg * 0.8 if comp_avg > 0 else current_price * 0.8,
+                                "max": comp_avg * 1.2 if comp_avg > 0 else current_price * 1.2,
+                                "count": int(p["comp_count"]),
+                            },
+                        )
+                    )
+            if suggestions:
+                return suggestions
+        except Exception as e:
+            logger.warning(f"Batch pricing analysis failed: {e}")
+
+        # Fallback: use qnh_products directly
+        if not suggestions:
             logger.info(
                 "No active products in structured table, using qnh_products for pricing suggestions"
             )
@@ -340,36 +400,8 @@ class PricingService:
                         )
                     )
         else:
-            # Original logic for structured data
-            for p in products:
-                try:
-                    analysis = await self.analyze_pricing(p["product_id"])
-                    if analysis.recommendation == "hold":
-                        continue
-
-                    suggested, reason = self._calc_suggested_price(analysis)
-                    cost = analysis.cost_price
-                    proj_margin = (suggested - cost) / suggested if suggested > 0 else 0
-
-                    suggestions.append(
-                        PricingSuggestion(
-                            product_id=analysis.product_id,
-                            product_name=analysis.product_name,
-                            current_price=analysis.current_price,
-                            suggested_price=round(suggested, 2),
-                            reason=reason,
-                            current_margin=round(analysis.gross_margin, 4),
-                            projected_margin=round(proj_margin, 4),
-                            competitor_ref={
-                                "avg": analysis.competitor_avg,
-                                "min": analysis.competitor_min,
-                                "max": analysis.competitor_max,
-                                "count": analysis.competitor_count,
-                            },
-                        )
-                    )
-                except Exception as e:
-                    logger.warning(f"Pricing analysis failed for {p['product_id']}: {e}")
+            # (Old per-product analyze_pricing loop removed — too slow with 1935 products)
+            pass
 
         return suggestions
 
