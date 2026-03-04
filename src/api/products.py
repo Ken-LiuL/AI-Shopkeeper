@@ -192,11 +192,21 @@ async def low_stock(
 ) -> PaginatedResponse[dict]:
     pool = pg.get_pool()
 
-    # Try structured products table first
+    # Dynamic low-stock thresholds based on monthly_sales:
+    #   monthly_sales >= 100 → low if stock < monthly_sales * 0.5
+    #   monthly_sales >= 30  → low if stock < monthly_sales * 0.3
+    #   monthly_sales < 30   → low if stock < 5
+    dynamic_low_stock_condition = """
+        status = 'active' AND (
+            (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+         OR (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(monthly_sales, 0) < 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+         OR (COALESCE(monthly_sales, 0) < 30 AND COALESCE(stock, 0) < 5)
+        )
+    """
+
     total = (
         await pool.fetchval(
-            "SELECT COUNT(*) FROM products WHERE stock <= $1 AND status = 'active'",
-            threshold,
+            f"SELECT COUNT(*) FROM products WHERE {dynamic_low_stock_condition}",
         )
         or 0
     )
@@ -206,8 +216,7 @@ async def low_stock(
 
     if total > 0:
         rows = await pool.fetch(
-            "SELECT * FROM products WHERE stock <= $1 AND status = 'active' ORDER BY stock ASC LIMIT $2 OFFSET $3",
-            threshold,
+            f"SELECT * FROM products WHERE {dynamic_low_stock_condition} ORDER BY stock ASC LIMIT $1 OFFSET $2",
             page_size,
             offset,
         )
@@ -280,13 +289,19 @@ async def inventory_overview() -> APIResponse[dict]:
     )
     inactive_products = total_products - active_products
 
-    # Simulate low stock products (using price as proxy for turnover)
+    # Dynamic low-stock thresholds based on monthly_sales:
+    #   monthly_sales >= 100 → low if stock < monthly_sales * 0.5
+    #   monthly_sales >= 30  → low if stock < monthly_sales * 0.3
+    #   monthly_sales < 30   → low if stock < 5
     low_stock_count = (
         await pool.fetchval(
             """SELECT COUNT(*) FROM products
-           WHERE status = 'active'
-             AND COALESCE(stock, 0) > 0
-             AND COALESCE(stock, 0) < 30"""
+               WHERE status = 'active'
+                 AND (
+                       (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+                    OR (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(monthly_sales, 0) < 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+                    OR (COALESCE(monthly_sales, 0) < 30 AND COALESCE(stock, 0) < 5)
+                   )"""
         )
         or 0
     )
@@ -303,16 +318,51 @@ async def inventory_overview() -> APIResponse[dict]:
            LIMIT 10"""
     )
 
-    # Get recent low stock items
+    # Get recent low stock items with dynamic thresholds
     low_stock_items = await pool.fetch(
-        """SELECT product_id, name, category, retail_price,
-                  COALESCE(stock, 0) AS estimated_stock
-           FROM products
-           WHERE status = 'active'
-             AND COALESCE(stock, 0) < 30
-           ORDER BY COALESCE(stock, 0) ASC, updated_at DESC NULLS LAST
-           LIMIT 10"""
+        """SELECT product_id,
+                     name,
+                     category,
+                     retail_price,
+                     COALESCE(stock, 0) AS stock,
+                     COALESCE(monthly_sales, 0) AS monthly_sales,
+                     CASE
+                         WHEN COALESCE(monthly_sales, 0) >= 100 THEN CEIL(COALESCE(monthly_sales, 0) * 0.5)
+                         WHEN COALESCE(monthly_sales, 0) >= 30  THEN CEIL(COALESCE(monthly_sales, 0) * 0.3)
+                         ELSE 5
+                     END AS threshold
+             FROM products
+             WHERE status = 'active'
+               AND (
+                     (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+                  OR (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(monthly_sales, 0) < 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+                  OR (COALESCE(monthly_sales, 0) < 30 AND COALESCE(stock, 0) < 5)
+                 )
+             ORDER BY COALESCE(stock, 0) ASC, updated_at DESC NULLS LAST
+             LIMIT 10"""
     )
+
+    formatted_low_stock_items: list[dict[str, Any]] = []
+    for row in low_stock_items:
+        monthly_sales = float(row["monthly_sales"])
+        if monthly_sales >= 100:
+            flag = "high_sales_low_stock"
+        elif monthly_sales >= 30:
+            flag = "medium_sales_low_stock"
+        else:
+            flag = "slow_sales_low_stock"
+        formatted_low_stock_items.append(
+            {
+                "product_id": str(row["product_id"]),
+                "name": row["name"],
+                "category": row["category"],
+                "retail_price": float(row["retail_price"]),
+                "estimated_stock": int(row["stock"]),
+                "monthly_sales": monthly_sales,
+                "threshold": int(row["threshold"]),
+                "turnover_flag": flag,
+            }
+        )
 
     return APIResponse(
         data={
@@ -331,16 +381,7 @@ async def inventory_overview() -> APIResponse[dict]:
                 }
                 for r in category_breakdown
             ],
-            "low_stock_items": [
-                {
-                    "product_id": str(r["product_id"]),
-                    "name": r["name"],
-                    "category": r["category"],
-                    "retail_price": float(r["retail_price"]),
-                    "estimated_stock": r["estimated_stock"],
-                }
-                for r in low_stock_items
-            ],
+            "low_stock_items": formatted_low_stock_items,
         }
     )
 
@@ -428,123 +469,290 @@ async def knowledge_stats() -> APIResponse[dict]:
 
 @router.get("/pricing-analysis", response_model=APIResponse[dict])
 async def get_pricing_analysis() -> APIResponse[dict]:
-    """商品定价分析 - 从 products 表分析各品类价格分布和利润率
-
-    当 cost_price 缺失时，按医疗器械行业平均利润率估算：
-    - 高价设备(>500): 35% 毛利
-    - 中价商品(100-500): 30% 毛利
-    - 低价耗材(<100): 25% 毛利
-    """
+    """商品定价分析 — 按医疗器械行业常见40%毛利假设估算成本，并结合月销/库存做周转调价。"""
     try:
         pool = pg.get_pool()
 
-        # 使用 COALESCE + 行业估算利润率，当 cost_price 为空或 0 时自动估算
-        price_distribution = await pool.fetch("""
+        estimated_cost_expr = (
+            "CASE WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric "
+            "ELSE retail_price::numeric * 0.6 END"
+        )
+        margin_expr = (
+            f"(retail_price::numeric - {estimated_cost_expr}) / NULLIF(retail_price::numeric, 0)"
+        )
+
+        price_distribution = await pool.fetch(
+            f"""
             SELECT
                 category,
                 COUNT(*) as product_count,
                 AVG(retail_price::numeric) as avg_retail_price,
-                AVG(CASE
-                    WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
-                    WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
-                    WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
-                    ELSE retail_price::numeric * 0.75
-                END) as avg_cost_price,
-                AVG(CASE
-                    WHEN COALESCE(cost_price::numeric, 0) > 0 AND retail_price::numeric > 0
-                    THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
-                    WHEN retail_price::numeric > 500 THEN 35.0
-                    WHEN retail_price::numeric > 100 THEN 30.0
-                    ELSE 25.0
-                END) as avg_margin_percent
+                AVG({estimated_cost_expr}) as avg_cost_price,
+                AVG({margin_expr}) * 100 as avg_margin_percent
             FROM products
             WHERE retail_price::numeric > 0 AND category IS NOT NULL AND category != ''
             GROUP BY category
             HAVING COUNT(*) >= 3
             ORDER BY avg_margin_percent DESC NULLS LAST
-        """)
+        """
+        )
 
-        price_ranges = await pool.fetch("""
-            SELECT
-                CASE
-                    WHEN retail_price::numeric <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price::numeric <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price::numeric <= 500 THEN '高价(201-500元)'
-                    ELSE '超高价(>500元)'
-                END as price_range,
-                COUNT(*) as product_count,
-                AVG(CASE
-                    WHEN cost_price::numeric > 0 AND retail_price::numeric > 0
-                    THEN (retail_price::numeric - cost_price::numeric) / retail_price::numeric * 100
-                    ELSE NULL
-                END) as avg_margin_percent
-            FROM products
-            WHERE retail_price::numeric > 0
-            GROUP BY
-                CASE
-                    WHEN retail_price::numeric <= 50 THEN '低价(≤50元)'
-                    WHEN retail_price::numeric <= 200 THEN '中价(51-200元)'
-                    WHEN retail_price::numeric <= 500 THEN '高价(201-500元)'
-                    ELSE '超高价(>500元)'
-                END
-            ORDER BY avg_margin_percent DESC NULLS LAST
-        """)
-
-        pricing_suggestions = []
-
-        # 估算成本价：有真实数据用真实，没有则按品类估算
-        low_margin_products = await pool.fetch("""
-            WITH products_with_cost AS (
-                SELECT product_id, name, category, retail_price::numeric as rp,
+        price_ranges = await pool.fetch(
+            f"""
+            SELECT price_range,
+                   COUNT(*) as product_count,
+                   AVG(margin_percent) as avg_margin_percent
+            FROM (
+                SELECT
                     CASE
-                        WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
-                        WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
-                        WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
-                        ELSE retail_price::numeric * 0.75
-                    END as cp
+                        WHEN retail_price::numeric <= 50 THEN '低价(≤50元)'
+                        WHEN retail_price::numeric <= 200 THEN '中价(51-200元)'
+                        WHEN retail_price::numeric <= 500 THEN '高价(201-500元)'
+                        ELSE '超高价(>500元)'
+                    END as price_range,
+                    ({margin_expr}) * 100 as margin_percent
+                FROM products
+                WHERE retail_price::numeric > 0
+            ) priced
+            GROUP BY price_range
+            ORDER BY avg_margin_percent DESC NULLS LAST
+        """
+        )
+
+        low_margin_products = await pool.fetch(
+            f"""
+            WITH products_with_cost AS (
+                SELECT
+                    product_id,
+                    name,
+                    category,
+                    retail_price::numeric as rp,
+                    {estimated_cost_expr} as cp,
+                    COALESCE(monthly_sales, 0) as monthly_sales,
+                    COALESCE(stock, 0) as stock,
+                    CASE
+                        WHEN retail_price::numeric > 0
+                        THEN (retail_price::numeric - {estimated_cost_expr}) / retail_price::numeric * 100
+                        ELSE 0
+                    END as margin_percent
                 FROM products
                 WHERE retail_price::numeric > 0
             )
-            SELECT product_id, name, category, rp as retail_price, cp as cost_price,
-                   (rp - cp) / rp * 100 as margin_percent
-            FROM products_with_cost
-            WHERE (rp - cp) / rp * 100 < 15
+            SELECT * FROM products_with_cost
+            WHERE margin_percent < 15
             ORDER BY margin_percent ASC
             LIMIT 20
-        """)
+        """
+        )
 
-        high_margin_products = await pool.fetch("""
+        high_margin_products = await pool.fetch(
+            f"""
             WITH products_with_cost AS (
-                SELECT product_id, name, category, retail_price::numeric as rp,
+                SELECT
+                    product_id,
+                    name,
+                    category,
+                    retail_price::numeric as rp,
+                    {estimated_cost_expr} as cp,
+                    COALESCE(monthly_sales, 0) as monthly_sales,
+                    COALESCE(stock, 0) as stock,
                     CASE
-                        WHEN COALESCE(cost_price::numeric, 0) > 0 THEN cost_price::numeric
-                        WHEN retail_price::numeric > 500 THEN retail_price::numeric * 0.65
-                        WHEN retail_price::numeric > 100 THEN retail_price::numeric * 0.70
-                        ELSE retail_price::numeric * 0.75
-                    END as cp
+                        WHEN retail_price::numeric > 0
+                        THEN (retail_price::numeric - {estimated_cost_expr}) / retail_price::numeric * 100
+                        ELSE 0
+                    END as margin_percent
                 FROM products
                 WHERE retail_price::numeric > 0
             )
-            SELECT product_id, name, category, rp as retail_price, cp as cost_price,
-                   (rp - cp) / rp * 100 as margin_percent
-            FROM products_with_cost
-            WHERE (rp - cp) / rp * 100 > 40
+            SELECT * FROM products_with_cost
+            WHERE margin_percent > 40
             ORDER BY margin_percent DESC
             LIMIT 10
-        """)
+        """
+        )
 
-        for product in low_margin_products:
-            suggested_price = float(product["cost_price"]) * 1.25
-            pricing_suggestions.append(
-                {
-                    "product_id": product["product_id"],
-                    "name": product["name"],
-                    "current_price": float(product["retail_price"]),
-                    "suggested_price": round(suggested_price, 2),
-                    "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
-                    "action": "涨价",
-                }
+        turnover_rows = await pool.fetch(
+            f"""
+            SELECT
+                product_id,
+                name,
+                category,
+                retail_price::numeric as retail_price,
+                COALESCE(stock, 0) as stock,
+                COALESCE(monthly_sales, 0) as monthly_sales,
+                {estimated_cost_expr} as estimated_cost
+            FROM products
+            WHERE retail_price::numeric > 0
+              AND (monthly_sales IS NOT NULL OR stock IS NOT NULL)
+            ORDER BY monthly_sales DESC NULLS LAST, stock ASC NULLS LAST
+            LIMIT 500
+        """
+        )
+
+        totals_row = await pool.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE retail_price::numeric > 0) AS priced_products,
+                COUNT(*) FILTER (WHERE COALESCE(stock, 0) = 0) AS stockout_products,
+                COUNT(*) FILTER (WHERE COALESCE(monthly_sales, 0) > 0) AS products_with_sales
+            FROM products
+            """
+        )
+        totals = dict(totals_row) if totals_row else {}
+
+        pricing_suggestions: list[dict[str, Any]] = []
+        high_demand_candidates: list[tuple[float, dict[str, Any]]] = []
+        clearance_candidates: list[tuple[float, dict[str, Any]]] = []
+        hot_selling_candidates: list[tuple[float, dict[str, Any]]] = []
+
+        for row in turnover_rows:
+            monthly_sales = float(row["monthly_sales"] or 0)
+            stock_units = float(row["stock"] or 0)
+            current_price = float(row["retail_price"] or 0)
+            estimated_cost = float(row["estimated_cost"] or 0)
+            if current_price <= 0:
+                continue
+            coverage_days = (
+                (stock_units / monthly_sales) * 30 if monthly_sales > 0 else float("inf")
             )
+            margin_percent = (
+                (current_price - estimated_cost) / current_price * 100 if current_price > 0 else 0
+            )
+
+            # 涨价机会：月销>50 且 库存<30 (供不应求)
+            if monthly_sales > 50 and stock_units < 30:
+                bump_pct = 0.1 if coverage_days <= 15 else 0.06
+                suggested_price = max(
+                    round(current_price * (1 + bump_pct), 2),
+                    round(estimated_cost * 1.2, 2),
+                )
+                reason = (
+                    f"月销{int(monthly_sales)}件但库存仅{int(stock_units)}件（约{coverage_days:.0f}天库存），"
+                    "供不应求，建议小幅提价并优先补货。"
+                )
+                suggestion = {
+                    "product_id": row["product_id"],
+                    "name": row["name"],
+                    "current_price": round(current_price, 2),
+                    "suggested_price": suggested_price,
+                    "reason": reason,
+                    "action": "涨价机会",
+                    "insights": {
+                        "monthly_sales": int(monthly_sales),
+                        "stock": int(stock_units),
+                        "turnover_days": round(coverage_days, 1),
+                        "estimated_margin_percent": round(margin_percent, 2),
+                    },
+                }
+                high_demand_candidates.append((coverage_days, suggestion))
+
+            # 降价清仓：月销<5 且 库存>100 (滞销)
+            elif monthly_sales < 5 and stock_units > 100:
+                if coverage_days == float("inf"):
+                    coverage_label = ">360"
+                    coverage_value = 365.0
+                    turnover_days_value = None
+                else:
+                    coverage_label = f"{coverage_days:.0f}"
+                    coverage_value = coverage_days
+                    turnover_days_value = round(coverage_days, 1)
+
+                discount_pct = 0.15 if coverage_value >= 180 else 0.1
+                suggested_price = max(
+                    round(current_price * (1 - discount_pct), 2),
+                    round(estimated_cost * 1.05, 2),
+                )
+                reason = (
+                    f"月销{int(monthly_sales)}件却有{int(stock_units)}件库存（约{coverage_label}天库存），"
+                    "滞销商品，建议降价清仓并配合促销曝光。"
+                )
+                suggestion = {
+                    "product_id": row["product_id"],
+                    "name": row["name"],
+                    "current_price": round(current_price, 2),
+                    "suggested_price": suggested_price,
+                    "reason": reason,
+                    "action": "降价清仓",
+                    "insights": {
+                        "monthly_sales": int(monthly_sales),
+                        "stock": int(stock_units),
+                        "turnover_days": turnover_days_value,
+                        "estimated_margin_percent": round(margin_percent, 2),
+                    },
+                }
+                clearance_candidates.append((coverage_value, suggestion))
+
+            # 热销商品，维持定价：月销>100
+            elif monthly_sales > 100:
+                suggestion = {
+                    "product_id": row["product_id"],
+                    "name": row["name"],
+                    "current_price": round(current_price, 2),
+                    "suggested_price": round(current_price, 2),
+                    "reason": f"月销{int(monthly_sales)}件，热销商品，维持定价。",
+                    "action": "热销商品，维持定价",
+                    "insights": {
+                        "monthly_sales": int(monthly_sales),
+                        "stock": int(stock_units),
+                        "turnover_days": round(coverage_days, 1)
+                        if coverage_days != float("inf")
+                        else None,
+                        "estimated_margin_percent": round(margin_percent, 2),
+                    },
+                }
+                hot_selling_candidates.append((monthly_sales, suggestion))
+
+        high_demand_suggestions = [
+            item for _, item in sorted(high_demand_candidates, key=lambda x: x[0])[:5]
+        ]
+        clearance_suggestions = [
+            item for _, item in sorted(clearance_candidates, key=lambda x: x[0], reverse=True)[:5]
+        ]
+        hot_selling_suggestions = [
+            item for _, item in sorted(hot_selling_candidates, key=lambda x: x[0], reverse=True)[:5]
+        ]
+        pricing_suggestions.extend(
+            high_demand_suggestions + clearance_suggestions + hot_selling_suggestions
+        )
+
+        if not pricing_suggestions:
+            for product in low_margin_products[:5]:
+                current_price = float(product["rp"])
+                cost_price = float(product["cp"])
+                suggested_price = max(round(cost_price * 1.25, 2), round(current_price * 1.05, 2))
+                pricing_suggestions.append(
+                    {
+                        "product_id": product["product_id"],
+                        "name": product["name"],
+                        "current_price": round(current_price, 2),
+                        "suggested_price": suggested_price,
+                        "reason": f"当前利润率{product['margin_percent']:.1f}%过低，建议调至25%",
+                        "action": "涨价",
+                    }
+                )
+
+        weighted_margin_total = sum(
+            float(row["avg_margin_percent"] or 0) * int(row["product_count"] or 0)
+            for row in price_distribution
+        )
+        weighted_margin_count = sum(int(row["product_count"] or 0) for row in price_distribution)
+        weighted_avg_margin = (
+            round(weighted_margin_total / weighted_margin_count, 2) if weighted_margin_count else 0
+        )
+
+        summary = {
+            "total_products": int(totals.get("priced_products", 0)),
+            "products_with_sales": int(totals.get("products_with_sales", 0)),
+            "stockout_products": int(totals.get("stockout_products", 0)),
+            "low_margin_count": len(low_margin_products),
+            "high_margin_count": len(high_margin_products),
+            "avg_margin_percent": weighted_avg_margin,
+            "turnover_flags": {
+                "high_demand_low_stock": len(high_demand_candidates),
+                "low_demand_high_stock": len(clearance_candidates),
+                "hot_selling": len(hot_selling_candidates),
+            },
+        }
 
         result = {
             "category_analysis": [
@@ -566,18 +774,7 @@ async def get_pricing_analysis() -> APIResponse[dict]:
                 for row in price_ranges
             ],
             "pricing_suggestions": pricing_suggestions[:10],
-            "summary": {
-                "total_products": len(pricing_suggestions) + len(high_margin_products),
-                "low_margin_count": len(low_margin_products),
-                "high_margin_count": len(high_margin_products),
-                "avg_margin": round(
-                    sum(float(row["avg_margin_percent"] or 0) for row in price_distribution)
-                    / len(price_distribution)
-                    if price_distribution
-                    else 0,
-                    2,
-                ),
-            },
+            "summary": summary,
         }
 
         return APIResponse(data=result)

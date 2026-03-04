@@ -253,7 +253,7 @@ class PricingService:
             )
             for p in rows:
                 current_price = float(p["retail_price"] or 0)
-                cost = float(p["cost_price"] or current_price * 0.7)
+                cost = float(p["cost_price"] or current_price * 0.6)
                 comp_avg = float(p["comp_avg_price"] or 0)
                 margin = (current_price - cost) / current_price if current_price > 0 else 0
 
@@ -338,7 +338,7 @@ class PricingService:
 
             for p in qnh_products:
                 current_price = float(p["retail_price"])
-                estimated_cost = current_price * 0.7  # Assume 30% margin
+                estimated_cost = current_price * 0.6  # Assume 40% margin
                 current_margin = 0.3
 
                 # Generate suggestions based on price analysis
@@ -347,7 +347,7 @@ class PricingService:
 
                 # Check if price is significantly higher than average
                 if competitor_avg_price > 0 and current_price > competitor_avg_price * 1.2:
-                    # Don't suggest below cost (estimated_cost = 0.7 * current_price)
+                    # Don't suggest below cost (estimated_cost = 0.6 * current_price)
                     suggested_price = max(competitor_avg_price * 1.1, estimated_cost * 1.05)
                     reason = f"价格高于市场均价({competitor_avg_price:.2f})，建议适度降价"
                     current_margin = 0.25

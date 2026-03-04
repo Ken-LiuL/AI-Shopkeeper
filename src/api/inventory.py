@@ -407,7 +407,12 @@ async def get_inventory_overview() -> APIResponse[dict]:
             await pool.fetchval("""
             SELECT COUNT(*)
             FROM products
-            WHERE status = 'active' AND COALESCE(stock, 0) < 10
+            WHERE status = 'active'
+              AND (
+                    (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+                 OR (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(monthly_sales, 0) < 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+                 OR (COALESCE(monthly_sales, 0) < 30 AND COALESCE(stock, 0) < 5)
+                  )
         """)
             or 0
         )
@@ -422,15 +427,15 @@ async def get_inventory_overview() -> APIResponse[dict]:
             high_priority = medium_priority = total_suggestions = 0
 
         result = {
-                "total_products": int(overview["total_products"] or 0),
-                "active_products": int(overview["active_products"] or 0),
-                "total_stock": total_estimated_stock,
-                "low_stock_count": int(low_stock_estimate),
-                "out_of_stock_count": int(overview["out_of_stock_count"] or 0),
-                "avg_stock": round(float(overview["avg_stock"] or 0), 2),
-                "restock_alerts": {
-                    "high_priority": high_priority,
-                    "medium_priority": medium_priority,
+            "total_products": int(overview["total_products"] or 0),
+            "active_products": int(overview["active_products"] or 0),
+            "total_stock": total_estimated_stock,
+            "low_stock_count": int(low_stock_estimate),
+            "out_of_stock_count": int(overview["out_of_stock_count"] or 0),
+            "avg_stock": round(float(overview["avg_stock"] or 0), 2),
+            "restock_alerts": {
+                "high_priority": high_priority,
+                "medium_priority": medium_priority,
                 "total": total_suggestions,
             },
             "category_breakdown": [
@@ -550,7 +555,12 @@ async def get_inventory_status() -> APIResponse[dict]:
         with contextlib.suppress(Exception):
             rows = await pool.fetch("""
                 SELECT product_id, name, stock,
-                       COALESCE(reorder_point, 10) AS threshold
+                       COALESCE(monthly_sales, 0) AS monthly_sales,
+                       CASE
+                           WHEN COALESCE(monthly_sales, 0) >= 100 THEN CEIL(COALESCE(monthly_sales, 0) * 0.5)
+                           WHEN COALESCE(monthly_sales, 0) >= 30  THEN CEIL(COALESCE(monthly_sales, 0) * 0.3)
+                           ELSE 5
+                       END AS threshold
                 FROM products
                 WHERE status = 'active'
             """)
@@ -559,7 +569,7 @@ async def get_inventory_status() -> APIResponse[dict]:
             normal, low_stock, out_of_stock = [], [], []
             for r in rows:
                 stock = int(r["stock"] or 0)
-                threshold = int(r["threshold"] or 10)
+                threshold = int(r["threshold"] or 5)
                 item = {
                     "id": r["product_id"],
                     "name": r["name"],
@@ -585,9 +595,10 @@ async def get_inventory_status() -> APIResponse[dict]:
                 }
             )
 
-        # Fallback：使用 products 表并根据价格估算库存状态
+        # Fallback：使用 products 表并根据动态阈值判定库存状态
         fallback_rows = await pool.fetch("""
-            SELECT product_id, name, retail_price, status, stock
+            SELECT product_id, name, retail_price, status, stock,
+                   COALESCE(monthly_sales, 0) AS monthly_sales
             FROM products
             WHERE name IS NOT NULL AND name != ''
         """)
@@ -597,22 +608,31 @@ async def get_inventory_status() -> APIResponse[dict]:
             price = float(r["retail_price"] or 0)
             stock = int(r["stock"] or 0)
             status = r["status"]
+            monthly_sales = float(r["monthly_sales"] or 0)
             if stock <= 0:
                 if price > 0:
                     stock = 20 if price > 500 else 10
                 else:
                     stock = 0
 
+            # Dynamic threshold
+            if monthly_sales >= 100:
+                threshold = int(monthly_sales * 0.5)
+            elif monthly_sales >= 30:
+                threshold = int(monthly_sales * 0.3)
+            else:
+                threshold = 5
+
             item = {
                 "id": r["product_id"],
                 "name": r["name"],
                 "stock": stock,
-                "threshold": 10,
+                "threshold": threshold,
             }
 
             if stock == 0 or status != "active":
                 out_of_stock_list.append(item)
-            elif stock < item["threshold"]:
+            elif stock < threshold:
                 low_stock_list.append(item)
             else:
                 normal_count += 1
