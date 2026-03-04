@@ -368,6 +368,19 @@ async def overview() -> APIResponse[DashboardOverview]:
         if today_orders > 0 and today_gmv > 0:
             avg_order_value = today_gmv / today_orders
 
+    # ── Priority 2: real orders from meituan syncer ──
+    if today_orders == 0:
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
+                   FROM orders
+                   WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
+            )
+            if row and row["cnt"] > 0:
+                today_orders = int(row["cnt"])
+                today_gmv = float(row["gmv"])
+                avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
+
     # ── Fallback: old raw metrics table ──
     if today_orders == 0:
         with contextlib.suppress(Exception):
