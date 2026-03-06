@@ -88,6 +88,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                     logger.info("PG reconnected on retry %d", i + 1)
                     with contextlib.suppress(Exception):
                         await _run_migrations(pg_db.get_pool())
+                    # 必须在 migrations 之后执行 seed，否则 admin 密码永远是 __PLACEHOLDER__
+                    from src.auth.seed import seed_admin_user
+                    with contextlib.suppress(Exception):
+                        await seed_admin_user()
                     return
                 except Exception:
                     logger.warning("PG retry %d/20 failed", i + 1)

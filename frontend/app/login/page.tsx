@@ -99,7 +99,7 @@ export default function LoginPage() {
         </form>
 
         <p className="text-center text-xs text-gray-400">
-          默认账号：admin / admin123
+          默认账号：admin / admin
         </p>
       </div>
     </div>
