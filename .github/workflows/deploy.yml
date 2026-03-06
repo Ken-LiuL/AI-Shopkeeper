@@ -5,12 +5,64 @@ on:
     branches: [main]
 
 jobs:
-  deploy-backend:
+  # ── 前端部署 → Vercel ─────────────────────────────────────────────────────
+  deploy-frontend:
+    name: Deploy Frontend (Vercel)
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Render Deploy
-        run: |
-          curl -s "https://api.render.com/deploy/srv-d6ei369r0fns73cm03jg?key=3xeIfv2Q7oE"
-          echo "Render deploy triggered"
+      - uses: actions/checkout@v4
 
-  # Frontend auto-deploys via Vercel GitHub integration
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel
+
+      - name: Deploy to Vercel (Production)
+        working-directory: frontend
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: vercel deploy --prod --token $VERCEL_TOKEN --yes
+
+  # ── 后端部署 → VPS (192.144.227.205) ─────────────────────────────────────
+  deploy-backend:
+    name: Deploy Backend (VPS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: root
+          key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 300s
+          script: |
+            set -e
+            echo "=== Updating code ==="
+            cd /opt/aishop
+            # 更新代码（重新上传 tar 的方式暂用 git 替代）
+            if [ -d /opt/aishop/repo/.git ]; then
+              cd /opt/aishop/repo && git pull origin main
+            else
+              rm -rf /opt/aishop/repo
+              git clone --depth=1 https://${{ secrets.GH_TOKEN }}@github.com/Ken-LiuL/AI-Shopkeeper.git /opt/aishop/repo
+            fi
+
+            echo "=== Building Docker image ==="
+            cd /opt/aishop
+            docker build -t aishop-app:latest /opt/aishop/repo/
+
+            echo "=== Restarting app ==="
+            docker compose up -d --force-recreate app
+
+            echo "=== Health check ==="
+            sleep 15
+            curl -sf http://localhost:8000/health && echo "✅ Backend healthy" || (echo "❌ Backend unhealthy" && docker logs aishop-app --tail 20 && exit 1)
