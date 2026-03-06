@@ -20,7 +20,7 @@ async def login(request: LoginRequest):
     """用户名密码登录，返回 JWT access token。"""
     try:
         row = await pg_db.fetchrow(
-            "SELECT id, username, password_hash, role FROM users WHERE username = $1",
+            "SELECT user_id, username, password_hash, role FROM users WHERE username = $1",
             request.username,
         )
     except Exception as e:
