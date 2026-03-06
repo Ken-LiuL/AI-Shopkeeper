@@ -267,5 +267,59 @@ class Neo4jSkill:
         rows = await self._execute(query, product_id=product_id, embedding=embedding)
         return len(rows) > 0
 
+    # ── 向量索引写入 ──────────────────────────────────────────────────────
+
+    async def index_product(
+        self,
+        product_id: str,
+        name: str,
+        description: str,
+        embedding: list[float],
+    ) -> bool:
+        """将商品及其向量写入 Neo4j（MERGE 幂等）。"""
+        query = """
+        MERGE (p:Product {product_id: $product_id})
+        SET p.name = $name,
+            p.description = $description,
+            p.embedding = $embedding
+        RETURN p.product_id AS id
+        """
+        rows = await self._execute(
+            query,
+            product_id=product_id,
+            name=name,
+            description=description,
+            embedding=embedding,
+        )
+        return len(rows) > 0
+
+    # ── 向量检索（简化接口，返回 list[dict]）────────────────────────────
+
+    async def search_similar(
+        self,
+        query_embedding: list[float],
+        top_k: int = 5,
+        index_name: str = "product_embedding_index",
+    ) -> list[dict]:
+        """从 Neo4j 向量索引检索最相似的商品，返回 list[dict]。
+
+        Returns:
+            [{"id": ..., "name": ..., "description": ..., "score": ...}, ...]
+        """
+        results = await self.vector_search(
+            query_embedding=query_embedding,
+            index_name=index_name,
+            limit=top_k,
+        )
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "description": r.description,
+                "score": r.score,
+            }
+            for r in results
+        ]
+
 
 # asyncio imported at top for gather in hybrid_search
