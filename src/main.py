@@ -52,6 +52,9 @@ from src.db import redis as redis_db
 
 logger = logging.getLogger("ai_store_manager")
 
+# 记录当前实际使用的向量检索后端（startup 期间设定，供 /ready 端点暴露）
+_VECTOR_BACKEND: str = "unknown"
+
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -65,7 +68,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
 
-    # Determine vector store backend
+    global _VECTOR_BACKEND
+
+    # Determine vector store backend (env hint; will auto-fallback if Neo4j unavailable)
     vector_store_backend = os.environ.get("VECTOR_STORE", "postgres").lower()
 
     # Init database connections (graceful — app starts even if PG is down)
@@ -99,8 +104,25 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         asyncio.create_task(_retry_pg())
 
+    # ── Neo4j 初始化（优先尝试；失败则自动切换到 postgres vector）────
     if vector_store_backend == "neo4j":
-        await neo4j_db.init_driver()
+        try:
+            await neo4j_db.init_driver()
+            # Smoke-test: verify Neo4j is actually reachable
+            await neo4j_db.query("RETURN 1 AS n")
+            logger.info("Neo4j connected successfully — using neo4j vector backend")
+            _VECTOR_BACKEND = "neo4j"
+        except Exception as neo4j_err:
+            logger.warning(
+                "Neo4j unavailable (%s) — auto-switching to postgres vector backend",
+                neo4j_err,
+            )
+            vector_store_backend = "postgres"
+            os.environ["VECTOR_STORE"] = "postgres"
+            _VECTOR_BACKEND = "postgres"
+    else:
+        _VECTOR_BACKEND = "postgres"
+
     await redis_db.init_redis()
 
     # Prometheus metrics endpoint (if enabled)
@@ -177,14 +199,24 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
             vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
             logger.info("Using Neo4j as vector store backend")
+            _VECTOR_BACKEND = "neo4j"
         elif pg_db._pool is not None:
-            from src.skills.pgvector_skill import PgVectorSkill
+            try:
+                from src.skills.pgvector_skill import PgVectorSkill
 
-            vector_skill = PgVectorSkill(pool=pg_db.get_pool())
-            logger.info("Using PostgreSQL pgvector as vector store backend")
+                vector_skill = PgVectorSkill(pool=pg_db.get_pool())
+                logger.info("Using PostgreSQL pgvector as vector store backend")
+            except ImportError:
+                # pgvector_skill not present; pg_vector_search module used directly via nodes.py
+                vector_skill = None
+                logger.info(
+                    "PgVectorSkill not found — pgvector search will run via pg_vector_search.py"
+                )
+            _VECTOR_BACKEND = "postgres"
         else:
             vector_skill = None
             logger.warning("PG not available, skipping pgvector skill init")
+            _VECTOR_BACKEND = "unavailable"
 
         # Init product knowledge skill
         if pg_db._pool is not None:
@@ -658,8 +690,9 @@ async def readiness_check():
     except Exception:
         checks["postgres"] = False
 
-    # Neo4j (only check if using neo4j backend)
-    if os.environ.get("VECTOR_STORE", "postgres").lower() == "neo4j":
+    # Neo4j (only check if currently using neo4j backend)
+    active_backend = _VECTOR_BACKEND
+    if active_backend == "neo4j":
         try:
             await neo4j_db.query("RETURN 1 AS n")
             checks["neo4j"] = True
@@ -678,8 +711,12 @@ async def readiness_check():
 
     return APIResponse(
         success=all_ok,
-        data={"status": status, **checks},
-        message=f"System is {'ready' if all_ok else 'degraded'}",
+        data={
+            "status": status,
+            "vector_backend": active_backend,
+            **checks,
+        },
+        message=f"System is {'ready' if all_ok else 'degraded'} (vector={active_backend})",
     )
 
 

@@ -48,37 +48,110 @@ async def load_knowledge_base(pool) -> list[dict]:
 
 
 async def search_products_with_embedding(query: str, pool) -> list[dict]:
-    """使用embedding搜索商品"""
+    """使用embedding搜索商品。
+
+    优先使用 Neo4j 向量检索；当 Neo4j 不可用时（VECTOR_STORE != neo4j 或驱动未初始化），
+    自动降级到 PostgreSQL pgvector 检索，并在失败时最终降级到关键词匹配。
+    """
+    import os
+
+    vector_store = os.environ.get("VECTOR_STORE", "postgres").lower()
+
+    # ── 生成查询 Embedding ─────────────────────────────────────────────
+    query_embedding = None
     try:
-        # 获取商品内存实例
+        from src.skills.embedding import EmbeddingSkill
+
+        embedding_skill = EmbeddingSkill()
+        query_embedding = embedding_skill.embed(query)
+        logger.info(f"Query embedding generated: dim={len(query_embedding)}")
+    except Exception as e:
+        logger.warning(f"Failed to generate query embedding: {e}", exc_info=True)
+
+    # ── Neo4j 路径 ─────────────────────────────────────────────────────
+    if vector_store == "neo4j":
+        try:
+            from src.db import neo4j as neo4j_db
+            from src.skills.neo4j_skill import Neo4jSkill
+
+            driver = neo4j_db.get_driver()
+            neo4j_skill = Neo4jSkill(driver=driver)
+
+            if query_embedding:
+                neo4j_results = await neo4j_skill.vector_search(
+                    query_embedding=query_embedding, limit=5
+                )
+            else:
+                neo4j_results = await neo4j_skill.keyword_search(
+                    keywords=query.split(), limit=5
+                )
+
+            if neo4j_results:
+                results = [
+                    {
+                        "id": r.id,
+                        "name": r.name,
+                        "description": r.description,
+                        "score": r.score,
+                    }
+                    for r in neo4j_results
+                ]
+                logger.info(
+                    f"[CS] Neo4j vector search returned {len(results)} results for: {query[:50]}"
+                )
+                return results
+
+            logger.warning("[CS] Neo4j returned 0 results, falling through to postgres fallback")
+        except Exception as e:
+            logger.warning(
+                f"[CS] Neo4j vector search failed ({e}), switching to postgres vector fallback"
+            )
+        # Fall through to postgres fallback below
+
+    # ── PostgreSQL pgvector 路径 / Neo4j 降级 ─────────────────────────
+    if pool is not None and query_embedding is not None:
+        try:
+            from src.skills.pg_vector_search import search_products_by_vector
+
+            logger.info("[CS] Using postgres vector fallback")
+            pg_results = await search_products_by_vector(pool, query_embedding, top_k=5)
+            if pg_results:
+                logger.info(
+                    f"[CS] pgvector returned {len(pg_results)} results for: {query[:50]}"
+                )
+                return pg_results
+        except Exception as e:
+            logger.warning(f"[CS] pgvector search failed ({e}), trying in-memory fallback")
+
+    # ── 内存搜索 fallback（已加载时） ──────────────────────────────────
+    try:
         product_memory = get_product_memory()
 
-        # 确保商品已加载
-        if not product_memory.loaded:
+        if not product_memory.loaded and pool is not None:
             await product_memory.load_products(pool)
 
-        # 为查询生成embedding
-        query_embedding = None
-        try:
-            from src.skills.embedding import EmbeddingSkill
-
-            embedding_skill = EmbeddingSkill()
-            query_embedding = embedding_skill.embed(query)
-            logger.info(f"Query embedding generated: dim={len(query_embedding)}")
-        except Exception as e:
-            logger.warning(f"Failed to generate query embedding: {e}", exc_info=True)
-
-        # 搜索商品
-        results = await product_memory.search_products(
-            query_embedding=query_embedding, query_text=query, top_k=5
-        )
-
-        logger.info(f"Product search returned {len(results)} results for: {query[:50]}")
-        return results
-
+        if product_memory.loaded:
+            logger.info("[CS] Using in-memory product search fallback")
+            results = await product_memory.search_products(
+                query_embedding=query_embedding, query_text=query, top_k=5
+            )
+            logger.info(f"[CS] In-memory search returned {len(results)} results for: {query[:50]}")
+            return results
     except Exception as e:
-        logger.error(f"Product search failed: {e}")
-        return []
+        logger.error(f"[CS] In-memory product search also failed: {e}")
+
+    # ── 最终 keyword fallback ──────────────────────────────────────────
+    if pool is not None:
+        try:
+            from src.skills.pg_vector_search import search_products_by_keywords
+
+            logger.info("[CS] Using postgres keyword fallback")
+            return await search_products_by_keywords(pool, keywords=query.split()[:5], top_k=5)
+        except Exception as e:
+            logger.error(f"[CS] Keyword fallback failed: {e}")
+
+    logger.error(f"[CS] All product search methods failed for: {query[:50]}")
+    return []
 
 
 async def _log_conversation(
