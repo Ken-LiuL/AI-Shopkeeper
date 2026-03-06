@@ -16,9 +16,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const BASE_URL = process.env.NODE_ENV === 'development'
-        ? 'https://ai-shopkeeper-kk.fly.dev'
-        : '';
+      const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+        || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
       const res = await fetch(`${BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

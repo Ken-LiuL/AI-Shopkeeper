@@ -2,9 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
-const BASE_URL = process.env.NODE_ENV === 'development'
-  ? 'https://ai-shopkeeper-kk.fly.dev'
-  : '';
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
 
 interface SyncStatus {
   healthy: boolean;

@@ -1,7 +1,8 @@
 // API client for AI店长 backend
-const BASE_URL = process.env.NODE_ENV === 'development'
-  ? 'https://ai-shopkeeper-kk.fly.dev'
-  : '';
+// NEXT_PUBLIC_API_URL overrides all: set to http://your-server:port for standalone deployment
+// Falls back to fly.dev in development, empty string (relative path) in production
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL
+  || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
 
 interface APIResponse<T> {
   success: boolean;
