@@ -185,88 +185,100 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to check DB for initial sync", exc_info=True)
 
-    # Init and register skills for customer service agent
-    try:
-        from src.agents.customer_service.skills_registry import register_skills
-        from src.skills.embedding import EmbeddingSkill
-        from src.skills.reranker import RerankerSkill
+    # Init and register skills for customer service agent (懒加载：后台延迟初始化)
+    # 改为后台任务，避免在 512MB 环境启动时阻塞 / OOM
+    import asyncio as _asyncio2
 
-        embedding_skill = EmbeddingSkill()
-        reranker_skill = RerankerSkill()
+    async def _lazy_init_skills():
+        """后台延迟初始化 embedding/reranker，确保 scheduler、PG 等核心服务就绪。
+        
+        EmbeddingSkill 使用 OpenRouter API（无本地模型），RerankerSkill 内部已懒加载
+        CrossEncoder。此处仅在首次需要时才真正初始化，使 512MB 环境也能正常启动。
+        """
+        await _asyncio2.sleep(2)
+        try:
+            from src.agents.customer_service.skills_registry import register_skills
+            from src.skills.embedding import EmbeddingSkill
+            from src.skills.reranker import RerankerSkill
 
-        if vector_store_backend == "neo4j":
-            from src.skills.neo4j_skill import Neo4jSkill
+            embedding_skill = EmbeddingSkill()
+            reranker_skill = RerankerSkill()
 
-            vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
-            logger.info("Using Neo4j as vector store backend")
-            _VECTOR_BACKEND = "neo4j"
-        elif pg_db._pool is not None:
-            try:
-                from src.skills.pgvector_skill import PgVectorSkill
+            _VECTOR_BACKEND: str
+            if vector_store_backend == "neo4j":
+                from src.skills.neo4j_skill import Neo4jSkill
 
-                vector_skill = PgVectorSkill(pool=pg_db.get_pool())
-                logger.info("Using PostgreSQL pgvector as vector store backend")
-            except ImportError:
-                # pgvector_skill not present; pg_vector_search module used directly via nodes.py
-                vector_skill = None
-                logger.info(
-                    "PgVectorSkill not found — pgvector search will run via pg_vector_search.py"
-                )
-            _VECTOR_BACKEND = "postgres"
-        else:
-            vector_skill = None
-            logger.warning("PG not available, skipping pgvector skill init")
-            _VECTOR_BACKEND = "unavailable"
-
-        # Init product knowledge skill
-        if pg_db._pool is not None:
-            from src.skills.product_knowledge import ProductKnowledgeSkill
-
-            product_knowledge_skill = ProductKnowledgeSkill(
-                pool=pg_db.get_pool(), embedding=embedding_skill
-            )
-        else:
-            product_knowledge_skill = None
-
-        if vector_skill is not None:
-            register_skills(
-                vector_store=vector_skill,
-                embedding=embedding_skill,
-                reranker=reranker_skill,
-                product_knowledge=product_knowledge_skill,
-            )
-            logger.info("Customer service skills registered (with product knowledge) ✓")
-        else:
-            logger.warning("Skipping skills registration — PG not available")
-
-        # Build embeddings in background (non-blocking)
-        if pg_db._pool is not None:
-            import asyncio as _asyncio2
-
-            async def _bg_build_embeddings():
+                vector_skill = Neo4jSkill(driver=neo4j_db.get_driver())
+                logger.info("Using Neo4j as vector store backend")
+                _VECTOR_BACKEND = "neo4j"
+            elif pg_db._pool is not None:
                 try:
-                    from src.skills.product_knowledge import build_embeddings
+                    from src.skills.pgvector_skill import PgVectorSkill
 
-                    await build_embeddings(pg_db.get_pool(), embedding_skill)
+                    vector_skill = PgVectorSkill(pool=pg_db.get_pool())
+                    logger.info("Using PostgreSQL pgvector as vector store backend")
+                except ImportError:
+                    vector_skill = None
+                    logger.info(
+                        "PgVectorSkill not found — pgvector search will run via pg_vector_search.py"
+                    )
+                _VECTOR_BACKEND = "postgres"
+            else:
+                vector_skill = None
+                logger.warning("PG not available, skipping pgvector skill init")
+                _VECTOR_BACKEND = "unavailable"
+
+            # Init product knowledge skill
+            if pg_db._pool is not None:
+                from src.skills.product_knowledge import ProductKnowledgeSkill
+
+                product_knowledge_skill = ProductKnowledgeSkill(
+                    pool=pg_db.get_pool(), embedding=embedding_skill
+                )
+            else:
+                product_knowledge_skill = None
+
+            if vector_skill is not None:
+                register_skills(
+                    vector_store=vector_skill,
+                    embedding=embedding_skill,
+                    reranker=reranker_skill,
+                    product_knowledge=product_knowledge_skill,
+                )
+                logger.info("Customer service skills registered (with product knowledge) ✓")
+            else:
+                logger.warning("Skipping skills registration — PG not available")
+
+            # Build embeddings in background (non-blocking)
+            if pg_db._pool is not None:
+                async def _bg_build_embeddings():
+                    try:
+                        from src.skills.product_knowledge import build_embeddings
+
+                        await build_embeddings(pg_db.get_pool(), embedding_skill)
+                    except Exception as e:
+                        logger.error("Background embedding build failed: %s", e)
+
+                _asyncio2.create_task(_bg_build_embeddings())
+                logger.info("Background embedding build task started")
+
+            # Initialize product memory for new customer service
+            async def _init_product_memory():
+                try:
+                    from src.agents.customer_service.product_memory import init_product_memory
+
+                    await init_product_memory(pg_db.get_pool())
+                    logger.info("Product memory initialized ✓")
                 except Exception as e:
-                    logger.error("Background embedding build failed: %s", e)
+                    logger.error("Product memory initialization failed: %s", e)
 
-            _asyncio2.create_task(_bg_build_embeddings())
-            logger.info("Background embedding build task started")
+            _asyncio2.create_task(_init_product_memory())
 
-        # Initialize product memory for new customer service
-        async def _init_product_memory():
-            try:
-                from src.agents.customer_service.product_memory import init_product_memory
+        except Exception:
+            logger.warning("Failed to register customer service skills (lazy init)", exc_info=True)
 
-                await init_product_memory(pg_db.get_pool())
-                logger.info("Product memory initialized ✓")
-            except Exception as e:
-                logger.error("Product memory initialization failed: %s", e)
-
-        _asyncio2.create_task(_init_product_memory())
-    except Exception:
-        logger.warning("Failed to register customer service skills", exc_info=True)
+    _asyncio2.create_task(_lazy_init_skills())
+    logger.info("Customer service skill lazy-init scheduled in background ✓")
 
     logger.info("All services initialised ✓")
 

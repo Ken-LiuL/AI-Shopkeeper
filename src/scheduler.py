@@ -5,6 +5,9 @@
 - 每5分钟预警扫描
 - 每日23点套餐挖掘
 - 每周日3点 Prophet 重训练
+
+持久化心跳：每次任务执行前后更新 scheduler_heartbeat 表，
+解决 fly.io auto_stop 下休眠丢失任务的可观测性问题。
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import json
 import logging
 import os
 from collections.abc import Iterable
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -56,6 +60,99 @@ def get_scheduler() -> AsyncIOScheduler:
     if _scheduler is None:
         _scheduler = AsyncIOScheduler()
     return _scheduler
+
+
+# ── 心跳持久化 ──────────────────────────────────────────────────────────────
+
+
+async def _set_heartbeat(
+    task_name: str,
+    status: str,
+    error_msg: str | None = None,
+    next_run: datetime | None = None,
+) -> None:
+    """更新 scheduler_heartbeat 表中的任务状态记录。
+
+    status 取值: 'running' | 'success' | 'failed'
+    此函数内部吞掉所有异常，避免心跳失败影响业务逻辑。
+    """
+    try:
+        from src.db import postgres as pg
+
+        pool = pg._pool
+        if pool is None:
+            return
+
+        # 若是 running 状态则不覆盖 last_run（由后续 success/failed 更新）
+        if status == "running":
+            await pool.execute(
+                """
+                INSERT INTO scheduler_heartbeat
+                    (task_name, last_run, next_run, status, error_msg, run_count, updated_at)
+                VALUES ($1, NOW(), $2, 'running', NULL, 0, NOW())
+                ON CONFLICT (task_name) DO UPDATE SET
+                    last_run   = NOW(),
+                    next_run   = COALESCE($2, scheduler_heartbeat.next_run),
+                    status     = 'running',
+                    error_msg  = NULL,
+                    run_count  = scheduler_heartbeat.run_count + 1,
+                    updated_at = NOW()
+                """,
+                task_name,
+                next_run,
+            )
+        else:
+            await pool.execute(
+                """
+                INSERT INTO scheduler_heartbeat
+                    (task_name, last_run, next_run, status, error_msg, run_count, updated_at)
+                VALUES ($1, NOW(), $2, $3, $4, 1, NOW())
+                ON CONFLICT (task_name) DO UPDATE SET
+                    next_run   = COALESCE($2, scheduler_heartbeat.next_run),
+                    status     = $3,
+                    error_msg  = $4,
+                    updated_at = NOW()
+                """,
+                task_name,
+                next_run,
+                status,
+                error_msg,
+            )
+    except Exception as exc:
+        logger.debug("Heartbeat update skipped for %s: %s", task_name, exc)
+
+
+def _get_job_next_run(task_id: str) -> datetime | None:
+    """从调度器获取任务下次运行时间。"""
+    try:
+        scheduler = get_scheduler()
+        job = scheduler.get_job(task_id)
+        return job.next_run_time if job else None
+    except Exception:
+        return None
+
+
+def _make_heartbeat_task(task_id: str, task_func):
+    """将任务函数包装为带心跳追踪的版本。
+
+    在任务执行前记录 status='running'，
+    成功后记录 status='success'，失败后记录 status='failed'。
+    """
+
+    async def _wrapper():
+        next_run = _get_job_next_run(task_id)
+        await _set_heartbeat(task_id, "running", next_run=next_run)
+        try:
+            await task_func()
+            next_run = _get_job_next_run(task_id)
+            await _set_heartbeat(task_id, "success", next_run=next_run)
+        except Exception as exc:
+            next_run = _get_job_next_run(task_id)
+            await _set_heartbeat(task_id, "failed", error_msg=str(exc), next_run=next_run)
+            raise
+
+    _wrapper.__name__ = f"{task_id}_with_heartbeat"
+    return _wrapper
 
 
 # ── 任务实现 ────────────────────────────────────────────────────────────────
@@ -667,7 +764,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # Cookie 健康检查 (每30分钟)
     scheduler.add_job(
-        cookie_health_check_task,
+        _make_heartbeat_task("cookie_health_check", cookie_health_check_task),
         CronTrigger.from_crontab(tasks.get("cookie_health_check", "*/30 * * * *")),
         id="cookie_health_check",
         replace_existing=True,
@@ -675,7 +772,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # 预警扫描 (每5分钟)
     scheduler.add_job(
-        alert_scan_task,
+        _make_heartbeat_task("alert_scan", alert_scan_task),
         CronTrigger.from_crontab(tasks.get("alert_scan", "*/5 * * * *")),
         id="alert_scan",
         replace_existing=True,
@@ -683,7 +780,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # 每日报告 (22:00)
     scheduler.add_job(
-        daily_report_task,
+        _make_heartbeat_task("daily_report", daily_report_task),
         CronTrigger.from_crontab(tasks.get("daily_report", "0 22 * * *")),
         id="daily_report",
         replace_existing=True,
@@ -691,7 +788,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # ETL (凌晨2:30, CST)
     scheduler.add_job(
-        etl_pipeline_task,
+        _make_heartbeat_task("etl_pipeline", etl_pipeline_task),
         CronTrigger.from_crontab(
             tasks.get("etl_pipeline", "30 2 * * *"),
             timezone=SH_TZ,
@@ -702,7 +799,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # 每日选品 (6:00) — 不依赖浏览器
     scheduler.add_job(
-        daily_selection_task,
+        _make_heartbeat_task("daily_selection", daily_selection_task),
         CronTrigger.from_crontab(tasks.get("daily_selection", "0 6 * * *")),
         id="daily_selection",
         replace_existing=True,
@@ -710,7 +807,7 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
     # 套餐挖掘 (23:00) — 不依赖浏览器
     scheduler.add_job(
-        bundle_mining_task,
+        _make_heartbeat_task("bundle_mining", bundle_mining_task),
         CronTrigger.from_crontab(tasks.get("bundle_mining", "0 23 * * *")),
         id="bundle_mining",
         replace_existing=True,
@@ -722,7 +819,7 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
 
     # Prophet 重训练 (每周日3:00)
     scheduler.add_job(
-        prophet_retrain_task,
+        _make_heartbeat_task("prophet_retrain", prophet_retrain_task),
         CronTrigger.from_crontab(tasks.get("prophet_retrain", "0 3 * * 0")),
         id="prophet_retrain",
         replace_existing=True,
@@ -730,13 +827,13 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
 
     # 竞品采集 (8:00, 14:00)
     scheduler.add_job(
-        competitor_crawl_task,
+        _make_heartbeat_task("competitor_crawl_am", competitor_crawl_task),
         CronTrigger.from_crontab(tasks.get("competitor_crawl_am", "0 8 * * *")),
         id="competitor_crawl_am",
         replace_existing=True,
     )
     scheduler.add_job(
-        competitor_crawl_task,
+        _make_heartbeat_task("competitor_crawl_pm", competitor_crawl_task),
         CronTrigger.from_crontab(tasks.get("competitor_crawl_pm", "0 14 * * *")),
         id="competitor_crawl_pm",
         replace_existing=True,
@@ -744,7 +841,7 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
 
     # 美团买药商品同步 (凌晨1:30, CST) — 主数据源
     scheduler.add_job(
-        meituan_product_sync_task,
+        _make_heartbeat_task("meituan_product_sync", meituan_product_sync_task),
         CronTrigger.from_crontab(
             tasks.get("meituan_product_sync", "30 1 * * *"),
             timezone=SH_TZ,
@@ -755,7 +852,7 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
 
     # QNH 数据同步 + 门店库存 (凌晨2:00, CST) — 补充数据源
     scheduler.add_job(
-        qnh_data_sync_task,
+        _make_heartbeat_task("qnh_data_sync", qnh_data_sync_task),
         CronTrigger.from_crontab(
             tasks.get("qnh_data_sync", "0 2 * * *"),
             timezone=SH_TZ,
@@ -766,7 +863,7 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
 
     # 日报预热 (凌晨3:00, CST)
     scheduler.add_job(
-        daily_insights_warmup_task,
+        _make_heartbeat_task("daily_insights_warmup", daily_insights_warmup_task),
         CronTrigger.from_crontab(
             tasks.get("daily_insights_warmup", "0 3 * * *"),
             timezone=SH_TZ,
