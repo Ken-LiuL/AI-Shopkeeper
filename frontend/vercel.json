@@ -3,7 +3,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://ai-shopkeeper-kk.fly.dev/api/:path*"
+      "destination": "http://192.144.227.205:8000/api/:path*"
     }
   ]
 }
