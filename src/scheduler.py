@@ -477,6 +477,78 @@ async def etl_pipeline_task() -> None:
         logger.exception("Scheduled ETL pipeline task failed")
 
 
+async def cookie_health_check_task() -> None:
+    """Cookie 健康检查任务（每 30 分钟）。
+
+    若美团同步超过 2 小时未成功，写入一条 SYNC_FAILURE 告警。
+    """
+    logger.info("Starting cookie health check task")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip cookie health check")
+        return
+    try:
+        import asyncpg
+        from src.sync.cookie_health import check_cookie_health
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            result = await check_cookie_health(pool)
+            logger.info(
+                "Cookie health: status=%s hours_since_last_sync=%s",
+                result["status"],
+                result.get("hours_since_last_sync"),
+            )
+
+            if result["status"] == "STALE":
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO alerts (
+                            alert_id, product_id, alert_type, severity,
+                            detection_method, metrics, title, description,
+                            status, created_at
+                        ) VALUES (
+                            'sync_cookie_stale', NULL, 'SYNC_FAILURE', 'critical',
+                            'scheduler',
+                            $1::jsonb,
+                            '美团数据同步中断 — Cookie 可能已过期',
+                            $2,
+                            'pending', NOW()
+                        )
+                        ON CONFLICT (alert_id) DO UPDATE SET
+                            severity     = 'critical',
+                            metrics      = EXCLUDED.metrics,
+                            description  = EXCLUDED.description,
+                            status       = 'pending',
+                            resolved_at  = NULL
+                        """,
+                        __import__("json").dumps({
+                            "hours_since_last_sync": result.get("hours_since_last_sync"),
+                            "stale_threshold_hours": result["stale_threshold_hours"],
+                            "last_success_at": result.get("last_success_at"),
+                        }),
+                        result["message"],
+                    )
+                logger.warning("SYNC_FAILURE alert written: %s", result["message"])
+            else:
+                # 若已恢复，自动 resolve 告警
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE alerts
+                        SET status = 'resolved', resolved_at = NOW()
+                        WHERE alert_id = 'sync_cookie_stale'
+                          AND status = 'pending'
+                        """
+                    )
+        finally:
+            await pool.close()
+
+    except Exception:
+        logger.exception("Cookie health check task failed")
+
+
 async def daily_insights_warmup_task() -> None:
     """调用 /api/insights/daily 预热日报缓存."""
     logger.info("Starting daily insights warmup task")
@@ -592,6 +664,14 @@ async def _resolve_stale_alerts(conn, prefix: str, active_ids: Iterable[str]) ->
 
 def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
     """Jobs that can safely run on remote (browser-less) environments."""
+
+    # Cookie 健康检查 (每30分钟)
+    scheduler.add_job(
+        cookie_health_check_task,
+        CronTrigger.from_crontab(tasks.get("cookie_health_check", "*/30 * * * *")),
+        id="cookie_health_check",
+        replace_existing=True,
+    )
 
     # 预警扫描 (每5分钟)
     scheduler.add_job(

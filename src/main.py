@@ -42,6 +42,7 @@ from src.api.selection_intelligence import router as selection_intel_router
 from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
+from src.api.sync_status import router as sync_status_router
 from src.api.system import router as system_router
 from src.auth.router import router as auth_router
 from src.config import get_settings
@@ -125,6 +126,22 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.info("Scheduler started")
         except Exception:
             logger.warning("Failed to start scheduler", exc_info=True)
+
+        # Run an initial cookie health check in background
+        try:
+            import asyncio as _asyncio_hc
+
+            async def _startup_cookie_health_check():
+                try:
+                    from src.scheduler import cookie_health_check_task
+                    await cookie_health_check_task()
+                except Exception as _e:
+                    logger.warning("Startup cookie health check failed: %s", _e)
+
+            _asyncio_hc.create_task(_startup_cookie_health_check())
+            logger.info("Startup cookie health check task scheduled")
+        except Exception:
+            logger.warning("Failed to schedule startup cookie health check", exc_info=True)
 
         # Check if DB is empty → trigger full sync in background
         try:
@@ -682,6 +699,7 @@ app.include_router(products_v1_router)
 app.include_router(dashboard_router)
 app.include_router(sync_router)
 app.include_router(sync_receiver_router)
+app.include_router(sync_status_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
