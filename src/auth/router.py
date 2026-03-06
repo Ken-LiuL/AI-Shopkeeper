@@ -20,12 +20,14 @@ async def login(request: LoginRequest):
     """用户名密码登录，返回 JWT access token。"""
     try:
         row = await pg_db.fetchrow(
-            "SELECT user_id, username, password_hash, tenant_id, role FROM users WHERE username = $1",
+            "SELECT id, username, password_hash, role FROM users WHERE username = $1",
             request.username,
         )
     except Exception as e:
         logger.error("DB error during login: %s", e)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务器内部错误")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务器内部错误"
+        )
 
     if not row or not verify_password(request.password, row["password_hash"]):
         raise HTTPException(
@@ -33,12 +35,14 @@ async def login(request: LoginRequest):
             detail="用户名或密码错误",
         )
 
-    token = create_access_token({
-        "sub": row["user_id"],
-        "username": row["username"],
-        "tenant_id": row["tenant_id"],
-        "role": row["role"],
-    })
+    token = create_access_token(
+        {
+            "sub": str(row["id"]),
+            "username": row["username"],
+            "tenant_id": "default",
+            "role": row["role"],
+        }
+    )
     return Token(access_token=token)
 
 
