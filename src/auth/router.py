@@ -37,7 +37,7 @@ async def login(request: LoginRequest):
 
     token = create_access_token(
         {
-            "sub": str(row["id"]),
+            "sub": str(row["user_id"]),
             "username": row["username"],
             "tenant_id": "default",
             "role": row["role"],
