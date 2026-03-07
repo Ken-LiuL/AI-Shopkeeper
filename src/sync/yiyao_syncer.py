@@ -129,7 +129,8 @@ class YiyaoFullSyncer:
         if all_items:
             await self._save_products(all_items)
 
-        return SyncResult(syncer="products", success=True, records=total, pages=pages)
+        return SyncResult(syncer="products", success=total > 0, records=total, pages=pages,
+                          error=None if total > 0 else "未获取到商品数据")
 
     # ── 订单 ──────────────────────────────────────────────────────────────
 
@@ -287,7 +288,7 @@ class YiyaoFullSyncer:
         if all_reviews:
             await self._save_raw(all_reviews, "qnh_reviews")
 
-        return SyncResult(syncer="reviews", success=True, records=total, pages=pages)
+        return SyncResult(syncer="reviews", success=total > 0 or pages > 0, records=total, pages=pages)
 
     # ── 销售统计 ──────────────────────────────────────────────────────────
 
@@ -330,16 +331,33 @@ class YiyaoFullSyncer:
         now = datetime.now(UTC)
         rows = []
         for item in items:
+            spu_id = str(item.get("id") or item.get("spuId") or "")
+            if not spu_id:
+                continue
+            sku_id = str(item.get("skuId") or "")
+
+            # 解析状态
+            sale_status = item.get("saleStatus") or item.get("status")
+            if sale_status == 1 or sale_status == "on":
+                status = "on"
+            elif sale_status == 0 or sale_status == "off":
+                status = "off"
+            else:
+                status = str(sale_status) if sale_status is not None else "unknown"
+
             rows.append((
-                str(item.get("id") or item.get("spuId") or ""),
-                str(item.get("skuId") or ""),
+                spu_id,
+                sku_id,
                 str(item.get("name") or item.get("spuName") or ""),
-                str(item.get("brandName") or ""),
+                str(item.get("brandName") or item.get("brand") or ""),
                 str(item.get("spec") or item.get("skuSpec") or ""),
                 float(item.get("price") or item.get("retailPrice") or 0),
-                int(item.get("stock") or item.get("stockNum") or 0),
-                str(item.get("categoryName") or ""),
+                int(item.get("stock") or item.get("stockNum") or item.get("stockQuantity") or 0),
+                str(item.get("categoryName") or item.get("category") or ""),
                 str(item.get("imageUrl") or item.get("pic") or ""),
+                str(item.get("barcode") or item.get("upc") or ""),
+                status,
+                json.dumps(item, ensure_ascii=False, default=str),
                 now,
             ))
 
@@ -347,40 +365,78 @@ class YiyaoFullSyncer:
             await conn.executemany(
                 """
                 INSERT INTO qnh_products
-                    (spu_id, sku_id, name, brand, spec, retail_price, stock_quantity,
-                     category, image_url, synced_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                ON CONFLICT (spu_id) DO UPDATE SET
+                    (spu_id, sku_id, name, brand, spec, retail_price, stock,
+                     category, image_url, barcode, status, extra, synced_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13)
+                ON CONFLICT (spu_id, sku_id) DO UPDATE SET
                     name = EXCLUDED.name,
+                    brand = EXCLUDED.brand,
+                    spec = EXCLUDED.spec,
                     retail_price = EXCLUDED.retail_price,
-                    stock_quantity = EXCLUDED.stock_quantity,
+                    stock = EXCLUDED.stock,
+                    category = EXCLUDED.category,
+                    image_url = EXCLUDED.image_url,
+                    barcode = EXCLUDED.barcode,
+                    status = EXCLUDED.status,
+                    extra = EXCLUDED.extra,
                     synced_at = EXCLUDED.synced_at
                 """,
                 rows,
             )
         logger.info("商品写入完成: %d 条", len(rows))
 
+    # raw 表白名单（防止 SQL 注入）
+    _ALLOWED_RAW_TABLES = {
+        "qnh_orders", "qnh_reviews", "qnh_store_metrics",
+        "qnh_refunds", "qnh_inventory", "qnh_traffic",
+    }
+
     async def _save_raw(self, items: list[dict], table: str) -> None:
-        """原始 JSON 写入 raw 表。"""
+        """原始 JSON 写入 raw 表（MD5 去重，避免重复插入）。"""
         if not self.pool or not items:
             return
+        if table not in self._ALLOWED_RAW_TABLES:
+            logger.error("非法表名: %s，跳过写入", table)
+            return
+
+        import hashlib
+
         now = datetime.now(UTC).isoformat()
+        raw_table = f"{table}_raw"
         async with self.pool.acquire() as conn:
-            # 确保表存在
+            # 确保表存在（含去重用的 content_hash 列）
             await conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS {table}_raw (
+                CREATE TABLE IF NOT EXISTS {raw_table} (
                     id SERIAL PRIMARY KEY,
                     source VARCHAR(50) DEFAULT 'yiyao_sync',
                     raw_data JSONB,
+                    content_hash VARCHAR(32),
                     synced_at TEXT,
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            await conn.executemany(
-                f"""
-                INSERT INTO {table}_raw (source, raw_data, synced_at)
-                VALUES ('yiyao_sync', $1::jsonb, $2)
-                """,
-                [(json.dumps(item, ensure_ascii=False), now) for item in items],
-            )
-        logger.info("%s_raw 写入完成: %d 条", table, len(items))
+            # 确保 content_hash 唯一索引存在
+            await conn.execute(f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_{raw_table}_hash
+                ON {raw_table} (content_hash)
+            """)
+
+            inserted = 0
+            skipped = 0
+            for item in items:
+                raw_json = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
+                content_hash = hashlib.md5(raw_json.encode()).hexdigest()
+                try:
+                    await conn.execute(
+                        f"""
+                        INSERT INTO {raw_table} (source, raw_data, content_hash, synced_at)
+                        VALUES ('yiyao_sync', $1::jsonb, $2, $3)
+                        ON CONFLICT (content_hash) DO NOTHING
+                        """,
+                        raw_json, content_hash, now,
+                    )
+                    inserted += 1
+                except Exception:
+                    skipped += 1
+
+        logger.info("%s 写入完成: %d 条新增, %d 条跳过（重复）", raw_table, inserted, skipped)

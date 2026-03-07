@@ -60,7 +60,7 @@ class MeituanBrowserClient:
         method: str = "POST",
         body_params: dict[str, Any] | None = None,
         base_url: str | None = None,
-        timeout: float = 8.0,
+        timeout: float = 15.0,
     ) -> Any:
         """在浏览器上下文中调用 yiyao API（带 h5guard 自动签名）。"""
         await self.ensure_ready()
@@ -121,12 +121,19 @@ class MeituanBrowserClient:
             return result_str
 
     async def navigate_to(self, path: str) -> None:
-        """导航到指定页面，等待加载完成。"""
+        """在当前 tab 导航到指定页面（不开新 tab，避免内存泄漏）。"""
         await self.ensure_ready()
         url = self._build_url(path, None)
         logger.info("导航到: %s", url)
-        self._page = await self._browser.get(url)
+        # 在当前页面执行导航，而不是 browser.get() 开新 tab
+        await self._page.evaluate(f"window.location.href = '{url}'")
         await self._page.sleep(5)
+        # 等待页面加载完成
+        for _ in range(10):
+            ready_state = await self._page.evaluate("document.readyState")
+            if ready_state == "complete":
+                break
+            await asyncio.sleep(1)
 
     async def close(self) -> None:
         await self._cleanup()
