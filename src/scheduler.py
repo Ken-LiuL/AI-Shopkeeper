@@ -23,12 +23,6 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from scripts.daily_sync_and_etl import (
-    run_etl_pipeline,
-    run_qnh_data_sync,
-    run_store_stock_sync,
-    trigger_daily_insights,
-)
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -533,45 +527,13 @@ async def meituan_product_sync_task() -> None:
 
 
 async def qnh_data_sync_task() -> None:
-    """运行 QNH 数据同步 + 门店库存同步."""
-    logger.info("Starting scheduled QNH data + store stock sync task")
-    dsn = _resolve_database_url()
-    if not dsn:
-        logger.warning("DATABASE_URL unavailable — skip QNH data sync job")
-        return
-    try:
-        dataset_result = await run_qnh_data_sync(dsn)
-        logger.info(
-            "QNH dataset sync completed (datasets=%d, errors=%d)",
-            len(dataset_result["summary"]),
-            len(dataset_result["errors"]),
-        )
-        stock_result = await run_store_stock_sync(dsn)
-        logger.info(
-            "Store stock sync completed (records=%s, success=%s)",
-            stock_result.get("records_synced"),
-            stock_result.get("success"),
-        )
-    except Exception:
-        logger.exception("Scheduled QNH data sync task failed")
+    """数据同步任务（已迁移到 Chrome 扩展 + nodriver 链路，此处保留为空操作）。"""
+    logger.info("Data sync now handled by Chrome extension / nodriver — skipping legacy task")
 
 
 async def etl_pipeline_task() -> None:
-    """运行 ETL，同步业务表."""
-    logger.info("Starting scheduled ETL pipeline task")
-    dsn = _resolve_database_url()
-    if not dsn:
-        logger.warning("DATABASE_URL unavailable — skip ETL job")
-        return
-    try:
-        result = await run_etl_pipeline(dsn)
-        logger.info(
-            "ETL pipeline completed (products=%s, sales_history=%s)",
-            result["products"].get("upserts"),
-            result["sales_history"].get("upserts"),
-        )
-    except Exception:
-        logger.exception("Scheduled ETL pipeline task failed")
+    """ETL 任务（已迁移到 Chrome 扩展实时同步，此处保留为空操作）。"""
+    logger.info("ETL now handled by real-time Chrome extension sync — skipping legacy task")
 
 
 async def cookie_health_check_task() -> None:
@@ -651,8 +613,11 @@ async def daily_insights_warmup_task() -> None:
     logger.info("Starting daily insights warmup task")
     base_url = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
     try:
-        result = await trigger_daily_insights(base_url)
-        logger.info("Daily insights warmup completed (status=%s)", result["status_code"])
+        import httpx
+
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(f"{base_url}/api/insights/daily")
+            logger.info("Daily insights warmup completed (status=%s)", resp.status_code)
     except Exception:
         logger.exception("Daily insights warmup task failed")
 
