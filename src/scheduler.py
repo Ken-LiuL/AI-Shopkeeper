@@ -545,7 +545,22 @@ async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) 
             return
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
-        client = MeituanBrowserClient(wm_poi_id=wm_poi_id)
+
+        # 尝试从 DB 读取最新 Cookie
+        cookie_json = None
+        try:
+            row = await pool.fetchrow(
+                "SELECT cookie_json FROM merchant_sync_cookies "
+                "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
+            )
+            if row and row["cookie_json"]:
+                import json as _json
+                cookie_json = _json.loads(row["cookie_json"]) if isinstance(row["cookie_json"], str) else row["cookie_json"]
+                logger.info("从 DB 加载 Cookie（%d 个键）", len(cookie_json))
+        except Exception:
+            logger.debug("DB Cookie 表不存在或查询失败，将使用文件/环境变量")
+
+        client = MeituanBrowserClient(wm_poi_id=wm_poi_id, cookie_json=cookie_json)
         try:
             syncer = YiyaoFullSyncer(client=client, pool=pool, wm_poi_id=wm_poi_id, days_back=days_back)
             if target == "products":
