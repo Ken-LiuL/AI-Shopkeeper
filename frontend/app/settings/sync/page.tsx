@@ -133,7 +133,7 @@ export default function SyncSettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-gray-900">数据同步设置</h1>
         <p className="text-sm text-gray-500 mt-1">
-          通过牵牛花（QNH）同步您的真实经营数据。需要先配置 Cookie 才能开始同步。
+          通过美团买药商家后台同步您的真实经营数据。推荐使用 Chrome 扩展自动同步，也可手动配置 Cookie。
         </p>
       </div>
 
@@ -219,13 +219,13 @@ export default function SyncSettingsPage() {
 
       {/* ── Cookie 配置 ── */}
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
-        <h2 className="text-lg font-semibold text-gray-800">配置牵牛花 Cookie</h2>
+        <h2 className="text-lg font-semibold text-gray-800">配置美团商家后台 Cookie</h2>
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-700 space-y-1">
           <p className="font-medium">如何获取 Cookie？</p>
           <ol className="list-decimal list-inside space-y-1 text-blue-600">
-            <li>在 Chrome 中登录 <a href="https://qnh.meituan.com" target="_blank" rel="noreferrer" className="underline">qnh.meituan.com</a></li>
+            <li>在 Chrome 中登录 <a href="https://yiyao.meituan.com" target="_blank" rel="noreferrer" className="underline">yiyao.meituan.com</a></li>
             <li>按 F12 打开开发者工具 → Application → Cookies</li>
-            <li>复制所有 <code className="bg-blue-100 px-1 rounded">qnh.meituan.com</code> 的 Cookie</li>
+            <li>复制所有 <code className="bg-blue-100 px-1 rounded">yiyao.meituan.com</code> 的 Cookie</li>
             <li>粘贴到下方输入框，点击「保存 Cookie」</li>
           </ol>
         </div>
