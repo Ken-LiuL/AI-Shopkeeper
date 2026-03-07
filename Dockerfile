@@ -44,7 +44,6 @@ ENV DISPLAY=:99
 
 WORKDIR /app
 COPY --from=python-builder /usr/local /usr/local
-ARG CACHEBUST=3
 COPY src/ src/
 COPY config/ config/
 COPY migrations/ migrations/
