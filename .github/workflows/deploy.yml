@@ -70,9 +70,12 @@ jobs:
             echo "=== Building Docker image ==="
             docker build -t aishop-app:latest /opt/aishop/repo/
 
-            echo "=== Restarting app ==="
+            echo "=== Starting infra (no-recreate) ==="
             cd /opt/aishop
-            docker compose up -d --force-recreate app
+            docker compose up -d --no-recreate postgres neo4j redis 2>/dev/null || true
+
+            echo "=== Restarting app only ==="
+            docker compose up -d --force-recreate --no-deps app
 
             echo "=== Health check ==="
             sleep 15
