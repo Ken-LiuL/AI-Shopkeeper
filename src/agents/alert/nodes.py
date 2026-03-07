@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import statistics
 from datetime import date
 
 from src.services.raw_data import fetch_latest_raw
@@ -226,6 +227,61 @@ async def _get_active_products(pool) -> list[dict]:
         return []
 
 
+async def _fetch_recent_sales_series(pool, product_id: str, days: int = 30) -> list[int]:
+    """获取商品近 N 天销量序列（用于统计降级检测）。"""
+    if not pool or not product_id:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT quantity
+            FROM sales_history
+            WHERE product_id = $1
+              AND sale_date >= CURRENT_DATE - $2 * INTERVAL '1 day'
+            ORDER BY sale_date ASC
+            """,
+            product_id,
+            days,
+        )
+        return [int(r["quantity"] or 0) for r in rows]
+    except Exception as e:
+        logger.debug(f"Failed to fetch sales series for {product_id}: {e}")
+        return []
+
+
+def _zscore_anomaly(
+    series: list[int],
+    actual_sales: int,
+    *,
+    z_threshold: float = 2.5,
+) -> dict | None:
+    """使用 Z-Score 进行简易异常检测，返回异常字典（无异常返回 None）。"""
+    if len(series) < 3:
+        return None
+    mean_val = statistics.mean(series)
+    std_val = statistics.pstdev(series)
+    if std_val <= 0:
+        return None
+
+    z = (actual_sales - mean_val) / std_val
+    if abs(z) < z_threshold:
+        return None
+
+    anomaly_type = "spike" if z > 0 else "drop"
+    deviation_pct = abs(actual_sales - mean_val) / max(abs(mean_val), 1)
+    severity = "critical" if abs(z) >= 3.5 else "warning"
+    return {
+        "is_anomaly": True,
+        "type": anomaly_type,
+        "expected": round(mean_val, 1),
+        "actual": actual_sales,
+        "bounds": [round(mean_val - std_val, 1), round(mean_val + std_val, 1)],
+        "deviation_pct": round(deviation_pct, 3),
+        "severity": severity,
+        "reason": f"zscore={z:.2f}",
+    }
+
+
 async def prophet_detection_node(state: AlertState) -> dict:
     """运行 ProphetSkill 对近期活跃商品进行异常检测，将结果注入 state。
 
@@ -238,30 +294,73 @@ async def prophet_detection_node(state: AlertState) -> dict:
         pool = state.get("db_pool")
         prophet = ProphetSkill(pool=pool)
 
-        # 检查是否有已训练的模型，没有则跳过
+        # 检查是否有已训练的模型
+        has_prophet_model = True
         if pool:
             try:
                 model_count = await pool.fetchval("SELECT COUNT(*) FROM prophet_models")
                 if not model_count:
-                    logger.info("No trained Prophet models found, skipping ProphetSkill detection")
-                    return {"prophet_results": "[]"}
+                    has_prophet_model = False
+                    logger.info(
+                        "No trained Prophet models found, Prophet detection will use fallback when possible"
+                    )
             except Exception as e:
                 logger.warning(f"Failed to check prophet_models table: {e}")
-                return {"prophet_results": "[]"}
+                has_prophet_model = False
 
         active_products = await _get_active_products(pool)
         today = date.today().isoformat()
 
         prophet_results = []
+        fallback_events: list[dict] = []
         for product in active_products[:20]:  # 限制前20个，避免超时
             product_id = product["product_id"]
             today_sales = int(product.get("today_sales") or 0)
+            recent_sales = await _fetch_recent_sales_series(pool, product_id, days=30)
+            history_days = len(recent_sales)
             try:
-                result = await prophet.detect_anomaly(
-                    product_id=product_id,
-                    date=today,
-                    actual_sales=today_sales,
-                )
+                use_fallback = (not has_prophet_model) or history_days < 14
+                fallback_reason = None
+
+                if history_days < 14:
+                    fallback_reason = "历史数据不足14天，使用统计检测"
+                elif not has_prophet_model:
+                    fallback_reason = "Prophet 模型未训练，使用统计检测"
+
+                if use_fallback:
+                    fallback_events.append(
+                        {
+                            "product_id": product_id,
+                            "product_name": product.get("name", ""),
+                            "reason": fallback_reason,
+                            "history_days": history_days,
+                        }
+                    )
+                    z_result = _zscore_anomaly(recent_sales, today_sales)
+                    if z_result and z_result.get("is_anomaly"):
+                        prophet_results.append(
+                            {
+                                "product_id": product_id,
+                                "product_name": product.get("name", ""),
+                                "is_anomaly": True,
+                                "type": z_result["type"],
+                                "expected": z_result["expected"],
+                                "actual": z_result["actual"],
+                                "bounds": z_result["bounds"],
+                                "deviation_pct": z_result["deviation_pct"],
+                                "severity": z_result["severity"],
+                                "reason": z_result["reason"],
+                                "date": today,
+                                "detection_method": "zscore_fallback",
+                                "metadata": {
+                                    "fallback_reason": fallback_reason,
+                                    "history_days": history_days,
+                                },
+                            }
+                        )
+                    continue
+
+                result = await prophet.detect_anomaly(product_id=product_id, date=today, actual_sales=today_sales)
                 if result and result.is_anomaly:
                     prophet_results.append(
                         {
@@ -276,6 +375,7 @@ async def prophet_detection_node(state: AlertState) -> dict:
                             "severity": result.severity,
                             "reason": result.reason,
                             "date": today,
+                            "detection_method": "prophet",
                         }
                     )
             except Exception as e:
@@ -286,11 +386,23 @@ async def prophet_detection_node(state: AlertState) -> dict:
             f"ProphetSkill detection: {len(prophet_results)} anomalies out of "
             f"{len(active_products[:20])} products checked"
         )
-        return {"prophet_results": json.dumps(prophet_results, ensure_ascii=False)}
+        return {
+            "prophet_results": json.dumps(prophet_results, ensure_ascii=False),
+            "prophet_detection_metadata": {
+                "fallback_count": len(fallback_events),
+                "fallback_events": fallback_events,
+            },
+        }
 
     except Exception as e:
         logger.warning(f"ProphetSkill detection failed: {e}")
-        return {"prophet_results": "[]"}
+        return {
+            "prophet_results": "[]",
+            "prophet_detection_metadata": {
+                "fallback_count": 0,
+                "fallback_events": [],
+            },
+        }
 
 
 async def anomaly_detection_node(state: AlertState) -> dict:
@@ -364,6 +476,17 @@ async def anomaly_detection_node(state: AlertState) -> dict:
                     anomaly["description"] = (
                         anomaly.get("description", "") + "（已确认有活动进行中，非异常波动）"
                     )
+
+        prophet_meta = state.get("prophet_detection_metadata", {}) or {}
+        fallback_events = prophet_meta.get("fallback_events", [])
+        metadata = result.setdefault("metadata", {})
+        metadata["detection_method"] = "prophet"
+        if fallback_events:
+            metadata["detection_method"] = "zscore_fallback"
+            metadata["details"] = (
+                f"{len(fallback_events)} 个商品因历史数据不足14天或缺少模型，已使用统计检测（Z-Score）"
+            )
+            metadata["fallback_events"] = fallback_events
 
         return {"anomalies": result, "root_causes": [], "actions": [], "current_anomaly_index": 0}
     except Exception as e:

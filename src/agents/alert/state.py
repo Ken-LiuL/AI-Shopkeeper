@@ -17,6 +17,7 @@ class AlertState(TypedDict, total=False):
 
     # Prophet 检测原始结果
     prophet_results: str
+    prophet_detection_metadata: dict[str, Any]
 
     # 规则检测原始结果
     rule_check_results: str
