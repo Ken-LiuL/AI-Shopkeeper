@@ -16,8 +16,11 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // Use relative path when NEXT_PUBLIC_API_URL is set — Next.js rewrite proxies server-side
+      // to avoid mixed content (HTTPS page → HTTP backend) blocks in the browser.
       const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-        || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
+        ? ''
+        : (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
       const res = await fetch(`${BASE_URL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

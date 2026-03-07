@@ -1,8 +1,10 @@
 // API client for AI店长 backend
-// NEXT_PUBLIC_API_URL overrides all: set to http://your-server:port for standalone deployment
-// Falls back to fly.dev in development, empty string (relative path) in production
+// When NEXT_PUBLIC_API_URL is set, Next.js rewrites proxy /api/* → backend server-side.
+// Client always uses relative /api/... paths to avoid mixed-content (HTTPS→HTTP) blocks.
+// Falls back to fly.dev in development when no env var is set.
 const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-  || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
+  ? '' // relative path — Next.js rewrite handles the proxy (avoids mixed content)
+  : (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
 
 interface APIResponse<T> {
   success: boolean;
