@@ -65,18 +65,6 @@
     .status { text-align: center; font-size: 11px; color: #4caf50; margin-top: 8px; min-height: 14px; }
     .status.error { color: #e53935; }
 
-    /* 统计卡片 */
-    .stat-row {
-      display: flex; justify-content: space-between;
-      padding: 5px 0; border-bottom: 1px solid #f0f0f0;
-      font-size: 12px;
-    }
-    .stat-row:last-child { border-bottom: none; }
-    .stat-name { color: #444; }
-    .stat-ok { color: #4caf50; font-weight: 600; }
-    .stat-err { color: #e53935; font-size: 11px; }
-
-    /* Debug 日志 */
     .log-box {
       background: #1a1a1a; border-radius: 6px;
       padding: 8px; max-height: 200px; overflow-y: auto;
@@ -102,7 +90,7 @@
   <div class="header">
     <div>
       <h1>🤖 AI店长</h1>
-      <p>美团数据同步 · 智能客服</p>
+      <p>智能客服助手</p>
     </div>
     <div style="margin-left:auto;text-align:right;font-size:11px">
       <span class="conn-dot conn-unknown" id="connDot"></span>
@@ -111,53 +99,11 @@
   </div>
 
   <div class="tabs">
-    <div class="tab active" data-tab="sync">数据同步</div>
+    <div class="tab active" data-tab="cs">客服设置</div>
     <div class="tab" data-tab="debug">调试日志</div>
-    <div class="tab" data-tab="cs">客服设置</div>
   </div>
 
-  <!-- 数据同步 Tab -->
-  <div class="tab-panel active" id="tab-sync">
-    <div class="field">
-      <label>后端服务器地址</label>
-      <input type="url" id="syncApiBase" placeholder="https://ai-shopkeeper-kk.fly.dev">
-    </div>
-    <div class="field">
-      <label>商户 ID</label>
-      <input type="text" id="tenantId" placeholder="default">
-    </div>
-    <button class="primary" id="saveSyncSettings">保存并测试连接</button>
-    <div class="status" id="syncSaveStatus"></div>
-
-    <div style="margin-top:12px;font-size:11px;font-weight:600;color:#555;margin-bottom:6px">📊 同步统计</div>
-    <div id="syncStatsList"><div style="color:#aaa;font-size:12px;text-align:center;padding:8px">尚无同步记录</div></div>
-
-    <button class="secondary" id="forceSync">🔄 清除节流，立即同步</button>
-    <div class="status" id="forceSyncStatus"></div>
-  </div>
-
-  <!-- 调试日志 Tab -->
-  <div class="tab-panel" id="tab-debug">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-      <span style="font-size:11px;font-weight:600;color:#555">实时日志</span>
-      <button class="danger" id="clearLogs" style="width:auto;padding:3px 8px;font-size:11px;margin:0">清空</button>
-    </div>
-    <div class="log-box" id="logBox">
-      <div style="color:#555">等待捕获数据...</div>
-    </div>
-
-    <div style="margin-top:10px">
-      <button class="secondary" id="testConn">🔌 测试后端连接</button>
-    </div>
-    <div class="status" id="testConnStatus"></div>
-
-    <div style="margin-top:8px;font-size:11px;color:#777;line-height:1.6">
-      💡 打开 yiyao.meituan.com 并浏览订单/商品页面，数据会自动捕获并显示在此处。
-    </div>
-  </div>
-
-  <!-- 客服设置 Tab -->
-  <div class="tab-panel" id="tab-cs">
+  <div class="tab-panel active" id="tab-cs">
     <div class="field" style="display:flex;align-items:center;justify-content:space-between">
       <label style="margin:0">启用 AI 客服助手</label>
       <input type="checkbox" id="enabled" checked style="width:auto;accent-color:#ff6a00">
@@ -171,7 +117,7 @@
     </div>
     <div class="field">
       <label>客服 API 地址（留空用默认）</label>
-      <input type="url" id="apiUrl" placeholder="https://ai-shopkeeper-kk.fly.dev/api/v1/customer-service/chat">
+      <input type="url" id="apiUrl" placeholder="https://ai-shopkeeper-kk.fly.dev/api/customer-service/chat">
     </div>
     <div class="field">
       <label>客服 API 基础地址</label>
@@ -182,7 +128,19 @@
       <input type="text" id="storeId" placeholder="store_123">
     </div>
     <button class="primary" id="save">保存客服设置</button>
+    <button class="secondary" id="testConn">🔌 测试连接</button>
     <div class="status" id="csStatus"></div>
+  </div>
+
+  <div class="tab-panel" id="tab-debug">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+      <span style="font-size:11px;font-weight:600;color:#555">实时日志</span>
+      <button class="danger" id="clearLogs" style="width:auto;padding:3px 8px;font-size:11px;margin:0">清空</button>
+    </div>
+    <div class="log-box" id="logBox">
+      <div style="color:#555">暂无日志</div>
+    </div>
+    <div class="status" id="testConnStatus"></div>
   </div>
 
   <script src="popup.js"></script>

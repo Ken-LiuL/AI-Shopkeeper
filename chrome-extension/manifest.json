@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "AI店长 - 数据同步助手",
+  "name": "AI店长 - 客服助手",
   "version": "2.0.0",
-  "description": "自动从美团商家后台同步订单/商品/评价数据到 AI店长系统",
-  "permissions": ["storage", "activeTab"],
+  "description": "AI店长客服助手 — 自动拦截客户消息，由 AI 生成回复建议",
+  "permissions": ["storage"],
   "host_permissions": [
     "https://yiyao.meituan.com/*",
     "https://ai-shopkeeper-kk.fly.dev/*"
