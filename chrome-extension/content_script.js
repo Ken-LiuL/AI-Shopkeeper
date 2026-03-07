@@ -28,9 +28,19 @@
   window.addEventListener('__AI_DIANZHANG_DATA__', (e) => {
     try {
       const payload = JSON.parse(e.detail);
+      console.log('[AI店长] 捕获到数据:', payload.type, payload.url?.split('/').slice(-2).join('/'));
       chrome.runtime.sendMessage(
         { type: 'BUSINESS_DATA', payload },
-        () => { /* 静默忽略错误 */ chrome.runtime.lastError; }
+        (resp) => {
+          chrome.runtime.lastError; // 消耗错误
+          if (resp?.success && !resp?.skipped) {
+            console.log(`[AI店长] ✅ 同步成功 [${payload.type}] ${resp.count || '?'} 条`);
+          } else if (resp?.skipped) {
+            console.log(`[AI店长] ⏭ 节流跳过 [${payload.type}]`);
+          } else if (resp?.error) {
+            console.warn(`[AI店长] ❌ 同步失败 [${payload.type}]:`, resp.error);
+          }
+        }
       );
     } catch (_) {}
   });

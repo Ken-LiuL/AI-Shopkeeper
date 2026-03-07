@@ -1,19 +1,34 @@
 /**
- * background.js — Service worker for AI店长 Chrome Extension.
+ * background.js — AI店长 Chrome Extension Service Worker
  * 1. 处理客服 IM 消息，请求 AI 回复
- * 2. 接收业务数据并同步到后端（节流 30 秒/类型）
+ * 2. 接收业务数据并同步到后端
  */
 
 const DEFAULT_CHAT_API = 'http://192.144.227.205:8000/api/v1/customer-service/chat';
 const DEFAULT_SYNC_API = 'http://192.144.227.205:8000';
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
-const THROTTLE_MS = 30_000; // 同类型数据 30 秒内只发一次
+const THROTTLE_MS = 10_000; // 10s 节流（从 30s 降低）
 
-// 节流状态：{ [type]: lastSentTimestamp }
+// 节流状态
 const lastSentAt = {};
-// 同步统计：{ [type]: count }
+// 同步统计
 const syncStats = {};
+const syncErrors = {};
+// Debug 日志（最近 50 条）
+const debugLogs = [];
+
+function addLog(level, msg, detail = '') {
+  const entry = { time: new Date().toLocaleTimeString(), level, msg, detail };
+  debugLogs.unshift(entry);
+  if (debugLogs.length > 50) debugLogs.pop();
+  chrome.storage.local.set({ debugLogs });
+  if (level === 'error') {
+    console.warn(`[AI店长] ${msg}`, detail);
+  } else {
+    console.log(`[AI店长] ${msg}`, detail);
+  }
+}
 
 // ─── 消息路由 ─────────────────────────────────────────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -32,19 +47,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === 'GET_SYNC_STATS') {
-    sendResponse({ success: true, stats: syncStats, lastSentAt });
+    sendResponse({ success: true, stats: syncStats, errors: syncErrors, lastSentAt, debugLogs });
     return false;
   }
 
   if (message.type === 'FORCE_SYNC') {
-    // 清除节流限制，允许立即发送
     Object.keys(lastSentAt).forEach((k) => delete lastSentAt[k]);
+    addLog('info', '已清除节流，下次数据将立即发送');
     sendResponse({ success: true });
     return false;
   }
+
+  if (message.type === 'TEST_CONNECTION') {
+    testConnection().then((result) => sendResponse(result));
+    return true;
+  }
 });
 
-// ─── 客服消息处理（原有逻辑） ────────────────────────────────────────
+// ─── 连接测试 ────────────────────────────────────────────────────────
+async function testConnection() {
+  const settings = await chrome.storage.sync.get(['syncApiBase']);
+  const baseUrl = settings.syncApiBase || DEFAULT_SYNC_API;
+  try {
+    const r = await fetch(`${baseUrl}/health`, { method: 'GET' });
+    const ok = r.ok;
+    addLog(ok ? 'info' : 'error', `连接测试: ${ok ? '成功' : '失败'} (${r.status})`, baseUrl);
+    return { success: ok, status: r.status, url: baseUrl };
+  } catch (err) {
+    addLog('error', `连接测试失败: ${err.message}`, baseUrl);
+    return { success: false, error: err.message, url: baseUrl };
+  }
+}
+
+// ─── 客服消息处理 ────────────────────────────────────────────────────
 async function handleCustomerMessage(payload) {
   const settings = await chrome.storage.sync.get(['apiUrl', 'apiKey', 'storeId']);
   const apiUrl = settings.apiUrl || DEFAULT_CHAT_API;
@@ -62,26 +97,15 @@ async function handleCustomerMessage(payload) {
   let lastError;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text().catch(() => '');
-        throw new Error(`HTTP ${response.status}: ${errText.slice(0, 200)}`);
-      }
-
+      const response = await fetch(apiUrl, { method: 'POST', headers, body: JSON.stringify(body) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
       const reply = data.reply || data.message || data.response || data.data?.reply || '';
       if (!reply) return { success: false, error: '后台返回空回复' };
       return { success: true, reply };
     } catch (err) {
       lastError = err;
-      if (attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
-      }
+      if (attempt < MAX_RETRIES) await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
     }
   }
   return { success: false, error: lastError?.message || '请求失败' };
@@ -90,9 +114,14 @@ async function handleCustomerMessage(payload) {
 // ─── 业务数据同步 ─────────────────────────────────────────────────────
 async function handleBusinessData({ type, url, data }) {
   const now = Date.now();
+  const normalType = normalizeType(type);
+  const shortUrl = url ? url.split('/').slice(-2).join('/') : '?';
 
-  // 节流：同类型 30 秒内只发一次
+  addLog('info', `捕获 [${normalType}] 来自 ${shortUrl}`);
+
+  // 节流
   if (lastSentAt[type] && now - lastSentAt[type] < THROTTLE_MS) {
+    addLog('info', `节流跳过 [${normalType}]，距上次 ${Math.round((now - lastSentAt[type]) / 1000)}s`);
     return { success: true, skipped: true, reason: 'throttled' };
   }
 
@@ -102,7 +131,7 @@ async function handleBusinessData({ type, url, data }) {
 
   const body = {
     source: 'chrome_extension',
-    data_type: normalizeType(type),
+    data_type: normalType,
     tenant_id: tenantId,
     raw_data: data,
   };
@@ -119,29 +148,23 @@ async function handleBusinessData({ type, url, data }) {
       throw new Error(`HTTP ${response.status}: ${errText.slice(0, 100)}`);
     }
 
-    // 更新节流时间和统计
     lastSentAt[type] = now;
     const count = estimateCount(type, data);
-    syncStats[type] = (syncStats[type] || 0) + count;
+    syncStats[normalType] = (syncStats[normalType] || 0) + count;
 
-    // 持久化统计到 storage（供 popup 读取）
-    await chrome.storage.local.set({
-      syncStats,
-      lastSentAt,
-    });
+    addLog('success', `✅ 同步成功 [${normalType}] ${count} 条`, baseUrl);
 
-    console.log(`[AI店长] 已同步 ${type} 数据，共 ${count} 条`);
+    await chrome.storage.local.set({ syncStats, syncErrors, lastSentAt, debugLogs });
     return { success: true, count };
   } catch (err) {
-    // 静默失败，不影响正常使用
-    console.warn(`[AI店长] 同步 ${type} 失败（静默）:`, err.message);
+    syncErrors[normalType] = (syncErrors[normalType] || 0) + 1;
+    addLog('error', `❌ 同步失败 [${normalType}]: ${err.message}`, baseUrl);
+    await chrome.storage.local.set({ syncStats, syncErrors, lastSentAt, debugLogs });
     return { success: false, error: err.message };
   }
 }
 
-/**
- * 将内部类型名规范化为后端期望的 data_type
- */
+// ─── 类型规范化 ──────────────────────────────────────────────────────
 function normalizeType(type) {
   const map = {
     table_query: 'orders',
@@ -151,23 +174,35 @@ function normalizeType(type) {
     metrics: 'metrics',
     orders: 'orders',
     products: 'products',
+    reviews: 'reviews',
+    inventory: 'inventory',
+    refunds: 'refunds',
+    traffic: 'metrics',
   };
   return map[type] || type;
 }
 
-/**
- * 从响应数据中估算记录数
- */
+// ─── 估算记录数 ──────────────────────────────────────────────────────
 function estimateCount(type, data) {
   try {
-    // 常见列表结构
-    const lists = [data.data, data.list, data.items, data.rows, data.records, data.result];
-    for (const l of lists) {
-      if (Array.isArray(l)) return l.length;
+    const candidates = [
+      data?.data?.productList,
+      data?.data?.list,
+      data?.data?.items,
+      data?.data?.orders,
+      data?.data?.reviews,
+      data?.data,
+      data?.list,
+      data?.items,
+      data?.rows,
+      data?.records,
+      data?.result,
+    ];
+    for (const l of candidates) {
+      if (Array.isArray(l) && l.length > 0) return l.length;
     }
-    // 嵌套
-    if (data.data?.list) return data.data.list.length || 1;
-    if (data.data?.total) return data.data.total;
+    if (data?.data?.totalCount) return Number(data.data.totalCount);
+    if (data?.data?.total) return Number(data.data.total);
   } catch (_) {}
   return 1;
 }
