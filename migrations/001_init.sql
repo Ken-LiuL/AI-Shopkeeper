@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS alerts (
     root_cause TEXT,
     suggestion TEXT,
     status VARCHAR(20) DEFAULT 'pending',
+    notification_status VARCHAR(32) DEFAULT 'not_sent',
+    notification_reason TEXT,
+    notification_updated_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT NOW(),
     resolved_at TIMESTAMP
 );

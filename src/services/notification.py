@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 import httpx
 
@@ -48,17 +49,38 @@ async def send_webhook(payload: dict) -> bool:
         return False
 
 
-async def send_alert(title: str, body: str, severity: str = "medium") -> bool:
+async def send_alert(title: str, body: str, severity: str = "medium") -> dict[str, Any]:
     """发送告警通知（Telegram + Webhook）"""
     emoji = {"critical": "🚨", "high": "⚠️", "medium": "📋", "low": "💡"}.get(severity, "📋")
     text = f"{emoji} <b>{title}</b>\n\n{body}"
 
-    sent = False
-    if TELEGRAM_BOT_TOKEN:
-        sent = await send_telegram(text)
+    configured_channels: list[str] = []
+    sent_channels: list[str] = []
+
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        configured_channels.append("telegram")
+        if await send_telegram(text):
+            sent_channels.append("telegram")
     if WEBHOOK_URL:
-        sent = await send_webhook({"title": title, "body": body, "severity": severity}) or sent
-    return sent
+        configured_channels.append("webhook")
+        if await send_webhook({"title": title, "body": body, "severity": severity}):
+            sent_channels.append("webhook")
+
+    if not configured_channels:
+        return {
+            "sent": False,
+            "reason": "notification_not_configured",
+            "channels_attempted": [],
+            "channels_sent": [],
+        }
+
+    sent = bool(sent_channels)
+    return {
+        "sent": sent,
+        "reason": "sent" if sent else "notification_delivery_failed",
+        "channels_attempted": configured_channels,
+        "channels_sent": sent_channels,
+    }
 
 
 async def check_and_push_alerts(pool) -> dict:
@@ -102,10 +124,47 @@ async def check_and_push_alerts(pool) -> dict:
                 lines.append(f"  • {name} — {r['root_cause']}")
 
         body = "\n".join(lines)
-        sent = await send_alert("店铺告警汇总", body, "critical" if critical else "high")
-        if sent:
+        send_result = await send_alert("店铺告警汇总", body, "critical" if critical else "high")
+        results["notification"] = send_result
+
+        if send_result.get("sent"):
             results["pushed"] = len(rows)
+            await pool.execute(
+                """
+                UPDATE alerts
+                SET notification_status = 'sent',
+                    notification_reason = $1,
+                    notification_updated_at = NOW()
+                WHERE alert_id = ANY($2::text[])
+                """,
+                ",".join(send_result.get("channels_sent", [])) or "sent",
+                [r["alert_id"] for r in rows],
+            )
+        elif send_result.get("reason") == "notification_not_configured":
+            await pool.execute(
+                """
+                UPDATE alerts
+                SET notification_status = 'not_configured',
+                    notification_reason = $1,
+                    notification_updated_at = NOW()
+                WHERE alert_id = ANY($2::text[])
+                """,
+                "notification_not_configured",
+                [r["alert_id"] for r in rows],
+            )
+            results["not_configured"] = len(rows)
         else:
+            await pool.execute(
+                """
+                UPDATE alerts
+                SET notification_status = 'failed',
+                    notification_reason = $1,
+                    notification_updated_at = NOW()
+                WHERE alert_id = ANY($2::text[])
+                """,
+                str(send_result.get("reason", "notification_delivery_failed")),
+                [r["alert_id"] for r in rows],
+            )
             results["errors"] = 1
 
     except Exception as e:

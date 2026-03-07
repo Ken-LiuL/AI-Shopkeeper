@@ -108,6 +108,9 @@ CREATE TABLE alerts (
     recommended_action TEXT,
     status             VARCHAR(20) DEFAULT 'pending'
         CHECK (status IN ('pending', 'acknowledged', 'resolved', 'ignored')),
+    notification_status VARCHAR(32) DEFAULT 'not_sent',
+    notification_reason TEXT,
+    notification_updated_at TIMESTAMPTZ,
     created_at         TIMESTAMPTZ DEFAULT now(),
     resolved_at        TIMESTAMPTZ
 );

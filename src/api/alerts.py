@@ -362,5 +362,5 @@ async def push_alerts() -> APIResponse[dict]:
 async def test_push(message: str = "这是一条测试告警") -> APIResponse[dict]:
     """测试推送通道"""
     from src.services.notification import send_alert
-    sent = await send_alert("测试告警", message, "medium")
-    return APIResponse(data={"sent": sent})
+    result = await send_alert("测试告警", message, "medium")
+    return APIResponse(data=result)
