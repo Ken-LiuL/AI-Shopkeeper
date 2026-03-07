@@ -185,10 +185,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 pool = pg_db.get_pool()
                 count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
                 if count == 0:
-                    logger.info("Empty database detected, launching full sync in background…")
-                    _asyncio.create_task(_initial_full_sync(pool))
+                    logger.info("Empty database — use Chrome extension or POST /api/sync/trigger to sync data")
                 else:
-                    logger.info("Database has %d products, skipping initial full sync", count)
+                    logger.info("Database has %d products", count)
             else:
                 logger.warning("PG not available, skipping initial sync check")
         except Exception:
