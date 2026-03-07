@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
 from typing import Any
@@ -16,6 +17,7 @@ from typing import Any
 import nodriver as uc
 
 logger = logging.getLogger(__name__)
+DEFAULT_STORE_ID = os.environ.get("DEFAULT_STORE_ID", "30850916")
 
 
 @dataclass
@@ -30,7 +32,7 @@ class MeituanOrderSyncer:
     """从美团买药抓取订单历史并写入 PostgreSQL。"""
 
     cookie_path: str = "config/yiyao_cookies.json"
-    wm_poi_id: str = "30850916"
+    wm_poi_id: str = DEFAULT_STORE_ID
     pool: Any = None  # asyncpg pool
 
     async def _load_cookies(self, page: Any) -> None:

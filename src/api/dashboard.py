@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import re
 
 from fastapi import APIRouter
@@ -16,6 +17,7 @@ from .schemas import ActionItem, APIResponse, DashboardOverview, SalesTrendPoint
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 logger = logging.getLogger(__name__)
+DEFAULT_STORE_ID = os.environ.get("DEFAULT_STORE_ID", "30850916")
 
 
 # ── Dataset record helpers ──────────────────────────────────────────
@@ -385,7 +387,8 @@ async def overview() -> APIResponse[DashboardOverview]:
             """SELECT deal_amount, transaction_volume, avg_order_value, total_customers,
                       conversion_rate, exposure_uv
                FROM store_daily_metrics
-               WHERE store_id = '30850916' AND metric_date = CURRENT_DATE"""
+               WHERE store_id = $1 AND metric_date = CURRENT_DATE""",
+            DEFAULT_STORE_ID,
         )
         if dm and dm["transaction_volume"] and dm["transaction_volume"] > 0:
             today_orders = dm["transaction_volume"]
@@ -702,7 +705,8 @@ async def store_kpis() -> APIResponse[dict]:
     with contextlib.suppress(Exception):
         daily_metrics = await pool.fetchrow(
             """SELECT * FROM store_daily_metrics
-               WHERE store_id = '30850916' AND metric_date = CURRENT_DATE"""
+               WHERE store_id = $1 AND metric_date = CURRENT_DATE""",
+            DEFAULT_STORE_ID,
         )
     if daily_metrics and daily_metrics.get("transaction_volume", 0) > 0:
         dm = daily_metrics
