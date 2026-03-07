@@ -1,4 +1,4 @@
-"""数据同步接收 API — 接收本地 daemon 推送的 QNH 数据。
+"""数据同步接收 API — 接收本地 daemon 推送的美团商家后台数据。
 
 架构: 本地 daemon (nodriver) → POST /api/sync/ingest → Render 后端 → DB
 """
@@ -22,19 +22,20 @@ router = APIRouter(prefix="/api/sync", tags=["sync"])
 SYNC_API_KEY = os.environ.get("SYNC_API_KEY", "")
 
 # source → DB 表映射
+# 数据来源：美团商家后台 yiyao.meituan.com
 SOURCE_TABLE_MAP = {
-    "metrics": "qnh_store_metrics",
+    "metrics": "meituan_store_metrics",
     "products": "qnh_products",
-    "orders": "qnh_orders",
-    "inventory": "qnh_inventory",
-    "reviews": "qnh_reviews",
-    "traffic": "qnh_traffic",
-    "promotions": "qnh_promotions",
-    "customers": "qnh_customers",
-    "refunds": "qnh_refunds",
-    "finance": "qnh_settlements",
-    "im_history": "qnh_im_messages",
-    "channels": "qnh_traffic_channels",
+    "orders": "meituan_orders",
+    "inventory": "meituan_inventory",
+    "reviews": "meituan_reviews",
+    "traffic": "meituan_traffic",
+    "promotions": "meituan_promotions",
+    "customers": "meituan_customers",
+    "refunds": "meituan_refunds",
+    "finance": "meituan_settlements",
+    "im_history": "meituan_im_messages",
+    "channels": "meituan_traffic_channels",
 }
 
 
@@ -93,7 +94,7 @@ async def ingest_data(
 ) -> IngestResponse:
     """接收并存储同步数据。
 
-    本地 daemon 抓取 QNH 数据后 POST 到这里，后端直接写入对应 DB 表。
+    本地 daemon 抓取 yiyao.meituan.com 数据后 POST 到这里，后端直接写入对应 DB 表。
     """
     _verify_key(req.api_key, x_sync_key)
 
