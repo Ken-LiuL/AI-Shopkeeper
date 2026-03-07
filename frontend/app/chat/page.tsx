@@ -24,6 +24,14 @@ interface Message {
   needsHuman?: boolean;
 }
 
+interface Session {
+  id: string;
+  title?: string;
+  created_at?: string;
+  updated_at?: string;
+  message_count?: number;
+}
+
 function generateSessionId() {
   return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
 }
@@ -39,7 +47,13 @@ function ChatPage() {
   ]);
   const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [sessionId] = useState(() => generateSessionId());
+  const [currentSessionId, setCurrentSessionId] = useState<string>(() => generateSessionId());
+
+  // Session history state
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [creatingSession, setCreatingSession] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -50,6 +64,95 @@ function ChatPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Load session list on mount
+  useEffect(() => {
+    loadSessions();
+  }, []);
+
+  const loadSessions = async () => {
+    setSessionsLoading(true);
+    try {
+      const res = await fetch('/api/customer-service/sessions');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const list: Session[] = Array.isArray(data) ? data : data.sessions || [];
+      setSessions(list);
+    } catch (err) {
+      console.error('Error loading sessions:', err);
+      // silently fail - session list is non-critical
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  const handleNewSession = async () => {
+    setCreatingSession(true);
+    try {
+      const res = await fetch('/api/customer-service/sessions', { method: 'POST' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const newId = data.id || data.session_id || generateSessionId();
+      setCurrentSessionId(newId);
+      setMessages([{
+        id: 'welcome',
+        role: 'assistant',
+        content: '您好！我是AI店长助手，可以帮助您解答客服问题、分析业务数据、提供经营建议等。请问有什么可以帮助您的吗？',
+        timestamp: new Date(),
+      }]);
+      await loadSessions();
+    } catch (err) {
+      console.error('Error creating session:', err);
+      // Fallback: just create local session
+      const newId = generateSessionId();
+      setCurrentSessionId(newId);
+      setMessages([{
+        id: 'welcome',
+        role: 'assistant',
+        content: '您好！我是AI店长助手，可以帮助您解答客服问题、分析业务数据、提供经营建议等。请问有什么可以帮助您的吗？',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setCreatingSession(false);
+    }
+  };
+
+  const handleSwitchSession = async (sessionId: string) => {
+    if (sessionId === currentSessionId) return;
+    setCurrentSessionId(sessionId);
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/customer-service/sessions/${sessionId}/messages`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const rawMessages = Array.isArray(data) ? data : data.messages || [];
+      const restored: Message[] = rawMessages.map((m: any) => ({
+        id: m.id || String(Date.now() + Math.random()),
+        role: m.role || (m.is_user ? 'user' : 'assistant'),
+        content: m.content || m.message || m.text || '',
+        timestamp: m.created_at ? new Date(m.created_at) : new Date(),
+        sources: m.sources,
+        intent: m.intent,
+        needsHuman: m.needs_human,
+      }));
+      setMessages(restored.length > 0 ? restored : [{
+        id: 'welcome',
+        role: 'assistant',
+        content: '已切换到该会话。',
+        timestamp: new Date(),
+      }]);
+    } catch (err) {
+      console.error('Error loading session messages:', err);
+      setMessages([{
+        id: 'error',
+        role: 'assistant',
+        content: '加载会话历史失败，请稍后重试。',
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -69,7 +172,7 @@ function ChatPage() {
     try {
       const chatData: ChatMessage = {
         message: userMessage.content,
-        session_id: sessionId,
+        session_id: currentSessionId,
       };
 
       const response: ChatResponse = await sendChatMessage(chatData);
@@ -85,6 +188,8 @@ function ChatPage() {
       };
 
       setMessages(prev => [...prev, assistantMessage]);
+      // Refresh session list after new message
+      loadSessions();
     } catch (error) {
       console.error('Error sending message:', error);
       const errorMessage: Message = {
@@ -100,15 +205,6 @@ function ChatPage() {
     }
   };
 
-  const clearChat = () => {
-    setMessages([{
-      id: 'welcome',
-      role: 'assistant',
-      content: '您好！我是AI店长助手，可以帮助您解答客服问题、分析业务数据、提供经营建议等。请问有什么可以帮助您的吗？',
-      timestamp: new Date(),
-    }]);
-  };
-
   const quickQuestions = [
     '今日销售情况如何？',
     '有哪些商品需要补货？',
@@ -117,6 +213,16 @@ function ChatPage() {
     '推荐一些营销策略',
   ];
 
+  const formatSessionTime = (dateStr?: string) => {
+    if (!dateStr) return '';
+    try {
+      const d = new Date(dateStr);
+      return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    } catch {
+      return '';
+    }
+  };
+
   return (
     <div className="h-[calc(100vh-7rem)] flex flex-col space-y-6">
       <div className="flex justify-between items-center">
@@ -124,27 +230,85 @@ function ChatPage() {
           <h1 className="text-3xl font-bold tracking-tight">AI 客服</h1>
           <p className="text-muted-foreground">智能助手帮您解答各种业务问题</p>
         </div>
-        <Button onClick={clearChat} variant="outline">
-          清空对话
-        </Button>
       </div>
 
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0">
-        {/* Quick Actions Sidebar */}
-        <div className="lg:col-span-1">
-          <Card className="h-full">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-lg">
+        {/* Left Sidebar: Sessions + Quick Questions */}
+        <div className="lg:col-span-1 flex flex-col gap-4 min-h-0">
+          {/* Session History */}
+          <Card className="flex flex-col flex-1 min-h-0">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <span>🗂</span>
+                  会话历史
+                </CardTitle>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-xs h-7 px-2"
+                  onClick={handleNewSession}
+                  disabled={creatingSession}
+                >
+                  {creatingSession ? '创建中...' : '+ 新建'}
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="flex-1 overflow-y-auto space-y-1 pb-3">
+              {sessionsLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map(i => (
+                    <div key={i} className="h-12 bg-muted animate-pulse rounded"></div>
+                  ))}
+                </div>
+              ) : sessions.length === 0 ? (
+                <div className="text-xs text-muted-foreground text-center py-4">
+                  暂无历史会话
+                </div>
+              ) : (
+                sessions.map((session) => (
+                  <button
+                    key={session.id}
+                    onClick={() => handleSwitchSession(session.id)}
+                    className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                      session.id === currentSessionId
+                        ? 'bg-blue-50 text-blue-700 border border-blue-200'
+                        : 'text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="font-medium truncate">
+                      {session.title || `会话 ${session.id.slice(-6)}`}
+                    </div>
+                    {(session.updated_at || session.created_at) && (
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {formatSessionTime(session.updated_at || session.created_at)}
+                      </div>
+                    )}
+                    {session.message_count != null && (
+                      <div className="text-xs text-muted-foreground">
+                        {session.message_count} 条消息
+                      </div>
+                    )}
+                  </button>
+                ))
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Quick Actions */}
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
                 <span>⚡</span>
                 快速提问
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3">
+            <CardContent className="space-y-2">
               {quickQuestions.map((question, index) => (
                 <Button
                   key={index}
                   variant="outline"
-                  className="w-full text-left h-auto py-3 px-3 text-sm"
+                  className="w-full text-left h-auto py-2 px-3 text-sm"
                   onClick={() => setInputText(question)}
                   disabled={loading}
                 >
@@ -164,7 +328,7 @@ function ChatPage() {
                   <span>💬</span>
                   AI 对话
                 </CardTitle>
-                <Badge variant="secondary">会话: {sessionId.slice(-8)}</Badge>
+                <Badge variant="secondary">会话: {currentSessionId.slice(-8)}</Badge>
               </div>
             </CardHeader>
 
