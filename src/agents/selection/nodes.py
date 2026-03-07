@@ -279,22 +279,20 @@ async def gap_identification_node(state: SelectionState) -> dict:
 
 
 async def supplier_evaluation_node(state: SelectionState) -> dict:
-    """Supplier Sub-Agent: 双渠道供应链评估（逐个关键词）"""
+    """Supplier Sub-Agent: 双渠道供应链评估（并发执行）"""
+    import asyncio
+
     gap = state.get("gap_opportunities", {})
     opportunities = gap.get("opportunities", [])
-
-    evaluations: list[dict[str, Any]] = []
     errors = list(state.get("errors", []))
 
-    for opp in opportunities:
-        keyword = opp.get("keyword", "")
-        if not keyword:
-            continue
+    valid_opps = [opp for opp in opportunities if opp.get("keyword", "")]
 
+    async def _eval_one(opp: dict) -> dict | Exception:
+        keyword = opp.get("keyword", "")
         try:
             alibaba_data = state.get("raw_alibaba_results", {}).get(keyword, "暂无数据")
             pdd_data = state.get("raw_pdd_results", {}).get(keyword, "暂无数据")
-
             prompt = supplier_evaluation_prompt(
                 keyword=keyword,
                 market_price=opp.get("market_heat_score", 0) * 3,  # 估算
@@ -302,11 +300,15 @@ async def supplier_evaluation_node(state: SelectionState) -> dict:
                 alibaba_results=alibaba_data,
                 pdd_results=pdd_data,
             )
-            result = await call_tool(prompt, SUPPLIER_EVALUATION_TOOL, model=MODEL_PRO)
-            evaluations.append(result)
+            return await call_tool(prompt, SUPPLIER_EVALUATION_TOOL, model=MODEL_PRO)
         except Exception as e:
             logger.error(f"Supplier eval failed for {keyword}: {e}")
             errors.append(f"supplier_{keyword}: {e}")
+            return e
+
+    tasks = [_eval_one(opp) for opp in valid_opps]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    evaluations = [r for r in results if not isinstance(r, Exception)]
 
     return {"supplier_evaluations": evaluations, "errors": errors}
 

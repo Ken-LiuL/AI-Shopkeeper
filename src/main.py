@@ -625,9 +625,20 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+ALLOWED_ORIGINS = [
+    "https://ai-shopkeeper.vercel.app",
+    "https://ai-shopkeeper-kk.fly.dev",
+    "http://localhost:3000",
+    "http://localhost:3001",
+]
+# 支持环境变量动态追加
+_extra_origins = os.environ.get("ALLOWED_ORIGINS", "")
+if _extra_origins:
+    ALLOWED_ORIGINS.extend(_extra_origins.split(","))
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -653,37 +664,6 @@ async def health_check():
     from src.api.schemas import APIResponse
 
     return APIResponse(success=True, data={"status": "ok"}, message="System is healthy")
-
-
-@app.get("/debug/migrations", tags=["system"])
-async def debug_migrations():
-    """Check migration status and existing tables."""
-    pool = pg_db.get_pool()
-    async with pool.acquire() as conn:
-        # Check applied migrations
-        try:
-            rows = await conn.fetch(
-                "SELECT filename, applied_at FROM _migrations ORDER BY filename"
-            )
-            migrations = [{"file": r["filename"], "at": str(r["applied_at"])} for r in rows]
-        except Exception as e:
-            migrations = {"error": str(e)}
-        # Check existing tables
-        tables = await conn.fetch(
-            "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
-        )
-        return {
-            "migrations": migrations,
-            "tables": [t["tablename"] for t in tables],
-        }
-
-
-@app.post("/debug/run-migrations", tags=["system"])
-async def run_migrations_endpoint():
-    """Manually trigger migrations."""
-    pool = pg_db.get_pool()
-    await _run_migrations(pool)
-    return {"status": "done"}
 
 
 @app.get("/ready", tags=["system"])

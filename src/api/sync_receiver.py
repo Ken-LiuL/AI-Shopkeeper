@@ -161,111 +161,117 @@ async def _insert_records(
 
 
 async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:
-    """结构化 upsert 商品数据到 qnh_products。"""
+    """结构化 upsert 商品数据到 qnh_products（批量 executemany）。"""
     import json
 
-    count = 0
+    rows: list[tuple] = []
+    for p in data:
+        spu_id = str(p.get("spuId", p.get("spu_id", "")))
+        if not spu_id:
+            continue
+
+        name = p.get("spuName") or p.get("name") or ""
+        brand = ""
+        if isinstance(p.get("brand"), dict):
+            brand = p["brand"].get("brandName", "")
+        elif isinstance(p.get("brand"), str):
+            brand = p["brand"]
+
+        pic_urls = p.get("picUrlList", p.get("pic_urls", []))
+        if isinstance(pic_urls, str):
+            try:
+                pic_urls = json.loads(pic_urls)
+            except Exception:
+                pic_urls = []
+        image_url = pic_urls[0] if pic_urls else p.get("image_url", "")
+
+        skus = p.get("skus", [])
+        if isinstance(skus, str):
+            try:
+                skus = json.loads(skus)
+            except Exception:
+                skus = []
+
+        weight_type = p.get("weightTypeDesc", p.get("weight_type", ""))
+
+        # --- 从 SKU 数据和 SPU 数据中提取更多字段 ---
+        first_sku = skus[0] if skus and isinstance(skus, list) else {}
+
+        # category: backendCategory (SPU level or first SKU)
+        category = p.get("category", "")
+        if not category:
+            bc = p.get("backendCategory") or first_sku.get("backendCategory")
+            if isinstance(bc, dict):
+                category = bc.get("categoryNamePath", "") or bc.get("categoryName", "")
+
+        # barcode: upcList from first SKU
+        barcode = p.get("barcode", "")
+        if not barcode and first_sku:
+            upc_list = first_sku.get("upcList", [])
+            if upc_list and isinstance(upc_list, list):
+                barcode = str(upc_list[0])
+
+        # unit: saleUnit from first SKU
+        unit = p.get("unit", "")
+        if not unit and first_sku:
+            unit = first_sku.get("saleUnit", "") or ""
+
+        retail_price = p.get("retail_price")
+        spec = p.get("spec", "")
+        if not retail_price and first_sku:
+            spec = spec or first_sku.get("specName", "")
+            suggest = first_sku.get("suggestPrice", {})
+            if isinstance(suggest, dict):
+                tp = suggest.get("tenantSuggestPrice", {})
+                if isinstance(tp, dict) and tp.get("unifiedSuggestPrice"):
+                    with contextlib.suppress(ValueError, TypeError):
+                        retail_price = float(tp["unifiedSuggestPrice"])
+
+        status = p.get("status", "")
+        if not status:
+            status = "在售" if p.get("onlineStatus") == 1 else "停售"
+
+        raw_sku = p.get("skuId") or p.get("sku_id") or ""
+        sku_id = str(raw_sku) if raw_sku else ""
+
+        rows.append((
+            spu_id,
+            sku_id,
+            name,
+            brand,
+            spec,
+            retail_price,
+            image_url,
+            status,
+            json.dumps(pic_urls, ensure_ascii=False),
+            json.dumps(skus, ensure_ascii=False),
+            weight_type,
+            category,
+            barcode,
+            unit,
+        ))
+
+    if not rows:
+        return 0
+
     async with pool.acquire() as conn:
-        for p in data:
-            spu_id = str(p.get("spuId", p.get("spu_id", "")))
-            if not spu_id:
-                continue
+        await conn.executemany(
+            """
+            INSERT INTO qnh_products (spu_id, sku_id, name, brand, spec, retail_price,
+                image_url, status, pic_urls, skus, weight_type, category, barcode, unit, synced_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, NOW())
+            ON CONFLICT (spu_id, sku_id) DO UPDATE SET
+                name = EXCLUDED.name, brand = EXCLUDED.brand, spec = EXCLUDED.spec,
+                retail_price = EXCLUDED.retail_price, image_url = EXCLUDED.image_url,
+                status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
+                skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type,
+                category = EXCLUDED.category, barcode = EXCLUDED.barcode,
+                unit = EXCLUDED.unit, synced_at = NOW()
+            """,
+            rows,
+        )
 
-            name = p.get("spuName") or p.get("name") or ""
-            brand = ""
-            if isinstance(p.get("brand"), dict):
-                brand = p["brand"].get("brandName", "")
-            elif isinstance(p.get("brand"), str):
-                brand = p["brand"]
-
-            pic_urls = p.get("picUrlList", p.get("pic_urls", []))
-            if isinstance(pic_urls, str):
-                try:
-                    pic_urls = json.loads(pic_urls)
-                except Exception:
-                    pic_urls = []
-            image_url = pic_urls[0] if pic_urls else p.get("image_url", "")
-
-            skus = p.get("skus", [])
-            if isinstance(skus, str):
-                try:
-                    skus = json.loads(skus)
-                except Exception:
-                    skus = []
-
-            weight_type = p.get("weightTypeDesc", p.get("weight_type", ""))
-
-            # --- 从 SKU 数据和 SPU 数据中提取更多字段 ---
-            first_sku = skus[0] if skus and isinstance(skus, list) else {}
-
-            # category: backendCategory (SPU level or first SKU)
-            category = p.get("category", "")
-            if not category:
-                bc = p.get("backendCategory") or first_sku.get("backendCategory")
-                if isinstance(bc, dict):
-                    category = bc.get("categoryNamePath", "") or bc.get("categoryName", "")
-
-            # barcode: upcList from first SKU
-            barcode = p.get("barcode", "")
-            if not barcode and first_sku:
-                upc_list = first_sku.get("upcList", [])
-                if upc_list and isinstance(upc_list, list):
-                    barcode = str(upc_list[0])
-
-            # unit: saleUnit from first SKU
-            unit = p.get("unit", "")
-            if not unit and first_sku:
-                unit = first_sku.get("saleUnit", "") or ""
-
-            retail_price = p.get("retail_price")
-            spec = p.get("spec", "")
-            if not retail_price and first_sku:
-                spec = spec or first_sku.get("specName", "")
-                suggest = first_sku.get("suggestPrice", {})
-                if isinstance(suggest, dict):
-                    tp = suggest.get("tenantSuggestPrice", {})
-                    if isinstance(tp, dict) and tp.get("unifiedSuggestPrice"):
-                        with contextlib.suppress(ValueError, TypeError):
-                            retail_price = float(tp["unifiedSuggestPrice"])
-
-            status = p.get("status", "")
-            if not status:
-                status = "在售" if p.get("onlineStatus") == 1 else "停售"
-
-            raw_sku = p.get("skuId") or p.get("sku_id") or ""
-            sku_id = str(raw_sku) if raw_sku else ""
-
-            await conn.execute(
-                """
-                INSERT INTO qnh_products (spu_id, sku_id, name, brand, spec, retail_price,
-                    image_url, status, pic_urls, skus, weight_type, category, barcode, unit, synced_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11, $12, $13, $14, NOW())
-                ON CONFLICT (spu_id, sku_id) DO UPDATE SET
-                    name = EXCLUDED.name, brand = EXCLUDED.brand, spec = EXCLUDED.spec,
-                    retail_price = EXCLUDED.retail_price, image_url = EXCLUDED.image_url,
-                    status = EXCLUDED.status, pic_urls = EXCLUDED.pic_urls,
-                    skus = EXCLUDED.skus, weight_type = EXCLUDED.weight_type,
-                    category = EXCLUDED.category, barcode = EXCLUDED.barcode,
-                    unit = EXCLUDED.unit, synced_at = NOW()
-                """,
-                spu_id,
-                sku_id,
-                name,
-                brand,
-                spec,
-                retail_price,
-                image_url,
-                status,
-                json.dumps(pic_urls, ensure_ascii=False),
-                json.dumps(skus, ensure_ascii=False),
-                weight_type,
-                category,
-                barcode,
-                unit,
-            )
-            count += 1
-
-    return count
+    return len(rows)
 
 
 @router.post("/push", response_model=SyncPushResponse)

@@ -4,6 +4,7 @@
 集成 Langfuse 追踪 + Prometheus 指标
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -135,13 +136,19 @@ async def _call_openrouter(
 
     max_retries = 2
     for attempt in range(1, max_retries + 1):
-        response = await client.chat.completions.create(
-            model=model,
-            max_tokens=max_tokens,
-            messages=messages,
-            tools=[openai_tool],
-            tool_choice={"type": "function", "function": {"name": tool["name"]}},
-        )
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    tools=[openai_tool],
+                    tool_choice={"type": "function", "function": {"name": tool["name"]}},
+                ),
+                timeout=120.0,
+            )
+        except asyncio.TimeoutError:
+            raise ValueError(f"LLM call timeout after 120s (model={model})")
 
         choice = response.choices[0]
         if choice.message.tool_calls:
@@ -157,8 +164,6 @@ async def _call_openrouter(
                 f"OpenRouter empty tool_call (attempt {attempt}/{max_retries}), "
                 f"model={model}, retrying in 1s..."
             )
-            import asyncio
-
             await asyncio.sleep(1)
 
     raise ValueError(f"No tool call in response after {max_retries} attempts: {choice.message}")
@@ -184,7 +189,13 @@ async def _call_anthropic(
     if system:
         kwargs["system"] = system
 
-    response = await client.messages.create(**kwargs)
+    try:
+        response = await asyncio.wait_for(
+            client.messages.create(**kwargs),
+            timeout=120.0,
+        )
+    except asyncio.TimeoutError:
+        raise ValueError(f"LLM call timeout after 120s (model={model})")
 
     result = None
     for block in response.content:
