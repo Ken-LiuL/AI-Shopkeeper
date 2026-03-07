@@ -4,8 +4,8 @@
  * 2. 接收业务数据并同步到后端（节流 30 秒/类型）
  */
 
-const DEFAULT_CHAT_API = 'https://ai-shopkeeper-1dl4.onrender.com/api/v1/customer-service/chat';
-const DEFAULT_SYNC_API = 'https://ai-shopkeeper-kk.fly.dev';
+const DEFAULT_CHAT_API = 'http://192.144.227.205:8000/api/v1/customer-service/chat';
+const DEFAULT_SYNC_API = 'http://192.144.227.205:8000';
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const THROTTLE_MS = 30_000; // 同类型数据 30 秒内只发一次
