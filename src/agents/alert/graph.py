@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from langgraph.graph import END, StateGraph
 
-from .nodes import action_node, anomaly_detection_node, root_cause_node
+from .nodes import action_node, anomaly_detection_node, prophet_detection_node, root_cause_node
 from .state import AlertState
 
 
@@ -12,17 +12,19 @@ def build_alert_graph() -> StateGraph:
     """
     构建 Alert Agent 的 LangGraph 状态机。
 
-    Anomaly Detection → RootCause → Action
+    ProphetDetection → Anomaly Detection → RootCause → Action
     """
     graph = StateGraph(AlertState)
 
     # --- 注册节点 ---
+    graph.add_node("prophet_detection", prophet_detection_node)
     graph.add_node("anomaly_detection", anomaly_detection_node)
     graph.add_node("root_cause", root_cause_node)
     graph.add_node("action", action_node)
 
     # --- 定义边 ---
-    graph.set_entry_point("anomaly_detection")
+    graph.set_entry_point("prophet_detection")
+    graph.add_edge("prophet_detection", "anomaly_detection")
 
     def should_analyze(state: AlertState) -> str:
         """如果没有异常，跳过后续分析"""

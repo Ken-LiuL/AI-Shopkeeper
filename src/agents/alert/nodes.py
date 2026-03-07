@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import date
 
 from src.services.raw_data import fetch_latest_raw
 
@@ -196,6 +197,102 @@ async def _check_inventory_anomaly(pool, stockout_threshold: float = 0.10) -> li
     return alerts
 
 
+async def _get_active_products(pool) -> list[dict]:
+    """获取近30天有销售记录的商品（含今日实际销量）。"""
+    if not pool:
+        return []
+    try:
+        today = date.today().isoformat()
+        rows = await pool.fetch(
+            """
+            SELECT p.product_id, p.name,
+                   COALESCE(sh.quantity, 0) AS today_sales
+            FROM products p
+            LEFT JOIN sales_history sh
+                ON sh.product_id = p.product_id AND sh.sale_date = $1
+            WHERE p.status = 'active'
+              AND p.product_id IN (
+                  SELECT DISTINCT product_id FROM sales_history
+                  WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
+              )
+            ORDER BY COALESCE(sh.quantity, 0) DESC
+            LIMIT 50
+            """,
+            today,
+        )
+        return [dict(r) for r in rows]
+    except Exception as e:
+        logger.warning(f"Failed to fetch active products: {e}")
+        return []
+
+
+async def prophet_detection_node(state: AlertState) -> dict:
+    """运行 ProphetSkill 对近期活跃商品进行异常检测，将结果注入 state。
+
+    依赖 state['db_pool'] 访问数据库和加载 Prophet 模型。
+    任何异常都不会导致整个 Alert Agent 崩溃——失败时返回空列表。
+    """
+    try:
+        from src.skills.prophet_skill import ProphetSkill
+
+        pool = state.get("db_pool")
+        prophet = ProphetSkill(pool=pool)
+
+        # 检查是否有已训练的模型，没有则跳过
+        if pool:
+            try:
+                model_count = await pool.fetchval("SELECT COUNT(*) FROM prophet_models")
+                if not model_count:
+                    logger.info("No trained Prophet models found, skipping ProphetSkill detection")
+                    return {"prophet_results": "[]"}
+            except Exception as e:
+                logger.warning(f"Failed to check prophet_models table: {e}")
+                return {"prophet_results": "[]"}
+
+        active_products = await _get_active_products(pool)
+        today = date.today().isoformat()
+
+        prophet_results = []
+        for product in active_products[:20]:  # 限制前20个，避免超时
+            product_id = product["product_id"]
+            today_sales = int(product.get("today_sales") or 0)
+            try:
+                result = await prophet.detect_anomaly(
+                    product_id=product_id,
+                    date=today,
+                    actual_sales=today_sales,
+                )
+                if result and result.is_anomaly:
+                    prophet_results.append(
+                        {
+                            "product_id": product_id,
+                            "product_name": product.get("name", ""),
+                            "is_anomaly": result.is_anomaly,
+                            "type": result.type,
+                            "expected": result.expected,
+                            "actual": result.actual,
+                            "bounds": result.bounds,
+                            "deviation_pct": result.deviation_pct,
+                            "severity": result.severity,
+                            "reason": result.reason,
+                            "date": today,
+                        }
+                    )
+            except Exception as e:
+                logger.debug(f"Prophet detection skipped for {product_id}: {e}")
+                continue
+
+        logger.info(
+            f"ProphetSkill detection: {len(prophet_results)} anomalies out of "
+            f"{len(active_products[:20])} products checked"
+        )
+        return {"prophet_results": json.dumps(prophet_results, ensure_ascii=False)}
+
+    except Exception as e:
+        logger.warning(f"ProphetSkill detection failed: {e}")
+        return {"prophet_results": "[]"}
+
+
 async def anomaly_detection_node(state: AlertState) -> dict:
     """
     Anomaly Sub-Agent: 综合 Prophet + 规则检测结果。
@@ -274,6 +371,72 @@ async def anomaly_detection_node(state: AlertState) -> dict:
         return {"errors": state.get("errors", []) + [f"anomaly_detection: {e}"]}
 
 
+async def _fetch_competitor_data(pool, product_id: str) -> str:
+    """查询竞品价格数据（通过 barcode 匹配）。"""
+    if not pool or not product_id:
+        return "暂无竞品数据"
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT cp.product_name, cp.price, cs.name AS competitor_name, cp.crawled_at
+            FROM competitor_products cp
+            JOIN competitor_stores cs ON cs.competitor_id = cp.competitor_id
+            WHERE cp.barcode IN (
+                SELECT barcode FROM products WHERE product_id = $1 AND barcode IS NOT NULL
+            )
+            ORDER BY cp.crawled_at DESC
+            LIMIT 10
+            """,
+            product_id,
+        )
+        if not rows:
+            return "暂无竞品数据"
+        return json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.debug(f"Failed to fetch competitor data for {product_id}: {e}")
+        return "暂无竞品数据"
+
+
+async def _fetch_inventory_status(pool, product_id: str) -> str:
+    """查询商品当前库存状态。"""
+    if not pool or not product_id:
+        return "暂无库存数据"
+    try:
+        row = await pool.fetchrow(
+            "SELECT name, stock, monthly_sales, status FROM products WHERE product_id = $1",
+            product_id,
+        )
+        if not row:
+            return "暂无库存数据"
+        return json.dumps(dict(row), ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.debug(f"Failed to fetch inventory for {product_id}: {e}")
+        return "暂无库存数据"
+
+
+async def _fetch_pricing_history(pool, product_id: str) -> str:
+    """查询商品近30天销售趋势（作为价格/销量历史参考）。"""
+    if not pool or not product_id:
+        return "暂无价格历史"
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT sale_date, quantity, revenue
+            FROM sales_history
+            WHERE product_id = $1 AND sale_date >= CURRENT_DATE - INTERVAL '30 days'
+            ORDER BY sale_date DESC
+            LIMIT 30
+            """,
+            product_id,
+        )
+        if not rows:
+            return "暂无价格历史"
+        return json.dumps([dict(r) for r in rows], ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.debug(f"Failed to fetch pricing history for {product_id}: {e}")
+        return "暂无价格历史"
+
+
 async def root_cause_node(state: AlertState) -> dict:
     """
     RootCause Sub-Agent: 逐个异常进行归因分析。
@@ -283,26 +446,33 @@ async def root_cause_node(state: AlertState) -> dict:
     anomaly_list = anomalies_data.get("anomalies", [])
     existing_causes = list(state.get("root_causes", []))
     errors = list(state.get("errors", []))
+    pool = state.get("db_pool")
 
     # 只处理 critical 和 warning 级别
     for anomaly in anomaly_list:
         if anomaly.get("severity") == "info":
             continue
 
+        product_id = anomaly.get("product_id", "")
+
+        # 从数据库查询真实业务数据
+        competitor_data = await _fetch_competitor_data(pool, product_id)
+        inventory_status = await _fetch_inventory_status(pool, product_id)
+        pricing_history = await _fetch_pricing_history(pool, product_id)
+
         try:
             prompt = root_cause_prompt(
-                product_id=anomaly.get("product_id", ""),
+                product_id=product_id,
                 product_name=anomaly.get("product_name", ""),
                 anomaly_type=anomaly.get("anomaly_type", ""),
                 anomaly_description=anomaly.get("description", ""),
                 metrics=json.dumps(anomaly.get("metrics", {}), ensure_ascii=False),
-                # NOTE: 实际实现中这些数据由 Skills 层提供
-                competitor_data="需要从Skills层获取",
-                our_data_changes="需要从Skills层获取",
-                inventory_status="需要从Skills层获取",
-                pricing_history="需要从Skills层获取",
-                external_factors="需要从Skills层获取",
-                operation_metrics="需要从Skills层获取",
+                competitor_data=competitor_data,
+                our_data_changes=pricing_history,
+                inventory_status=inventory_status,
+                pricing_history=pricing_history,
+                external_factors="暂无外部因素数据",
+                operation_metrics="暂无运营指标数据",
             )
             result = await call_tool(prompt, ROOT_CAUSES_TOOL, model=MODEL_PRO)
             existing_causes.append(result)
@@ -313,6 +483,56 @@ async def root_cause_node(state: AlertState) -> dict:
     return {"root_causes": existing_causes, "errors": errors}
 
 
+async def _fetch_product_details(pool, product_id: str) -> dict:
+    """查询商品详情（名称、价格、成本、库存、日均销量）。"""
+    defaults = {
+        "name": product_id,
+        "retail_price": 0.0,
+        "cost_price": 0.0,
+        "stock": 0,
+        "avg_daily_sales": 0.0,
+    }
+    if not pool or not product_id:
+        return defaults
+    try:
+        row = await pool.fetchrow(
+            """
+            SELECT name, retail_price, cost_price, stock,
+                   ROUND(COALESCE(monthly_sales, 0) / 30.0, 2) AS avg_daily_sales
+            FROM products
+            WHERE product_id = $1
+            """,
+            product_id,
+        )
+        if row:
+            return dict(row)
+    except Exception as e:
+        logger.debug(f"Failed to fetch product details for {product_id}: {e}")
+    return defaults
+
+
+async def _fetch_competitor_avg_price(pool, product_id: str) -> float:
+    """查询竞品均价。"""
+    if not pool or not product_id:
+        return 0.0
+    try:
+        avg_price = await pool.fetchval(
+            """
+            SELECT AVG(cp.price)
+            FROM competitor_products cp
+            WHERE cp.barcode IN (
+                SELECT barcode FROM products WHERE product_id = $1 AND barcode IS NOT NULL
+            )
+            AND cp.crawled_at >= NOW() - INTERVAL '7 days'
+            """,
+            product_id,
+        )
+        return float(avg_price or 0)
+    except Exception as e:
+        logger.debug(f"Failed to fetch competitor avg price for {product_id}: {e}")
+        return 0.0
+
+
 async def action_node(state: AlertState) -> dict:
     """
     Action Sub-Agent: 基于归因生成行动建议。
@@ -320,23 +540,27 @@ async def action_node(state: AlertState) -> dict:
     root_causes_list = state.get("root_causes", [])
     existing_actions = list(state.get("actions", []))
     errors = list(state.get("errors", []))
+    pool = state.get("db_pool")
 
     for cause_result in root_causes_list:
         product_id = cause_result.get("product_id", "")
         primary_cause = cause_result.get("primary_cause", "未知")
 
+        # 从数据库查询真实商品数据
+        product_details = await _fetch_product_details(pool, product_id)
+        competitor_avg_price = await _fetch_competitor_avg_price(pool, product_id)
+
         try:
             prompt = action_prompt(
-                product_name=product_id,  # 实际应查商品名
+                product_name=product_details.get("name", product_id),
                 anomaly_type=cause_result.get("anomaly_type", ""),
-                severity="warning",
+                severity=cause_result.get("severity", "warning"),
                 primary_cause=primary_cause,
-                # NOTE: 实际数据由 Skills 层提供
-                current_price=0,
-                cost_price=0,
-                stock=0,
-                avg_daily_sales=0,
-                competitor_avg_price=0,
+                current_price=float(product_details.get("retail_price") or 0),
+                cost_price=float(product_details.get("cost_price") or 0),
+                stock=int(product_details.get("stock") or 0),
+                avg_daily_sales=float(product_details.get("avg_daily_sales") or 0),
+                competitor_avg_price=competitor_avg_price,
             )
             result = await call_tool(prompt, ACTIONS_TOOL, model=MODEL_SONNET)
             existing_actions.append(result)

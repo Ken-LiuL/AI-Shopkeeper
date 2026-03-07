@@ -12,6 +12,9 @@ class AlertState(TypedDict, total=False):
     products_data: str
     current_time: str
 
+    # 数据库连接池（由 API 层注入）
+    db_pool: Any
+
     # Prophet 检测原始结果
     prophet_results: str
 

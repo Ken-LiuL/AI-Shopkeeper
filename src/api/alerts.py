@@ -327,8 +327,8 @@ async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:
 
     logger = logging.getLogger(__name__)
     try:
-        result = await orch.run_alert()
         pool = pg.get_pool()
+        result = await orch.run_alert(db_pool=pool)
         # Store scan result
         await pool.execute(
             "INSERT INTO alert_scans (scan_id, status, result, created_at) VALUES ($1, 'completed', $2::jsonb, NOW())",
