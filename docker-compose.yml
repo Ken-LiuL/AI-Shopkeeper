@@ -67,7 +67,6 @@ services:
       CHROME_EXECUTABLE_PATH: /usr/bin/chromium
       DISPLAY: ":99"
     volumes:
-      - ./config:/app/config
       - cookie_data:/app/data/cookies
     depends_on:
       postgres:
