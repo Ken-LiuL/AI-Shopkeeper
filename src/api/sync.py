@@ -236,9 +236,21 @@ WM_POI_ID = os.environ.get("WM_POI_ID", "30850916")
 
 
 async def _trigger_sync_all() -> None:
-    """Run full sync via Xvfb + nodriver (yiyao.meituan.com)."""
+    """Run full sync for Meituan + QNH."""
     try:
+        import time
+
+        from src.sync.channels import ChannelSyncer
+        from src.sync.competitors import CompetitorSyncer
+        from src.sync.customers import CustomerSyncer
+        from src.sync.finance import FinanceSyncer
+        from src.sync.im_history import IMHistorySyncer
+        from src.sync.inventory import InventorySyncer
         from src.sync.meituan_client import MeituanBrowserClient
+        from src.sync.promotions import PromotionSyncer
+        from src.sync.qnh_auth import QNHAuth
+        from src.sync.qnh_client import QNHClient
+        from src.sync.traffic import TrafficSyncer
         from src.sync.yiyao_syncer import YiyaoFullSyncer
 
         pool = await pg.get_pool()
@@ -269,6 +281,45 @@ async def _trigger_sync_all() -> None:
                     logger.error("❌ %s: %s", r.syncer, r.error)
         finally:
             await client.close()
+
+        # QNH 全量同步（可选手动触发）
+        qnh_auth = QNHAuth()
+        if cookie_json:
+            qnh_auth._cookies = {str(k): str(v) for k, v in cookie_json.items()}
+            qnh_auth._session_expires = time.time() + 7200
+
+        qnh_client = QNHClient(auth=qnh_auth)
+        try:
+            qnh_syncers = [
+                PromotionSyncer(qnh_client, pool),
+                TrafficSyncer(qnh_client, pool),
+                InventorySyncer(qnh_client, pool),
+                CustomerSyncer(qnh_client, pool),
+                ChannelSyncer(qnh_client, pool),
+                CompetitorSyncer(pool),
+                FinanceSyncer(qnh_client, pool),
+                IMHistorySyncer(qnh_client, pool),
+            ]
+            qnh_results = []
+            for syncer in qnh_syncers:
+                result = await syncer.sync()
+                qnh_results.append(result)
+                if result.success:
+                    logger.info("✅ QNH %s: %d records", result.syncer_name, result.records_synced)
+                else:
+                    logger.error("❌ QNH %s: %s", result.syncer_name, result.error)
+
+            qnh_ok = sum(1 for item in qnh_results if item.success)
+            qnh_failed = len(qnh_results) - qnh_ok
+            qnh_total = sum(item.records_synced for item in qnh_results)
+            logger.info(
+                "QNH manual full sync finished: success=%d failed=%d total_records=%d",
+                qnh_ok,
+                qnh_failed,
+                qnh_total,
+            )
+        finally:
+            await qnh_client.close()
     except Exception:
         logger.exception("Failed to trigger sync")
 

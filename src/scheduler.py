@@ -571,6 +571,12 @@ async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) 
                 results = [await syncer.sync_reviews()]
             elif target == "metrics":
                 results = [await syncer.sync_stats()]
+            elif target == "refunds":
+                results = [await syncer.sync_refunds()]
+            elif target == "promotions":
+                results = [await syncer.sync_promotions()]
+            elif target == "review_analysis":
+                results = [await syncer.sync_review_analysis()]
             else:
                 results = await syncer.sync_all()
 
@@ -584,6 +590,93 @@ async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) 
             await pool.close()
     except Exception:
         logger.exception("Meituan full sync failed")
+
+
+async def qnh_full_sync_task() -> None:
+    """牵牛花全量同步任务（QNH goldengateway + IM）。"""
+    logger.info("Starting QNH full sync")
+    try:
+        import asyncpg
+        import time
+
+        from src.sync.channels import ChannelSyncer
+        from src.sync.competitors import CompetitorSyncer
+        from src.sync.customers import CustomerSyncer
+        from src.sync.finance import FinanceSyncer
+        from src.sync.im_history import IMHistorySyncer
+        from src.sync.inventory import InventorySyncer
+        from src.sync.promotions import PromotionSyncer
+        from src.sync.qnh_auth import QNHAuth
+        from src.sync.qnh_client import QNHClient
+        from src.sync.traffic import TrafficSyncer
+
+        dsn = _resolve_database_url()
+        if not dsn:
+            logger.warning("DATABASE_URL unavailable — skip QNH sync")
+            return
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            cookie_json = None
+            try:
+                row = await pool.fetchrow(
+                    "SELECT cookie_json FROM merchant_sync_cookies "
+                    "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
+                )
+                if row and row["cookie_json"]:
+                    raw_cookie = row["cookie_json"]
+                    cookie_json = (
+                        json.loads(raw_cookie) if isinstance(raw_cookie, str) else raw_cookie
+                    )
+                    logger.info("QNH 从 DB 加载 Cookie（%d 个键）", len(cookie_json))
+            except Exception:
+                logger.debug("QNH Cookie 查询失败，将使用文件/环境变量")
+
+            auth = QNHAuth()
+            if cookie_json:
+                auth._cookies = {str(k): str(v) for k, v in cookie_json.items()}
+                auth._session_expires = time.time() + 7200
+
+            client = QNHClient(auth=auth)
+            try:
+                syncers = [
+                    PromotionSyncer(client, pool),
+                    TrafficSyncer(client, pool),
+                    InventorySyncer(client, pool),
+                    CustomerSyncer(client, pool),
+                    ChannelSyncer(client, pool),
+                    CompetitorSyncer(pool),
+                    FinanceSyncer(client, pool),
+                    IMHistorySyncer(client, pool),
+                ]
+                results = []
+                for syncer in syncers:
+                    result = await syncer.sync()
+                    results.append(result)
+                    if result.success:
+                        logger.info(
+                            "✅ QNH %s: %d records",
+                            result.syncer_name,
+                            result.records_synced,
+                        )
+                    else:
+                        logger.error("❌ QNH %s: %s", result.syncer_name, result.error)
+
+                ok = sum(1 for item in results if item.success)
+                failed = len(results) - ok
+                total_records = sum(item.records_synced for item in results)
+                logger.info(
+                    "QNH full sync finished: success=%d failed=%d total_records=%d",
+                    ok,
+                    failed,
+                    total_records,
+                )
+            finally:
+                await client.close()
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("QNH full sync failed")
 
 
 async def meituan_products_full_sync_task() -> None:
@@ -600,6 +693,64 @@ async def meituan_reviews_sync_task() -> None:
 
 async def meituan_metrics_sync_task() -> None:
     await meituan_full_sync_task(target="metrics", days_back=7)
+
+
+async def meituan_refunds_sync_task() -> None:
+    await meituan_full_sync_task(target="refunds", days_back=30)
+
+
+async def _run_meituan_db_only_etl(target: str) -> None:
+    logger.info("Starting Meituan DB-only ETL (target=%s)", target)
+    try:
+        import asyncpg
+        from src.sync.yiyao_syncer import YiyaoFullSyncer
+
+        dsn = _resolve_database_url()
+        if not dsn:
+            logger.warning("DATABASE_URL unavailable — skip DB-only ETL")
+            return
+
+        wm_poi_id = os.environ.get("WM_POI_ID", "")
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            syncer = YiyaoFullSyncer(client=None, pool=pool, wm_poi_id=wm_poi_id or "db_etl", days_back=7)
+            if target == "daily_metrics":
+                result = await syncer.sync_daily_metrics()
+            elif target == "sales_history":
+                result = await syncer.sync_sales_history()
+            elif target == "review_analysis":
+                result = await syncer.sync_review_analysis()
+            elif target == "promotions":
+                result = await syncer.sync_promotions()
+            else:
+                raise ValueError(f"Unsupported Meituan DB-only ETL target: {target}")
+            logger.info(
+                "Meituan DB-only ETL done: target=%s success=%s records=%d pages=%d",
+                target,
+                result.success,
+                result.records,
+                result.pages,
+            )
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Meituan DB-only ETL failed (target=%s)", target)
+
+
+async def meituan_daily_metrics_etl_task() -> None:
+    await _run_meituan_db_only_etl("daily_metrics")
+
+
+async def meituan_sales_history_etl_task() -> None:
+    await _run_meituan_db_only_etl("sales_history")
+
+
+async def meituan_review_analysis_etl_task() -> None:
+    await _run_meituan_db_only_etl("review_analysis")
+
+
+async def meituan_promotions_stub_sync_task() -> None:
+    await _run_meituan_db_only_etl("promotions")
 
 
 async def qnh_data_sync_task() -> None:
@@ -902,6 +1053,15 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         replace_existing=True,
     )
     scheduler.add_job(
+        _make_heartbeat_task("qnh_full_sync", qnh_full_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("qnh_full_sync", "0 3 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="qnh_full_sync",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         _make_heartbeat_task("meituan_sync_orders_hourly", meituan_orders_incremental_sync_task),
         CronTrigger.from_crontab(
             tasks.get("meituan_sync_orders_hourly", "0 * * * *"),
@@ -926,6 +1086,61 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="meituan_sync_metrics_daily",
+        replace_existing=True,
+    )
+
+    # 退款同步：每 6 小时
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_sync_refunds", meituan_refunds_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_sync_refunds", "0 */6 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_sync_refunds",
+        replace_existing=True,
+    )
+
+    # 日报指标 ETL：每天 7:00（在统计数据同步后）
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_daily_metrics_etl", meituan_daily_metrics_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_daily_metrics_etl", "0 7 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_daily_metrics_etl",
+        replace_existing=True,
+    )
+
+    # 销售历史聚合：每天 8:00
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_sales_history_etl", meituan_sales_history_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_sales_history_etl", "0 8 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_sales_history_etl",
+        replace_existing=True,
+    )
+
+    # 评价分析 ETL：每天 8:30
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_review_analysis_etl", meituan_review_analysis_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_review_analysis_etl", "30 8 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_review_analysis_etl",
+        replace_existing=True,
+    )
+
+    # 促销表 stub 保活：每天 9:00
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_promotions_stub_sync", meituan_promotions_stub_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_promotions_stub_sync", "0 9 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_promotions_stub_sync",
         replace_existing=True,
     )
 
