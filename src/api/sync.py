@@ -236,42 +236,24 @@ WM_POI_ID = os.environ.get("WM_POI_ID", "30850916")
 
 
 async def _trigger_sync_all() -> None:
-    """Run all syncers once in background (yiyao.meituan.com)."""
+    """Run full sync via Xvfb + nodriver (yiyao.meituan.com)."""
     try:
         from src.sync.meituan_client import MeituanBrowserClient
-        from src.sync.meituan_products import MeituanProductSyncer
+        from src.sync.yiyao_syncer import YiyaoFullSyncer
 
         pool = await pg.get_pool()
         client = MeituanBrowserClient(wm_poi_id=WM_POI_ID)
 
-        # --- 商品同步 ---
-        product_syncer = MeituanProductSyncer(client=client, db_pool=pool, wm_poi_id=WM_POI_ID)
         try:
-            result = await product_syncer.full_sync()
-            if result.success:
-                logger.info("Sync OK for meituan_products: %d records", result.records_synced)
-            else:
-                logger.error("Sync failed for meituan_products: %s", result.error)
-        except Exception:
-            logger.exception("Sync exception for meituan_products")
-
-        # --- 订单同步 ---
-        try:
-            from src.sync.meituan_orders import MeituanOrderSyncer
-            order_syncer = MeituanOrderSyncer(
-                cookie_path="config/yiyao_cookies.json",
-                wm_poi_id=WM_POI_ID,
-                pool=pool,
-            )
-            order_result = await order_syncer.sync_orders()
-            if order_result.success:
-                logger.info("Sync OK for meituan_orders: %d records", order_result.orders_synced)
-            else:
-                logger.error("Sync failed for meituan_orders: %s", order_result.error)
-        except Exception:
-            logger.exception("Sync exception for meituan_orders")
-
-        await client.close()
+            syncer = YiyaoFullSyncer(client=client, pool=pool, wm_poi_id=WM_POI_ID, days_back=90)
+            results = await syncer.sync_all()
+            for r in results:
+                if r.success:
+                    logger.info("✅ %s: %d 条, %d 页", r.syncer, r.records, r.pages)
+                else:
+                    logger.error("❌ %s: %s", r.syncer, r.error)
+        finally:
+            await client.close()
     except Exception:
         logger.exception("Failed to trigger sync")
 

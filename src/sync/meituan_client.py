@@ -1,9 +1,9 @@
-"""MeituanBrowserClient — 专为美团买药商家中心(yiyao.meituan.com)构建的 nodriver 客户端。
+"""MeituanBrowserClient — 美团买药商家中心(yiyao.meituan.com) nodriver 客户端。
 
-特点：
-  * 在真实浏览器上下文中执行 API 调用，自动注入 mtgsig/h5guard 签名
-  * 读取 config/yiyao_cookies.json 或自定义 cookie 文件/JSON，支持多门店
-  * 兼容 nodriver.evaluate 的限制，使用 window.__api_result 中转获取响应
+运行方式：
+  * 使用 Xvfb 虚拟显示器 + 非 headless Chrome，绕过 h5guard 指纹检测
+  * 读取 config/yiyao_cookies.json，注入登录态
+  * 支持自动翻页抓取全量数据
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ DEFAULT_COOKIE_FILE = (
 
 
 class MeituanBrowserClient:
-    """轻量浏览器客户端，每个门店(POI)可实例化各自的对象。"""
+    """美团买药商家后台浏览器客户端（Xvfb + 非 headless）。"""
 
     def __init__(
         self,
@@ -60,9 +60,9 @@ class MeituanBrowserClient:
         method: str = "POST",
         body_params: dict[str, Any] | None = None,
         base_url: str | None = None,
+        timeout: float = 8.0,
     ) -> Any:
-        """在浏览器上下文中调用 yiyao API (支持 application/x-www-form-urlencoded)。"""
-
+        """在浏览器上下文中调用 yiyao API（带 h5guard 自动签名）。"""
         await self.ensure_ready()
         assert self._page is not None
 
@@ -78,14 +78,13 @@ class MeituanBrowserClient:
         if method_upper == "POST":
             body_payload = urlencode({k: "" if v is None else v for k, v in params.items()})
         elif params:
-            # GET/others: 将参数拼接到 URL
             parsed = urlparse(url)
             qs = urlencode({k: "" if v is None else v for k, v in params.items()})
             url = urlunparse(
                 parsed._replace(query=qs if not parsed.query else f"{parsed.query}&{qs}")
             )
 
-        result_key = f"__meituan_api_result_{int(time.time() * 1000)}"
+        result_key = f"__mt_api_{int(time.time() * 1000)}"
         headers_literal = json.dumps(headers)
         body_literal = f", body: {json.dumps(body_payload)}" if body_payload is not None else ""
 
@@ -96,58 +95,76 @@ class MeituanBrowserClient:
                 credentials: 'include',
                 headers: {headers_literal}{body_literal}
             }})
-            .then(function(r) {{ return r.text(); }})
-            .then(function(text) {{ window.{result_key} = text; }})
-            .catch(function(err) {{ window.{result_key} = JSON.stringify({{"error": true, "message": err.message}}); }});
+            .then(r => r.text())
+            .then(text => {{ window.{result_key} = text; }})
+            .catch(err => {{ window.{result_key} = JSON.stringify({{error: true, message: err.message}}); }});
         """
 
         await self._page.evaluate(js)
-        await asyncio.sleep(2)
-        result_str = await self._page.evaluate(f"window.{result_key}")
-        if result_str == "pending":
-            await asyncio.sleep(2)
+
+        # 轮询等待结果
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            await asyncio.sleep(1.0)
             result_str = await self._page.evaluate(f"window.{result_key}")
+            if result_str and result_str != "pending":
+                break
+        else:
+            raise RuntimeError(f"API 请求超时: {url}")
 
         self._request_count += 1
-        if not result_str or result_str == "pending":
-            raise RuntimeError("Browser request timed out")
 
         try:
             return json.loads(result_str)
         except json.JSONDecodeError:
-            logger.debug("非 JSON 响应，返回原始字符串")
+            logger.debug("非 JSON 响应: %s", result_str[:200])
             return result_str
+
+    async def navigate_to(self, path: str) -> None:
+        """导航到指定页面，等待加载完成。"""
+        await self.ensure_ready()
+        url = self._build_url(path, None)
+        logger.info("导航到: %s", url)
+        self._page = await self._browser.get(url)
+        await self._page.sleep(5)
 
     async def close(self) -> None:
         await self._cleanup()
 
-    # ── Internal helpers ─────────────────────────────────────
+    # ── Internal ─────────────────────────────────────────────────────────
 
     async def _start_browser(self) -> None:
         try:
             import nodriver
             import nodriver.cdp.network as cdp_network
 
-            headless = os.environ.get("HEADLESS", "false").lower() == "true"
-            logger.info("启动 nodriver Chrome (headless=%s)...", headless)
+            chrome_path = os.environ.get("CHROME_EXECUTABLE_PATH", "/usr/bin/chromium")
+            display = os.environ.get("DISPLAY", ":99")
 
-            chrome_path = os.environ.get("CHROME_EXECUTABLE_PATH", None)
+            logger.info("启动 Chrome (DISPLAY=%s, chrome=%s)...", display, chrome_path)
+
+            # 非 headless 模式，配合 Xvfb 绕过指纹检测
             self._browser = await nodriver.start(
-                headless=True,  # Docker 必须 headless
+                headless=False,
                 browser_executable_path=chrome_path,
                 browser_args=[
-                    "--no-first-run",
-                    "--no-default-browser-check",
                     "--no-sandbox",
+                    "--disable-setuid-sandbox",
                     "--disable-dev-shm-usage",
                     "--disable-gpu",
-                    "--disable-software-rasterizer",
-                    "--disable-setuid-sandbox",
-                    "--single-process",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--disable-extensions",
+                    "--disable-infobars",
+                    "--window-size=1920,1080",
+                    f"--display={display}",
                 ],
             )
 
+            # 导航到美团主域，注入 cookies
             page = await self._browser.get(self.base_url)
+            await page.sleep(3)
+
             cookies_dict = self._load_cookies_dict()
             for name, value in cookies_dict.items():
                 await page.send(
@@ -158,14 +175,23 @@ class MeituanBrowserClient:
                         path="/",
                     )
                 )
-            logger.info("载入 %d 个 cookies", len(cookies_dict))
+            logger.info("已注入 %d 个 cookies", len(cookies_dict))
 
+            # 刷新页面让 cookies 生效，等待 h5guard.js 初始化
             self._page = await self._browser.get(f"{self.base_url}/")
             await self._page.sleep(8)
+
+            current_url = self._page.url
+            logger.info("当前页面: %s", current_url)
+
+            if "error" in current_url or "login" in current_url:
+                raise RuntimeError(f"登录态无效，页面跳转至: {current_url}")
+
             self._initialized = True
             logger.info("MeituanBrowserClient 初始化完成")
+
         except Exception:
-            logger.exception("启动美团浏览器客户端失败")
+            logger.exception("启动美团浏览器失败")
             await self._cleanup()
             raise
 
@@ -177,28 +203,25 @@ class MeituanBrowserClient:
             try:
                 data = json.loads(self.cookie_file.read_text())
                 return self._normalize_cookie_blob(data)
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("解析 %s 失败: %s", self.cookie_file, exc)
 
         env_val = os.environ.get("YIYAO_COOKIES_JSON", "").strip()
         if env_val:
             try:
                 return self._normalize_cookie_blob(json.loads(env_val))
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 logger.warning("解析 YIYAO_COOKIES_JSON 失败: %s", exc)
 
-        raise RuntimeError("未找到美团买药 cookies，请提供 cookie_file 或 cookie_json")
+        raise RuntimeError("未找到美团 cookies，请配置 config/yiyao_cookies.json")
 
     @staticmethod
     def _normalize_cookie_blob(blob: Any) -> dict[str, str]:
         if isinstance(blob, dict):
             return {str(k): str(v) for k, v in blob.items()}
         if isinstance(blob, str):
-            try:
-                raw = json.loads(blob)
-                return MeituanBrowserClient._normalize_cookie_blob(raw)
-            except json.JSONDecodeError as exc:  # noqa: BLE001
-                raise ValueError(f"无法解析 cookie JSON: {exc}") from exc
+            raw = json.loads(blob)
+            return MeituanBrowserClient._normalize_cookie_blob(raw)
         if isinstance(blob, list):
             cookies: dict[str, str] = {}
             for item in blob:
@@ -206,7 +229,7 @@ class MeituanBrowserClient:
                     cookies[str(item["name"])] = str(item["value"])
             if cookies:
                 return cookies
-        raise ValueError("cookie_json 必须是 dict/list/JSON 字符串")
+        raise ValueError("cookie 格式不支持")
 
     def _build_url(self, path: str, base_url: str | None) -> str:
         if path.startswith("http"):
@@ -219,7 +242,7 @@ class MeituanBrowserClient:
         try:
             if self._browser:
                 self._browser.stop()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         self._browser = None
         self._page = None
