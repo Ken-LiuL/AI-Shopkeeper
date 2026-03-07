@@ -125,40 +125,55 @@ async def _insert_records(
     synced_at: str,
 ) -> int:
     """将数据插入对应表。products 走结构化 upsert，其他走 raw JSONB。"""
+    import hashlib
     import json
 
     if source == "products":
         return await _upsert_products(pool, data)
 
-    # First ensure the table exists in a separate transaction
+    # 先确保表结构存在，并补齐去重字段/索引
     async with pool.acquire() as conn:
         await conn.execute(f"""
             CREATE TABLE IF NOT EXISTS {table}_raw (
                 id SERIAL PRIMARY KEY,
                 source VARCHAR(50),
                 raw_data JSONB,
+                data_hash VARCHAR(64),
                 synced_at TEXT,
                 created_at TIMESTAMP DEFAULT NOW()
             )
         """)
+        await conn.execute(f"""
+            ALTER TABLE {table}_raw
+            ADD COLUMN IF NOT EXISTS data_hash VARCHAR(64)
+        """)
+        await conn.execute(f"""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_raw_dedup
+            ON {table}_raw (source, data_hash)
+        """)
 
-    # Now insert data in a separate transaction
-    count = 0
+    rows: list[tuple[str, str, str, str]] = []
+    for row in data:
+        json_str = json.dumps(row, ensure_ascii=False, sort_keys=True)
+        data_hash = hashlib.md5(json_str.encode("utf-8")).hexdigest()
+        rows.append((source, json_str, data_hash, synced_at))
+
+    if not rows:
+        return 0
+
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            for row in data:
-                await conn.execute(
-                    f"""
-                    INSERT INTO {table}_raw (source, raw_data, synced_at)
-                    VALUES ($1, $2::jsonb, $3)
-                    """,
-                    source,
-                    json.dumps(row, ensure_ascii=False),
-                    synced_at,
-                )
-                count += 1
+        await conn.executemany(
+            f"""
+            INSERT INTO {table}_raw (source, raw_data, data_hash, synced_at)
+            VALUES ($1, $2::jsonb, $3, $4)
+            ON CONFLICT (source, data_hash) DO UPDATE SET
+                synced_at = EXCLUDED.synced_at,
+                created_at = NOW()
+            """,
+            rows,
+        )
 
-    return count
+    return len(rows)
 
 
 async def _upsert_products(pool: Any, data: list[dict[str, Any]]) -> int:

@@ -39,6 +39,8 @@
     const rawType = getDataType(url);
     if (!rawType) return null;
     if (!responseData || typeof responseData !== 'object') return null;
+    if (responseData.code !== undefined && responseData.code !== 0 && responseData.code !== 200) return null;
+    if (responseData.errno !== undefined && responseData.errno !== 0) return null;
 
     return rawType;
   }
