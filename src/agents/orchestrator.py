@@ -47,6 +47,25 @@ class Orchestrator:
             self._graphs[task_type] = builders[task_type]()
         return self._graphs[task_type]
 
+    async def _run_customer_service_fallback(self, input_data: dict[str, Any]) -> dict[str, Any]:
+        """客服 graph 不可用时，回退到当前线上使用的 chat 路径。"""
+        from src.agents.customer_service.nodes import chat as cs_chat
+        from src.db import postgres as pg
+
+        pool = None
+        try:
+            pool = pg.get_pool()
+        except Exception:
+            logger.warning("Customer service fallback running without PostgreSQL pool")
+
+        return await cs_chat(
+            session_id=input_data.get("session_id", ""),
+            message=input_data.get("user_message") or input_data.get("message", ""),
+            pool=pool,
+            conversation_history=input_data.get("conversation_history") or [],
+            images=input_data.get("images"),
+        )
+
     async def run(self, task_type: TaskType | str, input_data: dict[str, Any]) -> dict[str, Any]:
         """
         执行任务。
@@ -64,6 +83,12 @@ class Orchestrator:
         logger.info(f"Orchestrator: routing to {task_type.value}")
 
         graph = self._get_graph(task_type)
+        if task_type == TaskType.CUSTOMER_SERVICE and graph is None:
+            logger.warning("Customer service graph is None, falling back to nodes.chat()")
+            result = await self._run_customer_service_fallback(input_data)
+            logger.info(f"Orchestrator: {task_type.value} completed (fallback)")
+            return result
+
         result = await graph.ainvoke(input_data)
 
         logger.info(f"Orchestrator: {task_type.value} completed")
