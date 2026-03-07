@@ -1,6 +1,11 @@
+# Temp scripts
 __pycache__/
 *.pyc
+
+# Cookies & secrets
 .env
+.env.*
+!.env.example
 .venv/
 venv/
 *.egg-info/
@@ -13,8 +18,8 @@ build/
 node_modules/
 .next/
 
-# QNH cookies (sensitive)
 config/qnh_cookies.json
+config/*_cookies*.json
 data/
 data/qnh_sync.db
 !frontend/.vercel
