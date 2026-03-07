@@ -1,31 +1,13 @@
 /**
  * injected.js — Runs in the PAGE context (not extension context).
- * 支持：yiyao.meituan.com（美团买药商家后台）+ qnh.meituan.com（牵牛花）
+ * 数据来源：yiyao.meituan.com（美团买药商家后台）
  * 拦截 XHR / fetch 自动采集订单、商品、评价、销售数据
  */
 (function () {
   'use strict';
 
-  const WS_CHANNEL = '__AI_DIANZHANG_WS__';
   const DATA_CHANNEL = '__AI_DIANZHANG_DATA__';
-
-  // ─── WebSocket 拦截 ───────────────────────────────────────────────────
-  const OrigWebSocket = window.WebSocket;
-  class InterceptedWebSocket extends OrigWebSocket {
-    constructor(url, protocols) {
-      super(url, protocols);
-      this.addEventListener('message', (event) => {
-        try {
-          const parsed = typeof event.data === 'string' ? JSON.parse(event.data) : null;
-          if (parsed) window.dispatchEvent(new CustomEvent(WS_CHANNEL, { detail: JSON.stringify(parsed) }));
-        } catch (_) {}
-      });
-    }
-  }
-  InterceptedWebSocket.prototype = OrigWebSocket.prototype;
-  Object.defineProperty(window, 'WebSocket', { value: InterceptedWebSocket, writable: true, configurable: true });
-
-  // ─── 业务 API 路径识别（yiyao + qnh 两套）────────────────────────────
+  // ─── 业务 API 路径识别（仅 yiyao）──────────────────────────────────────
   function getDataType(url) {
     if (!url) return null;
     try {
@@ -33,7 +15,7 @@
       const h = u.hostname;
       const p = u.pathname;
 
-      // === yiyao.meituan.com 路径规则（精确匹配，不能 fallthrough 到 qnh）===
+      // === yiyao.meituan.com 路径规则 ===
       if (h === 'yiyao.meituan.com') {
         // 商品列表
         if (p.includes('/retail/r/searchListPage')) return 'products';
@@ -49,17 +31,6 @@
         // 退款/售后
         if (p.includes('/refund') || p.includes('/after-sale') || p.includes('/aftersale')) return 'refunds';
       }
-
-      // === qnh.meituan.com 路径规则 ===
-      if (h === 'qnh.meituan.com') {
-        if (p.includes('/empower/generic/table/query')) return 'table_query';
-        if (p.includes('/empower/complexModule/query')) return 'complex_query';
-        if (p.includes('/workbench/b/dashboard')) return 'metrics';
-        if (p.includes('order')) return 'orders';
-        if (p.includes('product') || p.includes('goods') || p.includes('sku')) return 'products';
-        if (p.includes('stat') || p.includes('report') || p.includes('analytics')) return 'metrics';
-        if (p.includes('review') || p.includes('comment')) return 'reviews';
-      }
     } catch (_) {}
     return null;
   }
@@ -69,14 +40,6 @@
     if (!rawType) return null;
     if (!responseData || typeof responseData !== 'object') return null;
 
-    // 通用查询接口：根据响应内容推断业务类型
-    if (rawType === 'table_query' || rawType === 'complex_query') {
-      const dataStr = JSON.stringify(responseData).toLowerCase();
-      if (dataStr.includes('order') || dataStr.includes('订单')) return 'orders';
-      if (dataStr.includes('product') || dataStr.includes('商品') || dataStr.includes('sku')) return 'products';
-      if (dataStr.includes('sale') || dataStr.includes('revenue') || dataStr.includes('销售')) return 'metrics';
-      return rawType;
-    }
     return rawType;
   }
 
@@ -124,5 +87,5 @@
     return OrigXHRSend.apply(this, args);
   };
 
-  console.log('[AI店长] 数据拦截器已安装（yiyao.meituan.com + qnh.meituan.com）');
+  console.log('[AI店长] 已安装 yiyao.meituan.com 数据拦截器');
 })();

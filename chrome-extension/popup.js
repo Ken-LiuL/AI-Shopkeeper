@@ -1,6 +1,6 @@
 /** popup.js — AI店长 Extension Popup */
 
-const DEFAULT_SYNC_API = 'http://192.144.227.205:8000';
+const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
 
 function showStatus(id, msg, isError = false, ms = 2500) {
   const el = document.getElementById(id);
@@ -122,12 +122,12 @@ document.getElementById('testConn').addEventListener('click', () => {
 
 // ─── 数据同步设置 ─────────────────────────────────────────────────────
 chrome.storage.sync.get(['syncApiBase', 'tenantId'], (settings) => {
-  document.getElementById('syncApiBase').value = settings.syncApiBase || DEFAULT_SYNC_API;
+  document.getElementById('syncApiBase').value = settings.syncApiBase || DEFAULT_API_BASE;
   document.getElementById('tenantId').value = settings.tenantId || 'default';
 });
 
 document.getElementById('saveSyncSettings').addEventListener('click', () => {
-  const syncApiBase = document.getElementById('syncApiBase').value.trim() || DEFAULT_SYNC_API;
+  const syncApiBase = document.getElementById('syncApiBase').value.trim() || DEFAULT_API_BASE;
   const tenantId = document.getElementById('tenantId').value.trim() || 'default';
 
   chrome.storage.sync.set({ syncApiBase, tenantId }, () => {
@@ -152,10 +152,11 @@ document.getElementById('forceSync').addEventListener('click', () => {
 });
 
 // ─── 客服设置 Tab ─────────────────────────────────────────────────────
-chrome.storage.sync.get(['enabled', 'mode', 'apiUrl', 'apiKey', 'storeId'], (settings) => {
+chrome.storage.sync.get(['enabled', 'mode', 'apiUrl', 'apiKey', 'storeId', 'chatApiBase'], (settings) => {
   document.getElementById('enabled').checked = settings.enabled !== false;
   document.getElementById('mode').value = settings.mode || 'auto-fill';
   document.getElementById('apiUrl').value = settings.apiUrl || '';
+  document.getElementById('chatApiBase').value = settings.chatApiBase || DEFAULT_API_BASE;
   document.getElementById('storeId').value = settings.storeId || '';
 });
 
@@ -164,12 +165,13 @@ document.getElementById('save').addEventListener('click', () => {
     enabled: document.getElementById('enabled').checked,
     mode: document.getElementById('mode').value,
     apiUrl: document.getElementById('apiUrl').value.trim(),
+    chatApiBase: document.getElementById('chatApiBase').value.trim() || DEFAULT_API_BASE,
     storeId: document.getElementById('storeId').value.trim(),
   };
   chrome.storage.sync.set(data, () => {
     showStatus('csStatus', '✅ 已保存');
     // 通知所有美团页面更新设置
-    chrome.tabs.query({ url: ['https://yiyao.meituan.com/*', 'https://qnh.meituan.com/*'] }, (tabs) => {
+    chrome.tabs.query({ url: ['https://yiyao.meituan.com/*'] }, (tabs) => {
       tabs.forEach((tab) => {
         chrome.tabs.sendMessage(tab.id, { type: 'SETTINGS_UPDATED' }).catch(() => {});
       });

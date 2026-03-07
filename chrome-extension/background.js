@@ -1,11 +1,10 @@
 /**
  * background.js — AI店长 Chrome Extension Service Worker
- * 1. 处理客服 IM 消息，请求 AI 回复
+ * 1. 处理客服消息，请求 AI 回复
  * 2. 接收业务数据并同步到后端
  */
 
-const DEFAULT_CHAT_API = 'http://192.144.227.205:8000/api/v1/customer-service/chat';
-const DEFAULT_SYNC_API = 'http://192.144.227.205:8000';
+const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
 const THROTTLE_MS = 10_000; // 10s 节流
@@ -25,6 +24,21 @@ function addLog(level, msg, detail = '') {
   } else {
     console.log(`[AI店长] ${msg}`, detail);
   }
+}
+
+async function getApiSettings() {
+  const settings = await chrome.storage.sync.get([
+    'syncApiBase',
+    'chatApiBase',
+    'apiUrl',
+    'apiKey',
+    'storeId',
+    'tenantId',
+  ]);
+  const syncBase = settings.syncApiBase || DEFAULT_API_BASE;
+  const chatBase = settings.chatApiBase || DEFAULT_API_BASE;
+  const chatApiUrl = settings.apiUrl || `${chatBase}/api/v1/customer-service/chat`;
+  return { ...settings, syncBase, chatBase, chatApiUrl };
 }
 
 // ─── 消息路由 ─────────────────────────────────────────────────────────
@@ -59,8 +73,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ─── 连接测试 ────────────────────────────────────────────────────────
 async function testConnection() {
-  const settings = await chrome.storage.sync.get(['syncApiBase']);
-  const baseUrl = settings.syncApiBase || DEFAULT_SYNC_API;
+  const settings = await getApiSettings();
+  const baseUrl = settings.syncBase;
   try {
     const r = await fetch(`${baseUrl}/health`, { method: 'GET' });
     const ok = r.ok;
@@ -74,8 +88,8 @@ async function testConnection() {
 
 // ─── 客服消息处理 ────────────────────────────────────────────────────
 async function handleCustomerMessage(payload) {
-  const settings = await chrome.storage.sync.get(['apiUrl', 'apiKey', 'storeId']);
-  const apiUrl = settings.apiUrl || DEFAULT_CHAT_API;
+  const settings = await getApiSettings();
+  const apiUrl = settings.chatApiUrl;
   const body = {
     message: payload.message,
     session_id: payload.session_id,
@@ -157,8 +171,8 @@ async function handleBusinessData({ type, url, data }) {
     return { success: true, skipped: true, reason: 'no_data' };
   }
 
-  const settings = await chrome.storage.sync.get(['syncApiBase', 'tenantId']);
-  const baseUrl = settings.syncApiBase || DEFAULT_SYNC_API;
+  const settings = await getApiSettings();
+  const baseUrl = settings.syncBase;
 
   // ── 按后端 IngestRequest 格式发送 ──
   // source 必须是 SOURCE_TABLE_MAP 的 key: products/orders/reviews/...
@@ -198,8 +212,6 @@ async function handleBusinessData({ type, url, data }) {
 // ─── 类型规范化 ──────────────────────────────────────────────────────
 function normalizeType(type) {
   const map = {
-    table_query: 'orders',
-    complex_query: 'products',
     merchant: 'channels',
     channels: 'channels',
     metrics: 'metrics',

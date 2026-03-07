@@ -6,9 +6,7 @@
   "permissions": ["storage", "activeTab"],
   "host_permissions": [
     "https://yiyao.meituan.com/*",
-    "https://qnh.meituan.com/*",
-    "https://*.meituan.com/*",
-    "http://192.144.227.205:8000/*"
+    "https://ai-shopkeeper-kk.fly.dev/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -16,8 +14,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://yiyao.meituan.com/*",
-        "https://qnh.meituan.com/*"
+        "https://yiyao.meituan.com/*"
       ],
       "js": ["content_script.js"],
       "css": ["panel.css"],
@@ -28,8 +25,7 @@
     {
       "resources": ["injected.js"],
       "matches": [
-        "https://yiyao.meituan.com/*",
-        "https://qnh.meituan.com/*"
+        "https://yiyao.meituan.com/*"
       ]
     }
   ],
