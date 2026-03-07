@@ -60,7 +60,7 @@ async def _get_pool():
 
 @router.post("/cookie", response_model=CookieSubmitResponse)
 async def submit_cookie(req: CookieSubmitRequest) -> CookieSubmitResponse:
-    """商家提交 QNH Cookie。
+    """商家提交美团商家后台 Cookie。
 
     支持两种格式：
     1. cookie_string: "token=xxx; session=yyy; ..."
@@ -135,7 +135,7 @@ def _try_save_cookie_config(cookies: dict[str, str]) -> None:
     import json
     from pathlib import Path
 
-    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "qnh_cookies.json"
+    config_path = Path(__file__).resolve().parent.parent.parent / "config" / "meituan_cookies.json"
     try:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps(cookies, ensure_ascii=False, indent=2))
@@ -194,11 +194,11 @@ async def sync_status() -> APIResponse[dict[str, Any]]:
     data_counts: dict[str, Any] = {}
     tables = {
         "products": "qnh_products",
-        "orders": "qnh_orders_raw",
-        "metrics": "qnh_store_metrics_raw",
-        "customers": "qnh_customers_raw",
-        "traffic": "qnh_traffic_raw",
-        "channels": "qnh_traffic_channels_raw",
+        "orders": "meituan_orders_raw",
+        "metrics": "meituan_store_metrics_raw",
+        "customers": "meituan_customers_raw",
+        "traffic": "meituan_traffic_raw",
+        "channels": "meituan_traffic_channels_raw",
     }
     for source, table in tables.items():
         try:
@@ -283,22 +283,12 @@ async def trigger_single_syncer(syncer_name: str, bg: BackgroundTasks) -> APIRes
 
         raise NotFoundError("Syncer", syncer_name)
 
-    module_path, class_name = syncer_map[syncer_name]
-
     async def _run() -> None:
         try:
-            import importlib
-
-            from src.sync.qnh_client import QNHClient
-
-            mod = importlib.import_module(module_path)
-            cls = getattr(mod, class_name)
-            syncer = cls(QNHClient(), None)
-            result = await syncer.sync()  # ← 修复: 调用 sync() 而非 sync_full()
-            if result.success:
-                logger.info("Single sync OK: %s, %d records", syncer_name, result.records_synced)
-            else:
-                logger.error("Single sync FAILED: %s — %s", syncer_name, result.error)
+            # 临时兼容：当前单项 syncer 仍依赖旧链路，先复用全量触发逻辑。
+            # 后续可优化为基于 MeituanBrowserClient 的按类型同步。
+            await _trigger_sync_all()
+            logger.info("Single sync delegated to full sync: %s", syncer_name)
         except Exception:
             logger.exception("Single sync exception for %s", syncer_name)
 
