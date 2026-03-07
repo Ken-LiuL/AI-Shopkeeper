@@ -20,6 +20,16 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 # ---- Runtime stage ----
 FROM python:3.11-slim
 
+# Install Chromium for nodriver-based data sync
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
+    fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Chrome path for nodriver
+ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium
+
 WORKDIR /app
 COPY --from=python-builder /usr/local /usr/local
 ARG CACHEBUST=2
