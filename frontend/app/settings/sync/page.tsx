@@ -131,9 +131,9 @@ export default function SyncSettingsPage() {
   return (
     <div className="p-6 max-w-3xl mx-auto space-y-8">
       <div>
-        <h1 className="text-2xl font-bold text-gray-900">数据同步设置</h1>
+        <h1 className="text-2xl font-bold text-gray-900">数据采集设置</h1>
         <p className="text-sm text-gray-500 mt-1">
-          通过美团买药商家后台同步您的真实经营数据。推荐使用 Chrome 扩展自动同步，也可手动配置 Cookie。
+          数据由后端采集服务自动执行，无需 Chrome 扩展。请提交可用 Cookie 供 nodriver 采集链路使用。
         </p>
       </div>
 
@@ -259,7 +259,7 @@ export default function SyncSettingsPage() {
       <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 space-y-4">
         <h2 className="text-lg font-semibold text-gray-800">手动触发同步</h2>
         <p className="text-sm text-gray-500">
-          点击「立即同步」可立即触发一次全量数据同步（需要 Cookie 已配置）。同步在后台运行，约需 1-3 分钟。
+          点击「立即同步」可立即触发一次后端全量采集（需要 Cookie 已配置）。任务在后台运行，约需 1-3 分钟。
         </p>
         <button
           onClick={handleTriggerSync}
@@ -276,7 +276,7 @@ export default function SyncSettingsPage() {
       </section>
 
       <p className="text-xs text-gray-400 text-center">
-        Cookie 每 ~2 小时自动失效，需重新提交。系统会每 5 分钟自动同步一次数据。
+        调度由后端服务托管：商品每日 02:00，订单每小时，评价每 6 小时，统计每日 06:00。
       </p>
     </div>
   );
