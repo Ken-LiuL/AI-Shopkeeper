@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { withErrorBoundary } from '@/components/error-boundary';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -49,9 +49,12 @@ function ListingPage() {
   const [history, setHistory] = useState<ListingHistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     loadHistory();
+    return () => stopHistoryPolling();
   }, []);
 
   const detectPlatform = (url: string): ListingPlatform => {
@@ -60,7 +63,30 @@ function ListingPage() {
     return 'alibaba';
   };
 
-  const loadHistory = async () => {
+  const stopHistoryPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+  };
+
+  const startHistoryPolling = () => {
+    stopHistoryPolling();
+    pollIntervalRef.current = setInterval(async () => {
+      const latest = await loadHistory();
+      const hasProcessing = latest.some((item) => item.status === 'processing');
+      if (!hasProcessing) stopHistoryPolling();
+    }, 3000);
+    pollTimeoutRef.current = setTimeout(() => {
+      stopHistoryPolling();
+    }, 60000);
+  };
+
+  const loadHistory = async (): Promise<ListingHistoryItem[]> => {
     try {
       setHistoryLoading(true);
       setHistoryError(null);
@@ -69,10 +95,13 @@ function ListingPage() {
       if (!res.ok || json.success === false) {
         throw new Error(json.message || `HTTP ${res.status}`);
       }
-      setHistory(Array.isArray(json.data) ? json.data : []);
+      const list = Array.isArray(json.data) ? json.data : [];
+      setHistory(list);
+      return list;
     } catch (err) {
       console.error('Error loading listing history:', err);
       setHistoryError('加载上架历史失败，请稍后重试');
+      return [];
     } finally {
       setHistoryLoading(false);
     }
@@ -134,7 +163,10 @@ function ListingPage() {
         throw new Error(json.message || `HTTP ${res.status}`);
       }
       setCreateSuccess(`上架任务已创建（任务ID：${json.task_id || '已提交'}）`);
-      await loadHistory();
+      const latest = await loadHistory();
+      if (latest.some((item) => item.status === 'processing')) {
+        startHistoryPolling();
+      }
     } catch (err) {
       console.error('Create listing failed:', err);
       setCreateError('创建上架任务失败，请稍后重试');
