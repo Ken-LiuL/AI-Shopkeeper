@@ -24,7 +24,7 @@ _OPENROUTER_MODELS = {
     "haiku": "google/gemini-2.0-flash-001",  # 兼容旧引用
     "sonnet": "anthropic/claude-sonnet-4",  # 客服回复、需要高质量的任务
     "pro": "google/gemini-2.5-pro-preview",  # 选品分析、复杂推理（性价比）
-    "opus": "anthropic/claude-sonnet-4",  # 降级：Sonnet 够用
+    "opus": "anthropic/claude-opus-4",  # 关键决策用 Opus
 }
 
 # Anthropic 直连模型

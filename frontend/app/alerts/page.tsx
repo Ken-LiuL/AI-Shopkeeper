@@ -21,23 +21,48 @@ function AlertsPage() {
   const [severityFilter, setSeverityFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set());
+
+  const fetchAlerts = async () => {
+    try {
+      setError(null);
+      const data = await getAlerts();
+      setAlerts(data);
+    } catch (error) {
+      console.error('Error fetching alerts:', error);
+      setError('加载预警数据失败，请稍后重试');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
-    const fetchAlerts = async () => {
-      try {
-        setError(null);
-        const data = await getAlerts();
-        setAlerts(data);
-      } catch (error) {
-        console.error('Error fetching alerts:', error);
-        setError('加载预警数据失败，请稍后重试');
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchAlerts();
   }, []);
+
+  const handleResolve = async (alertId: string) => {
+    setResolvingIds(prev => new Set(prev).add(alertId));
+    try {
+      const response = await fetch(`/api/alerts/${alertId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'resolved' }),
+      });
+      if (response.ok) {
+        setAlerts(prev => prev.filter(a => (a.alert_id || '') !== alertId));
+      } else {
+        console.error('Failed to resolve alert:', response.status);
+      }
+    } catch (err) {
+      console.error('Error resolving alert:', err);
+    } finally {
+      setResolvingIds(prev => {
+        const next = new Set(prev);
+        next.delete(alertId);
+        return next;
+      });
+    }
+  };
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
@@ -288,8 +313,13 @@ function AlertsPage() {
                           查看详情
                         </Button>
                         {alert.status === 'pending' && (
-                          <Button variant="outline" size="sm">
-                            标记已解决
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={resolvingIds.has(alert.alert_id || '')}
+                            onClick={() => handleResolve(alert.alert_id || '')}
+                          >
+                            {resolvingIds.has(alert.alert_id || '') ? '处理中...' : '标记已解决'}
                           </Button>
                         )}
                       </div>

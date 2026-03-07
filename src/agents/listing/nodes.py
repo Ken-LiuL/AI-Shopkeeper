@@ -8,6 +8,33 @@ import logging
 from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool
 from ..prompts.listing import compliance_prompt, filler_prompt, matcher_prompt, parser_prompt
 from ..tools import COMPLIANCE_CHECK_TOOL, LISTING_INFO_TOOL, PARSED_PRODUCT_TOOL
+
+MATCHER_TOOL = {
+    "name": "match_meituan_standard",
+    "description": "将供应商商品匹配到美团标品库，返回匹配结果和置信度",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "matched_id": {
+                "type": "string",
+                "description": "匹配到的美团标品ID，若未匹配到则为空字符串",
+            },
+            "matched_name": {
+                "type": "string",
+                "description": "匹配到的美团标品名称",
+            },
+            "confidence": {
+                "type": "number",
+                "description": "匹配置信度，0.0~1.0",
+            },
+            "match_reason": {
+                "type": "string",
+                "description": "匹配原因或说明",
+            },
+        },
+        "required": ["matched_id", "matched_name", "confidence", "match_reason"],
+    },
+}
 from .state import ListingState
 
 logger = logging.getLogger(__name__)
@@ -40,22 +67,15 @@ async def matcher_node(state: ListingState) -> dict:
             specifications=json.dumps(parsed_data.get("specifications", {}), ensure_ascii=False),
             meituan_candidates=state.get("meituan_candidates", "暂无候选"),
         )
-        # Matcher 使用 Haiku（快速匹配）
-        # NOTE: Matcher 不用 tool_use，直接返回文本
-        # 实际中可能用数据库精确查询 + LLM 辅助模糊匹配
-        from ..llm import get_client
-
-        client = get_client()
-        response = await client.messages.create(
-            model=MODEL_FLASH,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        # 简化处理：将匹配结果存入 state
-        match_text = response.content[0].text if response.content else ""
+        # Matcher 使用 Flash（快速匹配），通过 call_tool 统一调用
+        result = await call_tool(prompt, MATCHER_TOOL, model=MODEL_FLASH)
         return {
-            "matched_standard": {"raw_match": match_text},
-            "match_confidence": 0.5,  # 实际由匹配逻辑决定
+            "matched_standard": {
+                "matched_id": result.get("matched_id", ""),
+                "matched_name": result.get("matched_name", ""),
+                "match_reason": result.get("match_reason", ""),
+            },
+            "match_confidence": result.get("confidence", 0.0),
         }
     except Exception as e:
         logger.error(f"Matcher failed: {e}")

@@ -17,7 +17,7 @@ from typing import Any
 
 from src.services.raw_data import fetch_latest_raw
 
-from ..llm import MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
+from ..llm import MODEL_OPUS, MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.selection import (
     competitor_analysis_prompt,
     gap_identification_prompt,
@@ -337,7 +337,7 @@ async def scorer_node(state: SelectionState) -> dict:
             initial_prompt=initial_prompt,
             reflection_prompt_fn=scorer_reflection_prompt,
             tool=RECOMMENDATIONS_TOOL,
-            model=MODEL_SONNET,
+            model=MODEL_OPUS,
         )
         return {"recommendations": result}
     except Exception as e:

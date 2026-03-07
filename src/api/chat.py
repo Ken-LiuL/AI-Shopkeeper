@@ -12,7 +12,7 @@ from src.services.session_manager import SessionManager
 
 from .schemas import APIResponse, ChatRequest, ChatResponse
 
-router = APIRouter(prefix="/api", tags=["chat"])
+router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
@@ -23,7 +23,8 @@ def _get_session_manager() -> SessionManager | None:
     return SessionManager(r)
 
 
-@router.post("/chat", response_model=APIResponse[ChatResponse])
+@router.post("/api/chat", response_model=APIResponse[ChatResponse])
+@router.post("/api/v1/chat", response_model=APIResponse[ChatResponse])
 async def chat(request: ChatRequest) -> APIResponse[ChatResponse]:
     """
     Chat endpoint for business advisor (upgraded from customer service).
