@@ -3,7 +3,7 @@
   "name": "AI店长 - 数据同步助手",
   "version": "2.0.0",
   "description": "自动从美团商家后台同步订单/商品/评价数据到 AI店长系统",
-  "permissions": ["storage", "activeTab", "webRequest"],
+  "permissions": ["storage", "activeTab"],
   "host_permissions": [
     "https://yiyao.meituan.com/*",
     "https://qnh.meituan.com/*",

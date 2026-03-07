@@ -33,24 +33,25 @@
       const h = u.hostname;
       const p = u.pathname;
 
-      // === yiyao.meituan.com 路径规则 ===
-      if (h.includes('yiyao.meituan.com') || h.includes('meituan.com')) {
+      // === yiyao.meituan.com 路径规则（精确匹配，不能 fallthrough 到 qnh）===
+      if (h === 'yiyao.meituan.com') {
         // 商品列表
-        if (p.includes('/retail/r/searchListPageV2') || p.includes('/retail/r/searchListPage')) return 'products';
+        if (p.includes('/retail/r/searchListPage')) return 'products';
+        if (p.includes('/product/') && (p.includes('/list') || p.includes('/search'))) return 'products';
         // 订单列表
-        if (p.includes('/order/list/page') || p.includes('/waimai/order/list')) return 'orders';
-        // 评价
-        if (p.includes('/comment') || p.includes('/review') || p.includes('/evaluate')) return 'reviews';
+        if (p.includes('/order/list') || p.includes('/order/history') || p.includes('/waimai/order')) return 'orders';
+        // 评价/评论
+        if (p.includes('/comment') || p.includes('/review') || p.includes('/evaluate') || p.includes('/appraise')) return 'reviews';
         // 营业额/统计
-        if (p.includes('/data/stat') || p.includes('/data/report') || p.includes('/stat/') || p.includes('/business/data')) return 'metrics';
+        if (p.includes('/stat/') || p.includes('/data/report') || p.includes('/data/stat') || p.includes('/business/data') || p.includes('/dashboard')) return 'metrics';
         // 库存
         if (p.includes('/stock') || p.includes('/inventory')) return 'inventory';
-        // 退款
-        if (p.includes('/refund') || p.includes('/after-sale')) return 'refunds';
+        // 退款/售后
+        if (p.includes('/refund') || p.includes('/after-sale') || p.includes('/aftersale')) return 'refunds';
       }
 
       // === qnh.meituan.com 路径规则 ===
-      if (h.includes('qnh.meituan.com')) {
+      if (h === 'qnh.meituan.com') {
         if (p.includes('/empower/generic/table/query')) return 'table_query';
         if (p.includes('/empower/complexModule/query')) return 'complex_query';
         if (p.includes('/workbench/b/dashboard')) return 'metrics';

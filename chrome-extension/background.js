@@ -8,14 +8,11 @@ const DEFAULT_CHAT_API = 'http://192.144.227.205:8000/api/v1/customer-service/ch
 const DEFAULT_SYNC_API = 'http://192.144.227.205:8000';
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1000;
-const THROTTLE_MS = 10_000; // 10s 节流（从 30s 降低）
+const THROTTLE_MS = 10_000; // 10s 节流
 
-// 节流状态
 const lastSentAt = {};
-// 同步统计
 const syncStats = {};
 const syncErrors = {};
-// Debug 日志（最近 50 条）
 const debugLogs = [];
 
 function addLog(level, msg, detail = '') {
@@ -38,26 +35,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
-
   if (message.type === 'BUSINESS_DATA') {
     handleBusinessData(message.payload)
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
-
   if (message.type === 'GET_SYNC_STATS') {
     sendResponse({ success: true, stats: syncStats, errors: syncErrors, lastSentAt, debugLogs });
     return false;
   }
-
   if (message.type === 'FORCE_SYNC') {
     Object.keys(lastSentAt).forEach((k) => delete lastSentAt[k]);
     addLog('info', '已清除节流，下次数据将立即发送');
     sendResponse({ success: true });
     return false;
   }
-
   if (message.type === 'TEST_CONNECTION') {
     testConnection().then((result) => sendResponse(result));
     return true;
@@ -83,17 +76,14 @@ async function testConnection() {
 async function handleCustomerMessage(payload) {
   const settings = await chrome.storage.sync.get(['apiUrl', 'apiKey', 'storeId']);
   const apiUrl = settings.apiUrl || DEFAULT_CHAT_API;
-
   const body = {
     message: payload.message,
     session_id: payload.session_id,
     customer_info: payload.customer_info || {},
   };
   if (settings.storeId) body.store_id = settings.storeId;
-
   const headers = { 'Content-Type': 'application/json' };
   if (settings.apiKey) headers['Authorization'] = `Bearer ${settings.apiKey}`;
-
   let lastError;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
@@ -111,13 +101,48 @@ async function handleCustomerMessage(payload) {
   return { success: false, error: lastError?.message || '请求失败' };
 }
 
+// ─── 从 API 响应中提取业务数据列表 ───────────────────────────────────
+/**
+ * API 响应结构各异，需要从嵌套中找到实际的记录列表
+ * 支持：{ data: { productList: [] } } / { data: { list: [] } } / { list: [] } 等格式
+ */
+function extractDataList(type, responseData) {
+  if (!responseData || typeof responseData !== 'object') return [];
+
+  // 优先尝试 data 层
+  const d = responseData.data || responseData;
+
+  // 已知的列表字段名（按类型优先）
+  const listKeys = {
+    products: ['productList', 'list', 'items', 'spuList', 'skuList', 'goods'],
+    orders: ['list', 'items', 'orders', 'orderList', 'data'],
+    reviews: ['list', 'items', 'reviews', 'commentList', 'evaluateList'],
+    inventory: ['list', 'items', 'stockList', 'inventoryList'],
+    refunds: ['list', 'items', 'refundList', 'afterSaleList'],
+    metrics: ['list', 'items', 'statList', 'reportList'],
+  };
+
+  const keys = listKeys[type] || ['list', 'items', 'data'];
+  for (const key of keys) {
+    if (Array.isArray(d[key]) && d[key].length > 0) return d[key];
+  }
+
+  // 如果 d 本身是数组
+  if (Array.isArray(d) && d.length > 0) return d;
+
+  // 最后兜底：把整个响应包成单条
+  if (typeof d === 'object' && Object.keys(d).length > 0) return [d];
+
+  return [];
+}
+
 // ─── 业务数据同步 ─────────────────────────────────────────────────────
 async function handleBusinessData({ type, url, data }) {
   const now = Date.now();
   const normalType = normalizeType(type);
   const shortUrl = url ? url.split('/').slice(-2).join('/') : '?';
 
-  addLog('info', `捕获 [${normalType}] 来自 ${shortUrl}`);
+  addLog('info', `捕获 [${normalType}] 来自 /${shortUrl}`);
 
   // 节流
   if (lastSentAt[type] && now - lastSentAt[type] < THROTTLE_MS) {
@@ -125,15 +150,22 @@ async function handleBusinessData({ type, url, data }) {
     return { success: true, skipped: true, reason: 'throttled' };
   }
 
+  // ── 提取实际数据列表（关键：必须是 list[dict]）──
+  const extractedList = extractDataList(normalType, data);
+  if (extractedList.length === 0) {
+    addLog('info', `跳过 [${normalType}]：响应中未发现有效列表数据`);
+    return { success: true, skipped: true, reason: 'no_data' };
+  }
+
   const settings = await chrome.storage.sync.get(['syncApiBase', 'tenantId']);
   const baseUrl = settings.syncApiBase || DEFAULT_SYNC_API;
-  const tenantId = settings.tenantId || 'default';
 
+  // ── 按后端 IngestRequest 格式发送 ──
+  // source 必须是 SOURCE_TABLE_MAP 的 key: products/orders/reviews/...
   const body = {
-    source: 'chrome_extension',
-    data_type: normalType,
-    tenant_id: tenantId,
-    raw_data: data,
+    source: normalType,
+    data: extractedList,
+    synced_at: new Date().toISOString(),
   };
 
   try {
@@ -149,16 +181,15 @@ async function handleBusinessData({ type, url, data }) {
     }
 
     lastSentAt[type] = now;
-    const count = estimateCount(type, data);
+    const count = extractedList.length;
     syncStats[normalType] = (syncStats[normalType] || 0) + count;
 
-    addLog('success', `✅ 同步成功 [${normalType}] ${count} 条`, baseUrl);
-
+    addLog('success', `✅ 同步成功 [${normalType}] ${count} 条`);
     await chrome.storage.local.set({ syncStats, syncErrors, lastSentAt, debugLogs });
     return { success: true, count };
   } catch (err) {
     syncErrors[normalType] = (syncErrors[normalType] || 0) + 1;
-    addLog('error', `❌ 同步失败 [${normalType}]: ${err.message}`, baseUrl);
+    addLog('error', `❌ 同步失败 [${normalType}]: ${err.message}`);
     await chrome.storage.local.set({ syncStats, syncErrors, lastSentAt, debugLogs });
     return { success: false, error: err.message };
   }
@@ -169,7 +200,7 @@ function normalizeType(type) {
   const map = {
     table_query: 'orders',
     complex_query: 'products',
-    merchant: 'merchant',
+    merchant: 'channels',
     channels: 'channels',
     metrics: 'metrics',
     orders: 'orders',
@@ -177,32 +208,7 @@ function normalizeType(type) {
     reviews: 'reviews',
     inventory: 'inventory',
     refunds: 'refunds',
-    traffic: 'metrics',
+    traffic: 'traffic',
   };
   return map[type] || type;
-}
-
-// ─── 估算记录数 ──────────────────────────────────────────────────────
-function estimateCount(type, data) {
-  try {
-    const candidates = [
-      data?.data?.productList,
-      data?.data?.list,
-      data?.data?.items,
-      data?.data?.orders,
-      data?.data?.reviews,
-      data?.data,
-      data?.list,
-      data?.items,
-      data?.rows,
-      data?.records,
-      data?.result,
-    ];
-    for (const l of candidates) {
-      if (Array.isArray(l) && l.length > 0) return l.length;
-    }
-    if (data?.data?.totalCount) return Number(data.data.totalCount);
-    if (data?.data?.total) return Number(data.data.total);
-  } catch (_) {}
-  return 1;
 }
