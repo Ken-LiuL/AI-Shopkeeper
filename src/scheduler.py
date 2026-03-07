@@ -526,6 +526,67 @@ async def meituan_product_sync_task() -> None:
         logger.exception("Meituan product sync task failed")
 
 
+async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) -> None:
+    """定时数据同步（使用 nodriver + YiyaoFullSyncer）。"""
+    logger.info("Starting Meituan full sync via nodriver (target=%s)", target or "all")
+    try:
+        from src.sync.meituan_client import MeituanBrowserClient
+        from src.sync.yiyao_syncer import YiyaoFullSyncer
+        import asyncpg
+
+        dsn = _resolve_database_url()
+        if not dsn:
+            logger.warning("DATABASE_URL unavailable — skip sync")
+            return
+
+        wm_poi_id = os.environ.get("WM_POI_ID", "")
+        if not wm_poi_id:
+            logger.warning("WM_POI_ID not set — skip sync")
+            return
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        client = MeituanBrowserClient(wm_poi_id=wm_poi_id)
+        try:
+            syncer = YiyaoFullSyncer(client=client, pool=pool, wm_poi_id=wm_poi_id, days_back=days_back)
+            if target == "products":
+                results = [await syncer.sync_products()]
+            elif target == "orders":
+                results = [await syncer.sync_orders()]
+            elif target == "reviews":
+                results = [await syncer.sync_reviews()]
+            elif target == "metrics":
+                results = [await syncer.sync_stats()]
+            else:
+                results = await syncer.sync_all()
+
+            for r in results:
+                if r.success:
+                    logger.info("✅ %s: %d 条, %d 页", r.syncer, r.records, r.pages)
+                else:
+                    logger.error("❌ %s: %s", r.syncer, r.error)
+        finally:
+            await client.close()
+            await pool.close()
+    except Exception:
+        logger.exception("Meituan full sync failed")
+
+
+async def meituan_products_full_sync_task() -> None:
+    await meituan_full_sync_task(target="products", days_back=7)
+
+
+async def meituan_orders_incremental_sync_task() -> None:
+    await meituan_full_sync_task(target="orders", days_back=7)
+
+
+async def meituan_reviews_sync_task() -> None:
+    await meituan_full_sync_task(target="reviews", days_back=7)
+
+
+async def meituan_metrics_sync_task() -> None:
+    await meituan_full_sync_task(target="metrics", days_back=7)
+
+
 async def qnh_data_sync_task() -> None:
     """数据同步任务（已迁移到 Chrome 扩展 + nodriver 链路，此处保留为空操作）。"""
     logger.info("Data sync now handled by Chrome extension / nodriver — skipping legacy task")
@@ -823,6 +884,44 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="qnh_data_sync",
+        replace_existing=True,
+    )
+
+    # 新链路：基于 YiyaoFullSyncer 的分类型定时采集
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_full_sync_products", meituan_products_full_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_full_sync_products", "0 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_full_sync_products",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_sync_orders_hourly", meituan_orders_incremental_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_sync_orders_hourly", "0 * * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_sync_orders_hourly",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_sync_reviews_6h", meituan_reviews_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_sync_reviews_6h", "0 */6 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_sync_reviews_6h",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _make_heartbeat_task("meituan_sync_metrics_daily", meituan_metrics_sync_task),
+        CronTrigger.from_crontab(
+            tasks.get("meituan_sync_metrics_daily", "0 6 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="meituan_sync_metrics_daily",
         replace_existing=True,
     )
 
