@@ -37,7 +37,7 @@ async function getApiSettings() {
   ]);
   const syncBase = settings.syncApiBase || DEFAULT_API_BASE;
   const chatBase = settings.chatApiBase || DEFAULT_API_BASE;
-  const chatApiUrl = settings.apiUrl || `${chatBase}/api/v1/customer-service/chat`;
+  const chatApiUrl = settings.apiUrl || `${chatBase}/api/customer-service/chat`;
   return { ...settings, syncBase, chatBase, chatApiUrl };
 }
 
