@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 @router.get("/optimization", response_model=APIResponse[dict])
 async def listing_optimization() -> APIResponse[dict]:
-    """商品上架优化 — 待开通"""
-    return APIResponse(data=None, message="商品上架优化功能待开通，当前商品均通过牵牛花平台管理")
+    """商品上架优化建议"""
+    return APIResponse(data=None, message="商品上架优化功能开发中")
 
 
 @router.get("", response_model=PaginatedResponse[dict])
@@ -37,14 +37,44 @@ async def list_listings(
     page_size: int = 20,
     status: str | None = None,
 ) -> PaginatedResponse[dict]:
-    # Return message indicating listing function is not yet available
-    return PaginatedResponse(
-        data=[],
-        total=0,
-        page=page,
-        page_size=page_size,
-        message="商品上架功能待开通，当前商品均通过牵牛花平台管理",
-    )
+    """查询上架记录列表"""
+    pool = pg.get_pool()
+    try:
+        # 构建查询
+        where_clause = ""
+        params: list = []
+        if status:
+            where_clause = "WHERE status = $1"
+            params.append(status)
+
+        # 总数
+        count_sql = f"SELECT COUNT(*) FROM listings {where_clause}"
+        total = await pool.fetchval(count_sql, *params)
+
+        # 分页查询
+        offset = (page - 1) * page_size
+        if status:
+            data_sql = "SELECT * FROM listings WHERE status = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
+            rows = await pool.fetch(data_sql, status, page_size, offset)
+        else:
+            data_sql = "SELECT * FROM listings ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+            rows = await pool.fetch(data_sql, page_size, offset)
+
+        return PaginatedResponse(
+            data=[dict(r) for r in rows],
+            total=total or 0,
+            page=page,
+            page_size=page_size,
+        )
+    except Exception as e:
+        logger.debug("listings 表查询失败（可能不存在）: %s", e)
+        return PaginatedResponse(
+            data=[],
+            total=0,
+            page=page,
+            page_size=page_size,
+            message="暂无上架记录",
+        )
 
 
 @router.put("/{listing_id}", response_model=APIResponse[dict])
