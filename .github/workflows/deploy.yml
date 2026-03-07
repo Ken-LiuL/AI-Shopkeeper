@@ -64,6 +64,9 @@ jobs:
             mkdir -p /opt/aishop/repo
             tar -xzf /opt/aishop/deploy.tar.gz -C /opt/aishop/repo
 
+            echo "=== Syncing docker-compose.yml ==="
+            cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
+
             echo "=== Building Docker image ==="
             docker build -t aishop-app:latest /opt/aishop/repo/
 

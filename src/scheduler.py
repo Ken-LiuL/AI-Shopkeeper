@@ -876,18 +876,7 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         replace_existing=True,
     )
 
-    # QNH 数据同步 + 门店库存 (凌晨2:00, CST) — 补充数据源
-    scheduler.add_job(
-        _make_heartbeat_task("qnh_data_sync", qnh_data_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("qnh_data_sync", "0 2 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="qnh_data_sync",
-        replace_existing=True,
-    )
-
-    # 新链路：基于 YiyaoFullSyncer 的分类型定时采集
+    # ── 美团 YiyaoFullSyncer 定时采集 ──────────────────────────────────
     scheduler.add_job(
         _make_heartbeat_task("meituan_full_sync_products", meituan_products_full_sync_task),
         CronTrigger.from_crontab(
