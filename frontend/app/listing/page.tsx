@@ -2,6 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { withErrorBoundary } from '@/components/error-boundary';
+import {
+  createListingTask,
+  getListingHistory,
+  parseListingProduct,
+  type ListingHistoryItem,
+} from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -16,19 +22,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-  || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
-
 type ListingPlatform = 'alibaba' | 'pdd';
-
-interface ListingHistoryItem {
-  listing_id?: string;
-  source_url?: string;
-  platform?: string;
-  status?: string;
-  created_at?: string;
-  product_data?: Record<string, unknown>;
-}
 
 interface ParsedProduct {
   [key: string]: unknown;
@@ -90,12 +84,7 @@ function ListingPage() {
     try {
       setHistoryLoading(true);
       setHistoryError(null);
-      const res = await fetch(`${BASE_URL}/api/listing`);
-      const json = await res.json();
-      if (!res.ok || json.success === false) {
-        throw new Error(json.message || `HTTP ${res.status}`);
-      }
-      const list = Array.isArray(json.data) ? json.data : [];
+      const list = await getListingHistory();
       setHistory(list);
       return list;
     } catch (err) {
@@ -120,19 +109,8 @@ function ListingPage() {
     setCreateError(null);
     setCreateSuccess(null);
     try {
-      const res = await fetch(`${BASE_URL}/api/listing/parse`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url: productUrl.trim(),
-          platform: detected,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || json.success === false) {
-        throw new Error(json.message || `HTTP ${res.status}`);
-      }
-      setParsedProduct((json.data || {}) as ParsedProduct);
+      const data = await parseListingProduct(productUrl.trim(), detected);
+      setParsedProduct((data || {}) as ParsedProduct);
     } catch (err) {
       console.error('Parse listing failed:', err);
       setParseError('解析失败，请检查链接是否有效');
@@ -149,20 +127,12 @@ function ListingPage() {
     setCreateError(null);
     setCreateSuccess(null);
     try {
-      const res = await fetch(`${BASE_URL}/api/listing/create`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          source_url: productUrl.trim(),
-          platform,
-          raw_product_data: JSON.stringify(parsedProduct),
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok || json.success === false) {
-        throw new Error(json.message || `HTTP ${res.status}`);
-      }
-      setCreateSuccess(`上架任务已创建（任务ID：${json.task_id || '已提交'}）`);
+      const result = await createListingTask(
+        productUrl.trim(),
+        platform,
+        JSON.stringify(parsedProduct),
+      );
+      setCreateSuccess(`上架任务已创建（任务ID：${result.task_id || '已提交'}）`);
       const latest = await loadHistory();
       if (latest.some((item) => item.status === 'processing')) {
         startHistoryPolling();

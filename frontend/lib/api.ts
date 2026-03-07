@@ -488,6 +488,45 @@ export async function getDailyInsights(): Promise<DailyInsight> {
   return fetchAPI<DailyInsight>('/insights/daily');
 }
 
+// Listing API
+export interface ListingHistoryItem {
+  listing_id?: string;
+  source_url?: string;
+  platform?: string;
+  status?: string;
+  created_at?: string;
+  product_data?: Record<string, unknown>;
+}
+
+export interface ListingCreateTaskResponse {
+  task_id?: string;
+}
+
+export async function getListingHistory(): Promise<ListingHistoryItem[]> {
+  return fetchAPI<ListingHistoryItem[]>('/listing');
+}
+
+export async function parseListingProduct(
+  url: string,
+  platform: 'alibaba' | 'pdd',
+): Promise<Record<string, unknown>> {
+  return fetchAPI<Record<string, unknown>>('/listing/parse', {
+    method: 'POST',
+    body: JSON.stringify({ url, platform }),
+  });
+}
+
+export async function createListingTask(
+  source_url: string,
+  platform: 'alibaba' | 'pdd',
+  raw_product_data: string,
+): Promise<ListingCreateTaskResponse> {
+  return fetchAPI<ListingCreateTaskResponse>('/listing/create', {
+    method: 'POST',
+    body: JSON.stringify({ source_url, platform, raw_product_data }),
+  });
+}
+
 // Stores API
 export interface StoreOverview {
   store_id: string;

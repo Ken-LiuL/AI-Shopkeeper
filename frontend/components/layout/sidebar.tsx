@@ -21,6 +21,7 @@ const nav = [
 ];
 
 const stores = [
+  // Demo stores only; real multi-store list should come from backend API.
   { id: '1232550', name: '医疗器械店(旗舰店)' },
   { id: '1221411', name: '医疗器械店(南门店)' },
   { id: '1175006', name: '医疗器械店(北门店)' },
