@@ -5,15 +5,14 @@ on:
     branches: [main]
 
 jobs:
-  # ── 前端部署 → Vercel ─────────────────────────────────────────────────────
+  # ── 前端部署 → Vercel ──────────────────────────────────────────────────
   deploy-frontend:
     name: Deploy Frontend (Vercel)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: "20"
           cache: "npm"
@@ -30,39 +29,49 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: vercel deploy --prod --token $VERCEL_TOKEN --yes
 
-  # ── 后端部署 → VPS (192.144.227.205) ─────────────────────────────────────
+  # ── 后端部署 → VPS（推送模式，无需服务器访问 GitHub） ──────────────────
   deploy-backend:
     name: Deploy Backend (VPS)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy to VPS via SSH
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Package & Push code to VPS
+        run: |
+          tar --exclude='.git' --exclude='node_modules' --exclude='__pycache__' \
+              --exclude='*.pyc' --exclude='.next' \
+              -czf /tmp/aishop-deploy.tar.gz .
+          scp -i ~/.ssh/id_rsa /tmp/aishop-deploy.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/deploy.tar.gz
+
+      - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.VPS_HOST }}
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
-          timeout: 300s
+          timeout: 600s
           script: |
             set -e
-            echo "=== Updating code ==="
-            cd /opt/aishop
-            # 更新代码（重新上传 tar 的方式暂用 git 替代）
-            if [ -d /opt/aishop/repo/.git ]; then
-              cd /opt/aishop/repo && git pull origin main
-            else
-              rm -rf /opt/aishop/repo
-              git clone --depth=1 https://${{ secrets.GH_TOKEN }}@github.com/Ken-LiuL/AI-Shopkeeper.git /opt/aishop/repo
-            fi
+            echo "=== Extracting code ==="
+            rm -rf /opt/aishop/repo
+            mkdir -p /opt/aishop/repo
+            tar -xzf /opt/aishop/deploy.tar.gz -C /opt/aishop/repo
 
             echo "=== Building Docker image ==="
-            cd /opt/aishop
             docker build -t aishop-app:latest /opt/aishop/repo/
 
             echo "=== Restarting app ==="
+            cd /opt/aishop
             docker compose up -d --force-recreate app
 
             echo "=== Health check ==="
             sleep 15
-            curl -sf http://localhost:8000/health && echo "✅ Backend healthy" || (echo "❌ Backend unhealthy" && docker logs aishop-app --tail 20 && exit 1)
+            curl -sf http://localhost:8000/health && echo "✅ Backend healthy" || \
+              (echo "❌ Unhealthy" && docker logs aishop-app --tail 30 && exit 1)
