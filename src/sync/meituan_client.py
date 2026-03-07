@@ -131,9 +131,20 @@ class MeituanBrowserClient:
             headless = os.environ.get("HEADLESS", "false").lower() == "true"
             logger.info("启动 nodriver Chrome (headless=%s)...", headless)
 
+            chrome_path = os.environ.get("CHROME_EXECUTABLE_PATH", None)
             self._browser = await nodriver.start(
-                headless=headless,
-                browser_args=["--no-first-run", "--no-default-browser-check"],
+                headless=True,  # Docker 必须 headless
+                browser_executable_path=chrome_path,
+                browser_args=[
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-software-rasterizer",
+                    "--disable-setuid-sandbox",
+                    "--single-process",
+                ],
             )
 
             page = await self._browser.get(self.base_url)

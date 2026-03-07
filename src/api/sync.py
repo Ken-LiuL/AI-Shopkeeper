@@ -232,35 +232,46 @@ async def sync_status() -> APIResponse[dict[str, Any]]:
 # ── Trigger API ─────────────────────────────────────────────────────────────
 
 
-async def _trigger_sync_all() -> None:
-    """Run all syncers once in background."""
-    try:
-        from src.sync.inventory import InventorySyncer
-        from src.sync.metrics import MetricsSyncer
-        from src.sync.orders import OrderSyncer
-        from src.sync.products import ProductSyncer
-        from src.sync.qnh_client import QNHClient
-        from src.sync.reviews import ReviewSyncer
-        from src.sync.traffic import TrafficSyncer
+WM_POI_ID = os.environ.get("WM_POI_ID", "30850916")
 
-        client = QNHClient()
-        syncers = [
-            ProductSyncer(client, None),
-            OrderSyncer(client, None),
-            InventorySyncer(client, None),
-            MetricsSyncer(client, None),
-            TrafficSyncer(client, None),
-            ReviewSyncer(client, None),
-        ]
-        for s in syncers:
-            try:
-                result = await s.sync()  # ← 修复: 调用 sync() 而非 sync_full()
-                if not result.success:
-                    logger.error("Sync failed for %s: %s", s.name, result.error)
-                else:
-                    logger.info("Sync OK for %s: %d records", s.name, result.records_synced)
-            except Exception:
-                logger.exception("Sync exception for %s", s.name)
+
+async def _trigger_sync_all() -> None:
+    """Run all syncers once in background (yiyao.meituan.com)."""
+    try:
+        from src.sync.meituan_client import MeituanBrowserClient
+        from src.sync.meituan_products import MeituanProductSyncer
+
+        pool = await pg.get_pool()
+        client = MeituanBrowserClient(wm_poi_id=WM_POI_ID)
+
+        # --- 商品同步 ---
+        product_syncer = MeituanProductSyncer(client=client, db_pool=pool, wm_poi_id=WM_POI_ID)
+        try:
+            result = await product_syncer.full_sync()
+            if result.success:
+                logger.info("Sync OK for meituan_products: %d records", result.records_synced)
+            else:
+                logger.error("Sync failed for meituan_products: %s", result.error)
+        except Exception:
+            logger.exception("Sync exception for meituan_products")
+
+        # --- 订单同步 ---
+        try:
+            from src.sync.meituan_orders import MeituanOrderSyncer
+            order_syncer = MeituanOrderSyncer(
+                cookie_path="config/yiyao_cookies.json",
+                wm_poi_id=WM_POI_ID,
+                pool=pool,
+            )
+            order_result = await order_syncer.sync_orders()
+            if order_result.success:
+                logger.info("Sync OK for meituan_orders: %d records", order_result.orders_synced)
+            else:
+                logger.error("Sync failed for meituan_orders: %s", order_result.error)
+        except Exception:
+            logger.exception("Sync exception for meituan_orders")
+
+        await client.close()
     except Exception:
         logger.exception("Failed to trigger sync")
 

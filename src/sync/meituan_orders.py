@@ -64,7 +64,19 @@ class MeituanOrderSyncer:
         browser = None
 
         try:
-            browser = await uc.start()
+            import os as _os
+            _chrome = _os.environ.get("CHROME_EXECUTABLE_PATH", None)
+            browser = await uc.start(
+                headless=True,
+                browser_executable_path=_chrome,
+                browser_args=[
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                    "--single-process",
+                ],
+            )
             page = await browser.get("https://yiyao.meituan.com")
             await asyncio.sleep(2)
             await self._load_cookies(page)
