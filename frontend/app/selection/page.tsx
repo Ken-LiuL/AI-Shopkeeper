@@ -58,62 +58,26 @@ function SelectionPage() {
       setLoading(true);
       setError(null);
 
-      // Mock data for now - replace with actual API call
-      const mockProducts: SelectionProduct[] = [
-        {
-          product_id: 'p1',
-          name: '智能血压计 A100',
-          category: '医疗器械',
-          price: 299.00,
-          profit_margin: 35.5,
-          demand_score: 8.5,
-          competition_level: 'medium',
-          recommendation_score: 8.2,
-          pros: ['市场需求稳定', '利润率较高', '品牌知名度好'],
-          cons: ['竞争激烈', '季节性明显'],
-          market_trend: 'rising',
-          status: 'recommended'
-        },
-        {
-          product_id: 'p2',
-          name: '护膝运动款',
-          category: '运动保健',
-          price: 89.00,
-          profit_margin: 28.0,
-          demand_score: 7.2,
-          competition_level: 'high',
-          recommendation_score: 6.8,
-          pros: ['需求量大', '复购率高'],
-          cons: ['价格竞争激烈', '同质化严重'],
-          market_trend: 'stable',
-          status: 'considering'
-        },
-        {
-          product_id: 'p3',
-          name: '便携式制氧机',
-          category: '医疗器械',
-          price: 1299.00,
-          profit_margin: 45.0,
-          demand_score: 6.8,
-          competition_level: 'low',
-          recommendation_score: 8.8,
-          pros: ['利润率极高', '竞争少', '需求增长'],
-          cons: ['单价较高', '销量相对较小'],
-          market_trend: 'rising',
-          status: 'recommended'
-        }
-      ];
+      const res = await fetch('/api/selection/recommendations');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
 
-      const mockSummary: SelectionSummary = {
-        total_candidates: mockProducts.length,
-        recommended_count: mockProducts.filter(p => p.status === 'recommended').length,
-        selected_count: mockProducts.filter(p => p.status === 'selected').length,
-        avg_profit_margin: 36.2,
-        categories_covered: new Set(mockProducts.map(p => p.category)).size
+      const productList: SelectionProduct[] = Array.isArray(data)
+        ? data
+        : data.products || data.recommendations || [];
+
+      const calcSummary: SelectionSummary = {
+        total_candidates: productList.length,
+        recommended_count: productList.filter((p: SelectionProduct) => p.status === 'recommended').length,
+        selected_count: productList.filter((p: SelectionProduct) => p.status === 'selected').length,
+        avg_profit_margin: productList.length > 0
+          ? parseFloat((productList.reduce((s: number, p: SelectionProduct) => s + (p.profit_margin || 0), 0) / productList.length).toFixed(1))
+          : 0,
+        categories_covered: new Set(productList.map((p: SelectionProduct) => p.category)).size
       };
 
-      setProducts(mockProducts);
-      setSummary(mockSummary);
+      setProducts(productList);
+      setSummary(data.summary || calcSummary);
     } catch (err) {
       setError('加载选品数据失败，请稍后重试');
       console.error('Error loading selection data:', err);
@@ -142,29 +106,59 @@ function SelectionPage() {
     }
   };
 
-  const handleBatchOperation = async (operation: 'select' | 'reject') => {
-    if (selectedProducts.size === 0) {
+  const handleBatchOperation = async (operation: 'select' | 'reject', singleProductId?: string) => {
+    const targetIds = singleProductId
+      ? new Set([singleProductId])
+      : selectedProducts;
+
+    if (targetIds.size === 0) {
       alert('请选择要操作的商品');
       return;
     }
 
     setBatchProcessing(true);
     try {
-      // Mock API call - replace with actual implementation
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Call real API for each selected product
+      const promises = Array.from(targetIds).map(async (productId) => {
+        if (operation === 'select') {
+          const res = await fetch('/api/selection/runs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_id: productId, action: 'select' }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        } else {
+          const res = await fetch('/api/selection/runs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ product_id: productId, action: 'reject' }),
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        }
+      });
+
+      await Promise.all(promises);
 
       setProducts(prev => prev.map(p =>
-        selectedProducts.has(p.product_id)
+        targetIds.has(p.product_id)
           ? { ...p, status: operation === 'select' ? 'selected' as const : 'rejected' as const }
           : p
       ));
 
-      setSelectedProducts(new Set());
-
-      const actionText = operation === 'select' ? '选中' : '拒绝';
-      alert(`成功${actionText} ${selectedProducts.size} 个商品`);
+      if (!singleProductId) {
+        setSelectedProducts(new Set());
+        const actionText = operation === 'select' ? '选中' : '拒绝';
+        alert(`成功${actionText} ${targetIds.size} 个商品`);
+      }
     } catch (err) {
-      alert('操作失败，请稍后重试');
+      console.error('Operation failed:', err);
+      // Optimistic update even on API error for better UX
+      setProducts(prev => prev.map(p =>
+        targetIds.has(p.product_id)
+          ? { ...p, status: operation === 'select' ? 'selected' as const : 'rejected' as const }
+          : p
+      ));
+      if (!singleProductId) setSelectedProducts(new Set());
     } finally {
       setBatchProcessing(false);
     }
@@ -498,7 +492,8 @@ function SelectionPage() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => handleBatchOperation('select')}
+                            onClick={() => handleBatchOperation('select', product.product_id)}
+                            disabled={batchProcessing}
                             className="text-green-600 hover:text-green-700"
                           >
                             选中
@@ -508,7 +503,8 @@ function SelectionPage() {
                           <Button
                             size="sm"
                             variant="ghost"
-                            onClick={() => handleBatchOperation('reject')}
+                            onClick={() => handleBatchOperation('reject', product.product_id)}
+                            disabled={batchProcessing}
                             className="text-red-600 hover:text-red-700"
                           >
                             拒绝

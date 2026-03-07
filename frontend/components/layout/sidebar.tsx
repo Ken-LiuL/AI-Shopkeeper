@@ -14,6 +14,8 @@ const nav = [
   { href: '/reports', label: '报表', icon: '📈' },
   { href: '/chat', label: 'AI 客服', icon: '💬' },
   { href: '/alerts', label: '告警', icon: '🔔' },
+  { href: '/selection', label: '智能选品', icon: '🎯' },
+  { href: '/bundles', label: '智能套餐', icon: '🎁' },
   { href: '/settings/sync', label: '数据同步', icon: '🔄' },
 ];
 

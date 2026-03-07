@@ -1,19 +1,132 @@
 """
-CustomerService Agent 新版实现 - 单次LLM调用模式
+CustomerService Agent 新版实现 - 完整检索管线
 
-砍掉复杂的意图识别+检索+生成流程，改为：
-用户消息 → 商品搜索 → 系统提示词+上下文 → LLM直接生成
+管线：意图识别 → 向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富 → LLM 生成
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from ..llm import MODEL_DEEPSEEK, call_tool, call_vision
 from .product_memory import get_product_memory  # kept for other potential callers
 
 logger = logging.getLogger(__name__)
+
+
+async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
+    """完整检索管线：向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富。
+
+    任何一步失败都有 graceful fallback，不会抛出异常。
+    """
+    try:
+        from src.db import neo4j as neo4j_db
+        from src.skills.embedding import EmbeddingSkill
+        from src.skills.neo4j_skill import Neo4jSkill
+
+        driver = neo4j_db.get_driver()
+        neo4j_skill = Neo4jSkill(driver=driver)
+
+        # ── Step 1: 生成 Embedding ─────────────────────────────────────
+        query_embedding = None
+        try:
+            embedding_skill = EmbeddingSkill()
+            query_embedding = embedding_skill.embed(message)
+            logger.info(f"[CS] Query embedding generated: dim={len(query_embedding)}")
+        except Exception as e:
+            logger.warning(f"[CS] Embedding generation failed (graceful): {e}")
+
+        # ── Step 2: 并发向量检索 + 关键词检索 ─────────────────────────
+        vector_results = []
+        keyword_results = []
+
+        async def _vector_search():
+            if query_embedding:
+                try:
+                    return await neo4j_skill.vector_search(query_embedding, limit=10)
+                except Exception as e:
+                    logger.warning(f"[CS] Vector search failed (graceful): {e}")
+            return []
+
+        async def _keyword_search():
+            try:
+                keywords = [w for w in message.split() if len(w) > 1]
+                if not keywords:
+                    keywords = [message[:10]]
+                return await neo4j_skill.keyword_search(keywords, limit=10)
+            except Exception as e:
+                logger.warning(f"[CS] Keyword search failed (graceful): {e}")
+                return []
+
+        vector_results, keyword_results = await asyncio.gather(
+            _vector_search(), _keyword_search()
+        )
+        logger.info(
+            f"[CS] Retrieval: vector={len(vector_results)}, keyword={len(keyword_results)}"
+        )
+
+        # ── Step 3: RRF 融合 ──────────────────────────────────────────
+        merged_models = neo4j_skill._rrf_merge(vector_results, keyword_results)
+        merged_dicts = [
+            {"id": r.id, "name": r.name, "description": r.description, "score": r.score}
+            for r in merged_models
+        ]
+        logger.info(f"[CS] RRF merged: {len(merged_dicts)} candidates")
+
+        # ── Step 4: Reranker 精排 ────────────────────────────────────
+        reranked: list[dict] = []
+        try:
+            from src.skills.reranker import RerankerSkill
+
+            reranker = RerankerSkill()
+            loop = asyncio.get_event_loop()
+            reranked = await loop.run_in_executor(
+                None,
+                lambda: reranker.rerank(message, merged_dicts, top_k=5),
+            )
+            logger.info(f"[CS] Reranker returned {len(reranked)} results")
+        except Exception as e:
+            logger.warning(f"[CS] Reranker failed (graceful fallback to top-5 RRF): {e}")
+            reranked = merged_dicts[:5]
+
+        if not reranked:
+            reranked = merged_dicts[:5]
+
+        # ── Step 5: GraphRAG 子图丰富 ────────────────────────────────
+        enriched: list[dict] = []
+        for product in reranked:
+            enriched_product = dict(product)
+            try:
+                product_id = enriched_product.get("id")
+                if product_id:
+                    graph_ctx = await neo4j_skill.get_product_graph(product_id)
+                    if graph_ctx:
+                        enriched_product["suitable_for"] = graph_ctx.suitable_for or []
+                        enriched_product["contraindicated_for"] = [
+                            {"name": c.get("name", ""), "reason": c.get("reason", "")}
+                            if isinstance(c, dict) else {"name": str(c)}
+                            for c in (graph_ctx.contraindicated_for or [])
+                        ]
+                        enriched_product["related_products"] = [
+                            {"id": r.get("id", ""), "name": r.get("name", "")}
+                            if isinstance(r, dict) else {"name": str(r)}
+                            for r in (graph_ctx.related_products or [])
+                        ]
+                        enriched_product["scenarios"] = graph_ctx.scenarios or []
+            except Exception as e:
+                logger.warning(
+                    f"[CS] GraphRAG enrichment failed for {enriched_product.get('id')} (graceful): {e}"
+                )
+            enriched.append(enriched_product)
+
+        logger.info(f"[CS] Pipeline complete: {len(enriched)} enriched products")
+        return enriched
+
+    except Exception as e:
+        logger.error(f"[CS] Full pipeline search failed: {e}", exc_info=True)
+        return []
 
 
 async def load_knowledge_base(pool) -> list[dict]:
@@ -184,10 +297,13 @@ async def chat(
 
         knowledge_base = _knowledge_base_cache or []
 
-        # 2. 搜索相关商品
+        # 2. 搜索相关商品（完整管线：Hybrid Search → Reranker → GraphRAG）
         product_results = []
         if pool:
-            product_results = await search_products_with_embedding(message, pool)
+            product_results = await _full_pipeline_search(message, pool)
+            if not product_results:
+                # Fallback：降级到纯向量检索
+                product_results = await search_products_with_embedding(message, pool)
 
         # 2.5 获取实时经营数据（用于回答业务问题）
         business_context = {}

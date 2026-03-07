@@ -301,20 +301,46 @@ def build_optimized_user_message_with_context(
                 history_lines.append(f"{role}：{msg.get('content', '')}")
             parts.append("## 对话历史\n" + "\n".join(history_lines))
 
-    # 商品搜索结果（优化版）
+    # 商品搜索结果（优化版，含 GraphRAG 子图信息）
     if product_results:
         product_lines = []
-        for i, p in enumerate(product_results[:3], 1):  # 只显示前3个最相关
+        for i, p in enumerate(product_results[:5], 1):  # 最多显示5个（已精排）
             name = p.get("name", "")
-            desc = p.get("description", p.get("name", ""))
             price = p.get("retail_price", "")
             stock = p.get("stock", "")
             sales = p.get("monthly_sales", "")
-            line = f"{i}. {name} - ¥{price}"
-            if stock: line += f" (库存{stock})"
-            if sales: line += f" (月销{sales})"
+            line = f"{i}. {name}"
+            if price:
+                line += f" - ¥{price}"
+            if stock:
+                line += f" (库存{stock})"
+            if sales:
+                line += f" (月销{sales})"
+            # GraphRAG 子图字段
+            suitable_for = p.get("suitable_for", [])
+            if suitable_for:
+                suitable_str = "、".join(str(s) for s in suitable_for[:4])
+                line += f"\n   适用人群: {suitable_str}"
+            contraindicated = p.get("contraindicated_for", [])
+            if contraindicated:
+                contra_names = []
+                for c in contraindicated[:2]:
+                    if isinstance(c, dict):
+                        n = c.get("name", "")
+                        r = c.get("reason", "")
+                        contra_names.append(f"{n}({r})" if r else n)
+                    else:
+                        contra_names.append(str(c))
+                line += f"\n   禁忌人群: {'、'.join(contra_names)}"
+            related = p.get("related_products", [])
+            if related:
+                rel_names = [
+                    r.get("name", str(r)) if isinstance(r, dict) else str(r)
+                    for r in related[:2]
+                ]
+                line += f"\n   关联推荐: {'、'.join(rel_names)}"
             product_lines.append(line)
-        parts.append("## 店内相关商品\n" + "\n".join(product_lines))
+        parts.append("## 店内相关商品（含适用人群/禁忌/关联商品）\n" + "\n".join(product_lines))
 
     # 对话状态上下文
     if conversation_context:
