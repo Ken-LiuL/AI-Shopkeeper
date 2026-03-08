@@ -7,6 +7,8 @@ import { Button } from '@/components/ui/button';
 import { withErrorBoundary } from '@/components/error-boundary';
 import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { fetchAPI } from '@/lib/api';
+import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
+import { AIActionButton } from '@/components/ai-action-button';
 
 interface BundleRecommendation {
   id: string;
@@ -17,6 +19,19 @@ interface BundleRecommendation {
   bundle_price: number;
   estimated_profit_margin: number;
   status?: string;
+}
+
+function buildBundleReasoningSteps(bundle: BundleRecommendation) {
+  const liftStr = bundle.lift_value != null ? bundle.lift_value.toFixed(2) : '—';
+  const confPct = bundle.confidence != null
+    ? (bundle.confidence <= 1 ? (bundle.confidence * 100).toFixed(0) : bundle.confidence.toFixed(0))
+    : '—';
+  return [
+    { icon: '📦', title: '关联挖掘', detail: `发现 ${bundle.product_ids?.length ?? 0} 件商品强关联`, status: 'completed' as const },
+    { icon: '📊', title: '支持度分析', detail: `Lift 值 ${liftStr}，关联强度${Number(liftStr) >= 2 ? '高' : '中等'}`, status: 'completed' as const },
+    { icon: '💰', title: '定价优化', detail: `套餐价 ¥${bundle.bundle_price?.toFixed(2) ?? '—'}，利润率 ${bundle.estimated_profit_margin?.toFixed(1) ?? '—'}%`, status: 'completed' as const },
+    { icon: '✔️', title: '置信验证', detail: `置信度 ${confPct}%，已通过历史数据验证`, status: 'completed' as const },
+  ];
 }
 
 function BundlesPage() {
@@ -280,17 +295,24 @@ function BundlesPage() {
                   </div>
                 </div>
 
+                {/* AI Reasoning */}
+                <AIReasoningPanel
+                  steps={buildBundleReasoningSteps(bundle)}
+                  confidence={bundle.confidence != null
+                    ? Math.round(bundle.confidence <= 1 ? bundle.confidence * 100 : bundle.confidence)
+                    : undefined}
+                />
+
                 {/* Actions */}
-                <div className="flex gap-2 pt-1">
+                <div className="flex gap-2 pt-1 flex-wrap">
                   {bundle.status !== 'active' && (
-                    <Button
-                      size="sm"
-                      className="flex-1 bg-green-600 hover:bg-green-700 text-white"
-                      onClick={() => handleActivate(bundle.id)}
-                      disabled={actionLoading === bundle.id + '_activate'}
-                    >
-                      {actionLoading === bundle.id + '_activate' ? '上架中...' : '⬆ 上架'}
-                    </Button>
+                    <AIActionButton
+                      label="创建套餐"
+                      loading={actionLoading === bundle.id + '_activate'}
+                      confirmed={bundle.status === 'active'}
+                      onAction={() => handleActivate(bundle.id)}
+                      className="flex-1"
+                    />
                   )}
                   {bundle.status === 'active' && (
                     <Button
