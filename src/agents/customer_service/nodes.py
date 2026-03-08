@@ -10,10 +10,63 @@ import asyncio
 import json
 import logging
 
+import re
+
 from ..llm import MODEL_DEEPSEEK, call_tool, call_tool_with_reflection, call_vision
 from .product_memory import get_product_memory  # kept for other potential callers
 
 logger = logging.getLogger(__name__)
+
+
+async def _summarize_conversation(messages: list[dict]) -> str:
+    """使用 LLM 总结对话历史，避免 context 过长
+
+    Args:
+        messages: 要总结的消息列表（role/content 格式）
+
+    Returns:
+        对话摘要字符串
+    """
+    if not messages:
+        return ""
+
+    try:
+        dialogue_text = "\n".join(
+            f"{'用户' if m.get('role') == 'user' else '客服'}：{m.get('content', '')}"
+            for m in messages
+        )
+        summary_prompt = (
+            f"请用100字以内总结以下客服对话的关键信息（用户需求、已处理事项、待解决问题）：\n\n{dialogue_text}"
+        )
+        result = await call_tool(
+            prompt=summary_prompt,
+            tool={
+                "name": "summarize",
+                "description": "输出对话摘要",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "summary": {"type": "string", "description": "对话摘要（100字以内）"},
+                    },
+                    "required": ["summary"],
+                },
+            },
+            model=MODEL_DEEPSEEK,
+            system="你是一个对话摘要助手，请简洁提炼对话要点。",
+            trace_name="conversation_summary",
+        )
+        summary = result.get("summary", "")
+        logger.info(f"[CS] Conversation summarized: {len(messages)} msgs → {len(summary)} chars")
+        return summary
+    except Exception as e:
+        logger.warning(f"[CS] Conversation summarization failed (graceful): {e}")
+        # Fallback: 简单截取最早几条的文本
+        fallback_lines = []
+        for m in messages[:4]:
+            role = "用户" if m.get("role") == "user" else "客服"
+            content = (m.get("content") or "")[:50]
+            fallback_lines.append(f"{role}：{content}…")
+        return "【早期对话摘要】\n" + "\n".join(fallback_lines)
 
 
 async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
@@ -515,6 +568,17 @@ async def chat(
             _cache_loaded = True
 
         knowledge_base = _knowledge_base_cache or []
+
+        # 1.5 对话摘要：超过6轮（12条）时压缩早期历史
+        effective_history = conversation_history or []
+        conversation_summary = ""
+        if effective_history and len(effective_history) > 12:
+            history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
+            conversation_summary = await _summarize_conversation(history_to_summarize)
+            effective_history = effective_history[-6:]
+            logger.info(f"[CS] Long conversation compressed: kept 6 msgs + summary")
+        conversation_history = effective_history
+
         faq_context = []
         if pool:
             # FAQ 快速匹配：命中后仅作为上下文参考，不直接返回给用户
@@ -572,6 +636,27 @@ async def chat(
             except Exception as e:
                 logger.warning(f"Failed to load business context: {e}")
 
+        # 2.7 订单上下文 + 客户画像
+        order_context_str = ""
+        customer_profile_str = ""
+        if pool:
+            try:
+                from .order_context import build_order_context_str, has_order_mention
+                if has_order_mention(message):
+                    order_context_str = await build_order_context_str(
+                        pool=pool,
+                        message=message,
+                    )
+            except Exception as e:
+                logger.debug(f"[CS] Order context load failed (non-critical): {e}")
+
+            try:
+                from .customer_profile import build_profile_context_str, get_customer_profile
+                _profile = await get_customer_profile(pool, session_id=session_id)
+                customer_profile_str = build_profile_context_str(_profile)
+            except Exception as e:
+                logger.debug(f"[CS] Customer profile load failed (non-critical): {e}")
+
         # 2.6 新增补充上下文：售后政策 + 商品评价情感
         policy_context = []
         review_sentiment_context = []
@@ -590,7 +675,9 @@ async def chat(
             )
 
             system_prompt = build_optimized_system_prompt(
-                knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
+                knowledge_base=knowledge_base,
+                after_sales_scripts=AFTER_SALES_SCRIPTS,
+                customer_profile_str=customer_profile_str if customer_profile_str else None,
             )
             use_optimized = True
             logger.info("Using optimized prompts for better quality")
@@ -684,8 +771,21 @@ async def chat(
                 conversation_context=conversation_context,
             )
 
-        # 5.5 把 FAQ / 售后政策 / 评价情感作为补充上下文注入给 LLM
+        # 5.5 把 FAQ / 售后政策 / 评价情感 / 订单上下文 / 客户画像 / 对话摘要作为补充上下文注入给 LLM
         extra_sections = []
+
+        # 对话摘要（最优先注入，避免遗失上文）
+        if conversation_summary:
+            extra_sections.append(f"【早期对话摘要（之前轮次要点）】\n{conversation_summary}")
+
+        # 客户画像（让 AI 识别 VIP 并差异化服务）
+        if customer_profile_str:
+            extra_sections.append(customer_profile_str)
+
+        # 订单上下文（直接注入相关订单数据）
+        if order_context_str:
+            extra_sections.append(order_context_str)
+
         if faq_context:
             extra_sections.append(
                 "【FAQ 匹配参考（仅参考，不要逐字照搬）】\n"
@@ -730,6 +830,30 @@ async def chat(
                             "greeting",
                             "other",
                         ],
+                    },
+                    "action": {
+                        "type": "object",
+                        "description": "AI 建议执行的操作（可选）",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": [
+                                    "none",
+                                    "check_order",
+                                    "check_logistics",
+                                    "initiate_refund",
+                                    "initiate_exchange",
+                                    "apply_coupon",
+                                    "transfer_human",
+                                ],
+                                "description": "操作类型",
+                            },
+                            "order_id": {"type": "string", "description": "相关订单号"},
+                            "reason": {"type": "string", "description": "操作原因"},
+                            "amount": {"type": "number", "description": "退款金额（如适用）"},
+                            "urgency": {"type": "string", "enum": ["normal", "urgent"]},
+                        },
+                        "required": ["type"],
                     },
                 },
                 "required": ["reply_text", "confidence", "requires_human_review"],
@@ -789,6 +913,11 @@ async def chat(
         confidence = result.get("confidence", 0.8)
         needs_human = result.get("requires_human_review", False)
         intent = result.get("intent", "other")
+        suggested_action = result.get("action", {"type": "none"})
+
+        # 如果 action 要求转人工，自动设置 needs_human
+        if isinstance(suggested_action, dict) and suggested_action.get("type") == "transfer_human":
+            needs_human = True
 
         # 事实核查（仅售后/投诉场景）
         if intent in ("after_sales", "complaint") and pool:
@@ -893,6 +1022,7 @@ async def chat(
             "intent": intent,
             "sources": product_results,
             "needs_human": needs_human,
+            "action": suggested_action,
         }
 
     except Exception as e:
