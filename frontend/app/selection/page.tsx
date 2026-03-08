@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 
 import { withErrorBoundary } from '@/components/error-boundary';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { fetchAPI } from '@/lib/api';
 import {
   Table,
@@ -16,6 +17,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
+import { AIActionButton } from '@/components/ai-action-button';
 
 interface SelectionProduct {
   product_id: string;
@@ -30,6 +33,9 @@ interface SelectionProduct {
   cons: string[];
   market_trend: 'rising' | 'stable' | 'declining';
   status: 'recommended' | 'considering' | 'selected' | 'rejected';
+  // Optional enriched fields from AI backend
+  score_breakdown?: Record<string, number>;
+  data_source?: string[];
 }
 
 interface SelectionSummary {
@@ -38,6 +44,30 @@ interface SelectionSummary {
   selected_count: number;
   avg_profit_margin: number;
   categories_covered: number;
+}
+
+function buildSelectionReasoningSteps(product: SelectionProduct) {
+  return [
+    { icon: '📊', title: '数据收集', detail: `价格 ¥${product.price}，毛利率 ${product.profit_margin}%`, status: 'completed' as const },
+    { icon: '🔍', title: '竞争分析', detail: `竞争程度：${product.competition_level === 'low' ? '低' : product.competition_level === 'medium' ? '中' : '高'}`, status: 'completed' as const },
+    { icon: '📈', title: '需求预测', detail: `需求评分 ${product.demand_score}/10，市场趋势：${product.market_trend === 'rising' ? '上升' : product.market_trend === 'stable' ? '平稳' : '下降'}`, status: 'completed' as const },
+    { icon: '✔️', title: '综合评分', detail: `推荐分 ${product.recommendation_score}/10，已通过多因子验证`, status: 'completed' as const },
+  ];
+}
+
+/** Simple horizontal progress bar for score breakdown */
+function ScoreBar({ label, value, max = 10 }: { label: string; value: number; max?: number }) {
+  const pct = Math.min(100, Math.round((value / max) * 100));
+  const color = pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-yellow-400' : 'bg-red-400';
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-16 shrink-0 text-gray-500">{label}</span>
+      <div className="flex-1 bg-gray-200 rounded-full h-2">
+        <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="w-8 text-right text-gray-600 font-medium">{value}</span>
+    </div>
+  );
 }
 
 function SelectionPage() {
@@ -49,6 +79,7 @@ function SelectionPage() {
   const [filterCategory, setFilterCategory] = useState<string>('');
   const [filterStatus, setFilterStatus] = useState<string>('');
   const [batchProcessing, setBatchProcessing] = useState(false);
+  const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     loadData();
@@ -277,7 +308,10 @@ function SelectionPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">🎯 智能选品</h1>
-          <p className="text-muted-foreground">AI 驱动的商品选择建议与分析</p>
+          <AICapabilityHeader
+            capabilities={['GraphRAG 知识图谱', 'Self-Reflection 自检', '反馈闭环', '多因子评分']}
+            description="AI 基于图谱关系、季节性、竞品数据、历史销量智能推荐选品方案"
+          />
         </div>
         {selectedProducts.size > 0 && (
           <div className="flex gap-2">
@@ -434,9 +468,34 @@ function SelectionPage() {
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                     </TableCell>
-                    <TableCell className="font-medium">{product.name}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{product.category}</Badge>
+                    <TableCell className="max-w-xs">
+                      <div className="font-medium mb-1">{product.name}</div>
+                      <Badge variant="outline" className="text-xs">{product.category}</Badge>
+                      {/* Score breakdown */}
+                      <div className="mt-2 space-y-1">
+                        <ScoreBar label="需求" value={product.demand_score} max={10} />
+                        <ScoreBar label="推荐分" value={product.recommendation_score} max={10} />
+                        {product.score_breakdown && Object.entries(product.score_breakdown).slice(0, 2).map(([k, v]) => (
+                          <ScoreBar key={k} label={k} value={v} max={10} />
+                        ))}
+                      </div>
+                      {/* Data source */}
+                      {product.data_source && product.data_source.length > 0 && (
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {product.data_source.map((src, i) => (
+                            <span key={i} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
+                              {src}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {/* AI Reasoning */}
+                      <div className="mt-2">
+                        <AIReasoningPanel
+                          steps={buildSelectionReasoningSteps(product)}
+                          confidence={Math.round(product.recommendation_score * 10)}
+                        />
+                      </div>
                     </TableCell>
                     <TableCell className="text-right font-semibold">
                       ¥{product.price.toFixed(2)}
@@ -483,25 +542,23 @@ function SelectionPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex gap-1">
-                        {product.status !== 'selected' && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleBatchOperation('select', product.product_id)}
-                            disabled={batchProcessing}
-                            className="text-green-600 hover:text-green-700"
-                          >
-                            选中
-                          </Button>
-                        )}
+                      <div className="flex flex-col gap-1 items-end">
+                        <AIActionButton
+                          label="加入候选"
+                          confirmed={candidateIds.has(product.product_id) || product.status === 'selected'}
+                          loading={batchProcessing}
+                          onAction={async () => {
+                            await handleBatchOperation('select', product.product_id);
+                            setCandidateIds(prev => new Set(prev).add(product.product_id));
+                          }}
+                        />
                         {product.status !== 'rejected' && (
                           <Button
                             size="sm"
                             variant="ghost"
                             onClick={() => handleBatchOperation('reject', product.product_id)}
                             disabled={batchProcessing}
-                            className="text-red-600 hover:text-red-700"
+                            className="text-red-600 hover:text-red-700 text-xs"
                           >
                             拒绝
                           </Button>

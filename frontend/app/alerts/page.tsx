@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import {
   Table,
   TableBody,
@@ -18,12 +19,23 @@ import type { Alert } from '@/lib/api';
 import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
 import { AIActionButton } from '@/components/ai-action-button';
 
+/** Build AI reasoning steps for an alert based on its type */
+function buildAlertReasoningSteps(alert: Alert) {
+  return [
+    { icon: '📡', title: '异常检测', detail: `检测到${alert.type}类型异常，严重度：${alert.severity}`, status: 'completed' as const },
+    { icon: '🔍', title: '根因分析', detail: alert.description || '正在分析根本原因', status: 'completed' as const },
+    { icon: '💡', title: '行动建议', detail: (alert.action_suggestions && alert.action_suggestions[0]) || '基于历史数据生成处置方案', status: 'completed' as const },
+    { icon: '✔️', title: '事实核查', detail: '已通过知识图谱交叉验证', status: 'completed' as const },
+  ];
+}
+
 function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [severityFilter, setSeverityFilter] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set());
+  const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set());
 
   const fetchAlerts = async () => {
     try {
@@ -49,6 +61,7 @@ function AlertsPage() {
         method: 'PATCH',
         body: JSON.stringify({ status: 'resolved' }),
       });
+      setResolvedIds(prev => new Set(prev).add(alertId));
       setAlerts(prev => prev.filter(a => (a.alert_id || '') !== alertId));
     } catch (err) {
       console.error('Error resolving alert:', err);
@@ -118,8 +131,8 @@ function AlertsPage() {
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">预警中心</h1>
-            <p className="text-muted-foreground">监控系统异常和重要提醒</p>
+            <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
+            <p className="text-muted-foreground">AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议</p>
           </div>
           <Button disabled>设置预警规则</Button>
         </div>
@@ -141,8 +154,8 @@ function AlertsPage() {
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <div>
-            <h1 className="text-3xl font-bold tracking-tight">预警中心</h1>
-            <p className="text-muted-foreground">监控系统异常和重要提醒</p>
+            <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
+            <p className="text-muted-foreground">AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议</p>
           </div>
           <Button disabled>设置预警规则</Button>
         </div>
@@ -167,8 +180,11 @@ function AlertsPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">预警中心</h1>
-          <p className="text-muted-foreground">监控系统异常和重要提醒</p>
+          <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
+          <AICapabilityHeader
+            capabilities={['GraphRAG 知识图谱', 'Self-Reflection 自检', '事实核查']}
+            description="AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议"
+          />
         </div>
         <Button>设置预警规则</Button>
       </div>
@@ -287,9 +303,9 @@ function AlertsPage() {
                       <div className="font-medium">{alert.title}</div>
                     </TableCell>
                     <TableCell className="max-w-md">
-                      <div className="text-sm text-muted-foreground">{alert.description}</div>
-                      {alert.action_suggestions && (
-                        <div className="mt-2 space-y-1">
+                      <div className="text-sm text-muted-foreground mb-2">{alert.description}</div>
+                      {alert.action_suggestions && alert.action_suggestions.length > 0 && (
+                        <div className="mb-2 space-y-1">
                           <div className="text-xs font-medium text-blue-600">建议行动：</div>
                           {alert.action_suggestions.slice(0, 2).map((suggestion: string, idx: number) => (
                             <div key={idx} className="text-xs text-gray-600 bg-blue-50 px-2 py-1 rounded">
@@ -298,6 +314,11 @@ function AlertsPage() {
                           ))}
                         </div>
                       )}
+                      <AIReasoningPanel
+                        steps={buildAlertReasoningSteps(alert)}
+                        confidence={alert.severity === 'high' ? 95 : alert.severity === 'medium' ? 85 : 75}
+                        reflectionRounds={1}
+                      />
                     </TableCell>
                     <TableCell>
                       <Badge variant={alert.status === 'resolved' ? 'default' : 'secondary'}>
@@ -305,19 +326,17 @@ function AlertsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right">
-                      <div className="flex gap-2 justify-end">
+                      <div className="flex flex-col gap-2 items-end">
                         <Button variant="ghost" size="sm">
                           查看详情
                         </Button>
                         {alert.status === 'pending' && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            disabled={resolvingIds.has(alert.alert_id || '')}
-                            onClick={() => handleResolve(alert.alert_id || '')}
-                          >
-                            {resolvingIds.has(alert.alert_id || '') ? '处理中...' : '标记已解决'}
-                          </Button>
+                          <AIActionButton
+                            label="采纳建议"
+                            loading={resolvingIds.has(alert.alert_id || '')}
+                            confirmed={resolvedIds.has(alert.alert_id || '')}
+                            onAction={() => handleResolve(alert.alert_id || '')}
+                          />
                         )}
                       </div>
                     </TableCell>

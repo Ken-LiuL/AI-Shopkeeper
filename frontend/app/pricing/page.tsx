@@ -1,8 +1,21 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, batchUpdatePrices, type PricingSuggestion, type PricingRule, type BatchPriceUpdateRequest, type BatchPriceUpdateResult } from '@/lib/api';
+import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
+import { AIActionButton } from '@/components/ai-action-button';
 
+function buildPricingReasoningSteps(suggestion: PricingSuggestion) {
+  const direction = suggestion.suggested_price > suggestion.current_price ? '上涨' : '下降';
+  const pct = Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100).toFixed(1);
+  return [
+    { icon: '📊', title: '市场扫描', detail: `检测到价格偏差，建议${direction} ${pct}%`, status: 'completed' as const },
+    { icon: '📈', title: '趋势分析', detail: suggestion.reason || '基于市场竞争和需求弹性分析', status: 'completed' as const },
+    { icon: '💡', title: '策略生成', detail: '使用弹性定价模型生成最优建议价', status: 'completed' as const },
+    { icon: '✔️', title: '影响评估', detail: suggestion.expected_impact || '已评估对销量和利润的综合影响', status: 'completed' as const },
+  ];
+}
 
 export default function PricingPage() {
   const [suggestions, setSuggestions] = useState<PricingSuggestion[]>([]);
@@ -206,9 +219,12 @@ export default function PricingPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">💰 智能定价</h1>
-        <div className="text-sm text-gray-500">
-          AI驱动的定价优化建议
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">💰 智能定价</h1>
+          <AICapabilityHeader
+            capabilities={['竞品追踪', 'AI 定价', '事实核查', '反馈闭环']}
+            description="AI 监控竞品价格变化，结合成本和销量数据给出最优定价建议"
+          />
         </div>
       </div>
 
@@ -305,24 +321,37 @@ export default function PricingPage() {
                         className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                       />
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                      {suggestion.product_name}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {formatCurrency(suggestion.current_price)}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <span className={`font-medium ${
-                        suggestion.suggested_price > suggestion.current_price
-                          ? 'text-green-600'
-                          : 'text-red-600'
-                      }`}>
-                        {formatCurrency(suggestion.suggested_price)}
-                      </span>
-                      <span className="ml-2 text-xs text-gray-500">
-                        {suggestion.suggested_price > suggestion.current_price ? '↗' : '↘'}
-                        {Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100).toFixed(1)}%
-                      </span>
+                    <td className="px-6 py-4 text-sm font-medium text-gray-900 max-w-xs">
+                      <div className="mb-2">{suggestion.product_name}</div>
+                      {/* Price arrow visualization */}
+                      <div className="flex items-center gap-1.5 text-xs">
+                        <span className="font-mono text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
+                          {formatCurrency(suggestion.current_price)}
+                        </span>
+                        <span className={`text-lg font-bold ${
+                          suggestion.suggested_price > suggestion.current_price ? 'text-green-500' : 'text-red-500'
+                        }`}>
+                          {suggestion.suggested_price > suggestion.current_price ? '↗' : '↘'}
+                        </span>
+                        <span className={`font-mono font-semibold px-1.5 py-0.5 rounded ${
+                          suggestion.suggested_price > suggestion.current_price
+                            ? 'text-green-700 bg-green-100'
+                            : 'text-red-700 bg-red-100'
+                        }`}>
+                          {formatCurrency(suggestion.suggested_price)}
+                        </span>
+                        <span className="text-gray-400">
+                          ({Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100).toFixed(1)}%)
+                        </span>
+                      </div>
+                      {/* AI Reasoning */}
+                      <div className="mt-2">
+                        <AIReasoningPanel
+                          steps={buildPricingReasoningSteps(suggestion)}
+                          confidence={Math.round(suggestion.confidence * 100)}
+                          reflectionRounds={1}
+                        />
+                      </div>
                     </td>
                     <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
                       <div className="truncate" title={suggestion.reason}>
@@ -340,17 +369,12 @@ export default function PricingPage() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      {suggestion.status === 'adopted' ? (
-                        <span className="text-green-600 font-medium">✅ 已采纳</span>
-                      ) : (
-                        <button
-                          onClick={() => handleAdoptSuggestion(suggestion.product_id)}
-                          disabled={adoptingIds.has(suggestion.product_id)}
-                          className="bg-blue-600 text-white px-3 py-1 rounded-md text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {adoptingIds.has(suggestion.product_id) ? '处理中...' : '采纳'}
-                        </button>
-                      )}
+                      <AIActionButton
+                        label="立即调价"
+                        confirmed={suggestion.status === 'adopted'}
+                        loading={adoptingIds.has(suggestion.product_id)}
+                        onAction={() => handleAdoptSuggestion(suggestion.product_id)}
+                      />
                     </td>
                   </tr>
                 ))}

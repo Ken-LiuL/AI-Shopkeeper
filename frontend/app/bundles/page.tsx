@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { withErrorBoundary } from '@/components/error-boundary';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { fetchAPI } from '@/lib/api';
 
 interface BundleRecommendation {
@@ -103,7 +104,7 @@ function BundlesPage() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-            <p className="text-muted-foreground">基于关联规则的商品套餐推荐</p>
+            <p className="text-muted-foreground">AI 分析商品关联购买数据，自动发现套餐机会并优化定价</p>
           </div>
           <Button disabled>生成套餐建议</Button>
         </div>
@@ -126,7 +127,7 @@ function BundlesPage() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-            <p className="text-muted-foreground">基于关联规则的商品套餐推荐</p>
+            <p className="text-muted-foreground">AI 分析商品关联购买数据，自动发现套餐机会并优化定价</p>
           </div>
           <Button onClick={handleGenerate} disabled={generating}>
             {generating ? '生成中...' : '生成套餐建议'}
@@ -150,7 +151,10 @@ function BundlesPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-          <p className="text-muted-foreground">基于关联规则的商品套餐推荐</p>
+          <AICapabilityHeader
+            capabilities={['关联规则挖掘', 'GraphRAG 知识图谱', 'Self-Reflection 自检', '事实核查']}
+            description="AI 分析商品关联购买数据，自动发现套餐机会并优化定价"
+          />
         </div>
         <Button onClick={handleGenerate} disabled={generating}>
           {generating ? (

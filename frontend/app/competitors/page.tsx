@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 
 import {
   Table,
@@ -62,8 +63,8 @@ export default function CompetitorsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">竞品监控</h1>
-          <p className="text-muted-foreground">实时监控竞争对手价格和产品策略</p>
+          <h1 className="text-3xl font-bold tracking-tight">🔍 竞品监控</h1>
+          <p className="text-muted-foreground">自动追踪竞品价格和活动变化，AI 分析影响并推荐应对策略</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           {[1, 2].map((i) => (
@@ -82,8 +83,8 @@ export default function CompetitorsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">竞品监控</h1>
-          <p className="text-muted-foreground">实时监控竞争对手价格和产品策略</p>
+          <h1 className="text-3xl font-bold tracking-tight">🔍 竞品监控</h1>
+          <p className="text-muted-foreground">自动追踪竞品价格和活动变化，AI 分析影响并推荐应对策略</p>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
@@ -105,8 +106,11 @@ export default function CompetitorsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">竞品监控</h1>
-        <p className="text-muted-foreground">实时监控竞争对手价格和产品策略</p>
+        <h1 className="text-3xl font-bold tracking-tight">🔍 竞品监控</h1>
+        <AICapabilityHeader
+          capabilities={['实时监控', '价格追踪', 'AI 分析']}
+          description="自动追踪竞品价格和活动变化，AI 分析影响并推荐应对策略"
+        />
       </div>
 
       {/* Overview Stats */}

@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   BarChart, Bar, PieChart, Pie, Cell
@@ -117,8 +118,8 @@ export default function AnalyticsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">数据分析</h1>
-          <p className="text-muted-foreground">深入了解您的业务表现和趋势</p>
+          <h1 className="text-3xl font-bold tracking-tight">📊 数据分析</h1>
+          <p className="text-muted-foreground">AI 深度分析经营数据，发现隐藏问题和增长机会</p>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {[1, 2, 3, 4].map((i) => (
@@ -137,8 +138,8 @@ export default function AnalyticsPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">数据分析</h1>
-          <p className="text-muted-foreground">深入了解您的业务表现和趋势</p>
+          <h1 className="text-3xl font-bold tracking-tight">📊 数据分析</h1>
+          <p className="text-muted-foreground">AI 深度分析经营数据，发现隐藏问题和增长机会</p>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
@@ -160,8 +161,11 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">数据分析</h1>
-        <p className="text-muted-foreground">深入了解您的业务表现和趋势</p>
+        <h1 className="text-3xl font-bold tracking-tight">📊 数据分析</h1>
+        <AICapabilityHeader
+          capabilities={['AI 经营顾问', 'GraphRAG 知识图谱', 'Self-Reflection 自检']}
+          description="AI 深度分析经营数据，发现隐藏问题和增长机会"
+        />
       </div>
 
       {/* Sales Trend Chart */}

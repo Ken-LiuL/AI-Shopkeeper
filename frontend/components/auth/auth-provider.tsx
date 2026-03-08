@@ -36,6 +36,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         <div className="p-6 lg:p-8 pt-16 md:pt-6">{children}</div>
       </main>
       <OnboardingGuide />
+      <AIAssistantFAB />
     </div>
   );
 }

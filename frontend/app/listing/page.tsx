@@ -9,6 +9,7 @@ import {
   type ListingHistoryItem,
 } from '@/lib/api';
 import { Badge } from '@/components/ui/badge';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -230,7 +231,10 @@ function ListingPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-3xl font-bold tracking-tight">📤 智能上架</CardTitle>
-          <p className="text-muted-foreground">输入 1688 / 拼多多商品链接，自动解析并创建上架任务</p>
+          <AICapabilityHeader
+            capabilities={['AI 文案生成', '合规检查', 'Self-Reflection 自检']}
+            description="AI 自动解析货源商品，生成符合平台规范的上架信息"
+          />
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-col gap-3 md:flex-row">

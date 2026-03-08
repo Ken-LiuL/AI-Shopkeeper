@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
+import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import { withErrorBoundary } from '@/components/error-boundary';
 import { fetchAPI, sendChatMessage } from '@/lib/api';
 import type { ChatMessage, ChatResponse } from '@/lib/api';
@@ -226,7 +227,10 @@ function ChatPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">AI 客服</h1>
-          <p className="text-muted-foreground">智能助手帮您解答各种业务问题</p>
+          <AICapabilityHeader
+            capabilities={['GraphRAG 知识图谱', '情感检测', '意图识别', '决策记忆']}
+            description="AI 客服基于商品知识图谱回复，自动检测用户情绪，复杂问题转人工"
+          />
         </div>
       </div>
 
