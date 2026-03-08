@@ -217,6 +217,212 @@ async def search_products_with_embedding(query: str, pool) -> list[dict]:
         return []
 
 
+async def _search_auto_faq_context(query: str, pool, limit: int = 3) -> list[dict]:
+    """FAQ 快速匹配：优先用问题模糊匹配，结果仅作为 LLM 上下文。"""
+    if not pool:
+        return []
+
+    q = (query or "").strip()
+    if not q:
+        return []
+
+    patterns = [f"%{q}%"]
+    patterns.extend([f"%{kw}%" for kw in q.split() if len(kw.strip()) >= 2][:5])
+
+    matched: list[dict] = []
+    seen_ids: set[int] = set()
+    seen_questions: set[str] = set()
+
+    try:
+        for pattern in patterns:
+            if len(matched) >= limit:
+                break
+            rows = await pool.fetch(
+                """
+                SELECT id, question, answer_template, keywords
+                FROM auto_faq
+                WHERE question ILIKE $1
+                ORDER BY id DESC
+                LIMIT $2
+                """,
+                pattern,
+                limit,
+            )
+            for row in rows:
+                row_id = row.get("id")
+                question = (row.get("question") or "").strip()
+                if row_id is not None and row_id in seen_ids:
+                    continue
+                if question and question in seen_questions:
+                    continue
+                if row_id is not None:
+                    seen_ids.add(row_id)
+                if question:
+                    seen_questions.add(question)
+                matched.append(
+                    {
+                        "id": row_id,
+                        "question": question,
+                        "answer_template": row.get("answer_template") or "",
+                        "keywords": row.get("keywords") or [],
+                    }
+                )
+                if len(matched) >= limit:
+                    break
+        logger.info(f"[CS] FAQ context matched: {len(matched)}")
+    except Exception as e:
+        logger.warning(f"[CS] Failed to load auto_faq context (graceful): {e}")
+
+    return matched[:limit]
+
+
+async def _load_policy_documents_context(pool, limit: int = 5) -> list[dict]:
+    """加载售后政策文档，作为回复前补充上下文。"""
+    if not pool:
+        return []
+
+    try:
+        rows = await pool.fetch("SELECT * FROM policy_documents LIMIT $1", limit)
+        docs: list[dict] = []
+        for row in rows:
+            data = dict(row)
+            title = (
+                data.get("title")
+                or data.get("name")
+                or data.get("policy_name")
+                or "售后政策"
+            )
+            content = (
+                data.get("content")
+                or data.get("body")
+                or data.get("text")
+                or data.get("policy_text")
+                or ""
+            )
+            if not content:
+                continue
+            docs.append(
+                {
+                    "title": str(title),
+                    "type": str(data.get("policy_type") or data.get("category") or ""),
+                    "content": str(content)[:1200],
+                }
+            )
+        logger.info(f"[CS] Policy context loaded: {len(docs)}")
+        return docs[:limit]
+    except Exception as e:
+        logger.warning(f"[CS] Failed to load policy_documents context (graceful): {e}")
+        return []
+
+
+async def _load_review_sentiment_context(
+    pool, product_results: list[dict], limit: int = 5
+) -> list[dict]:
+    """按候选商品补充评价情感信息，辅助回复。"""
+    if not pool or not product_results:
+        return []
+
+    product_ids = []
+    product_names = []
+    for item in product_results:
+        pid = item.get("id")
+        pname = item.get("name")
+        if pid:
+            product_ids.append(str(pid))
+        if pname:
+            product_names.append(str(pname))
+
+    matched_rows: list[dict] = []
+    seen_keys: set[str] = set()
+
+    def _append_rows(rows) -> None:
+        for row in rows:
+            data = dict(row)
+            key = (
+                str(data.get("product_id") or "")
+                or str(data.get("spu_id") or "")
+                or str(data.get("sku_id") or "")
+                or str(data.get("product_name") or data.get("name") or "")
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+
+            analysis_fields = {}
+            for f in [
+                "sentiment",
+                "sentiment_summary",
+                "review_summary",
+                "positive_rate",
+                "negative_rate",
+                "neutral_rate",
+                "avg_rating",
+                "rating",
+                "total_reviews",
+                "review_count",
+                "high_freq_issues",
+                "highlights",
+            ]:
+                if data.get(f) is not None:
+                    analysis_fields[f] = data.get(f)
+
+            if not analysis_fields:
+                continue
+
+            matched_rows.append(
+                {
+                    "product_id": data.get("product_id")
+                    or data.get("spu_id")
+                    or data.get("sku_id"),
+                    "product_name": data.get("product_name") or data.get("name") or "",
+                    "analysis": analysis_fields,
+                }
+            )
+
+    try:
+        if product_ids:
+            rows = await pool.fetch(
+                """
+                SELECT *
+                FROM qnh_review_analysis
+                WHERE product_id = ANY($1::text[])
+                   OR spu_id = ANY($1::text[])
+                   OR sku_id = ANY($1::text[])
+                LIMIT $2
+                """,
+                product_ids,
+                limit,
+            )
+            _append_rows(rows)
+    except Exception as e:
+        logger.warning(f"[CS] Review sentiment lookup by id failed (graceful): {e}")
+
+    if len(matched_rows) < limit and product_names:
+        for name in product_names[:5]:
+            if len(matched_rows) >= limit:
+                break
+            try:
+                rows = await pool.fetch(
+                    """
+                    SELECT *
+                    FROM qnh_review_analysis
+                    WHERE product_name ILIKE $1
+                       OR name ILIKE $1
+                    LIMIT $2
+                    """,
+                    f"%{name}%",
+                    max(1, limit - len(matched_rows)),
+                )
+                _append_rows(rows)
+            except Exception as e:
+                logger.warning(
+                    f"[CS] Review sentiment lookup by name failed for '{name}' (graceful): {e}"
+                )
+
+    logger.info(f"[CS] Review sentiment context loaded: {len(matched_rows)}")
+    return matched_rows[:limit]
+
+
 async def _log_conversation(
     pool,
     session_id: str = "",
@@ -296,6 +502,10 @@ async def chat(
             _cache_loaded = True
 
         knowledge_base = _knowledge_base_cache or []
+        faq_context = []
+        if pool:
+            # FAQ 快速匹配：命中后仅作为上下文参考，不直接返回给用户
+            faq_context = await _search_auto_faq_context(message, pool)
 
         # 2. 搜索相关商品（完整管线：Hybrid Search → Reranker → GraphRAG）
         product_results = []
@@ -320,7 +530,7 @@ async def chat(
                                COALESCE(SUM(new_customers),0)::int AS new_cust,
                                COALESCE(AVG(exposure_uv),0)::int AS uv,
                                COALESCE(AVG(exposure_pv),0)::int AS pv
-                        FROM store_daily_metrics
+                        FROM qnh_daily_metrics
                         WHERE metric_date >= CURRENT_DATE - INTERVAL '1 day'
                     """)
                     if dm and dm["orders"] > 0:
@@ -334,20 +544,29 @@ async def chat(
                         SELECT COUNT(*) FILTER (WHERE status='active') AS total,
                                COUNT(*) FILTER (WHERE status='active' AND stock<5) AS low_stock,
                                COUNT(*) FILTER (WHERE status='active' AND stock=0) AS oos
-                        FROM products
+                        FROM qnh_products
                     """)
                     if inv:
                         business_context["inventory"] = {"total": inv["total"], "low_stock": inv["low_stock"], "out_of_stock": inv["oos"]}
 
                 # 热销商品
                 with contextlib.suppress(Exception):
-                    tops = await pool.fetch("SELECT name, monthly_sales, retail_price FROM products WHERE status='active' AND monthly_sales>0 ORDER BY monthly_sales DESC LIMIT 5")
+                    tops = await pool.fetch("SELECT name, monthly_sales, retail_price FROM qnh_products WHERE status='active' AND monthly_sales>0 ORDER BY monthly_sales DESC LIMIT 5")
                     if tops:
                         business_context["top_products"] = [{"name": r["name"], "sales": r["monthly_sales"], "price": float(r["retail_price"] or 0)} for r in tops]
 
                 logger.info(f"Business context loaded: {list(business_context.keys())}")
             except Exception as e:
                 logger.warning(f"Failed to load business context: {e}")
+
+        # 2.6 新增补充上下文：售后政策 + 商品评价情感
+        policy_context = []
+        review_sentiment_context = []
+        if pool:
+            policy_context = await _load_policy_documents_context(pool)
+            review_sentiment_context = await _load_review_sentiment_context(
+                pool, product_results
+            )
 
         # 3. 构建优化版系统提示词
         try:
@@ -406,6 +625,28 @@ async def chat(
                 conversation_history=conversation_history,
                 product_results=product_results,
                 conversation_context=conversation_context,
+            )
+
+        # 5.5 把 FAQ / 售后政策 / 评价情感作为补充上下文注入给 LLM
+        extra_sections = []
+        if faq_context:
+            extra_sections.append(
+                "【FAQ 匹配参考（仅参考，不要逐字照搬）】\n"
+                + json.dumps(faq_context, ensure_ascii=False)
+            )
+        if policy_context:
+            extra_sections.append(
+                "【售后政策参考】\n"
+                + json.dumps(policy_context, ensure_ascii=False)
+            )
+        if review_sentiment_context:
+            extra_sections.append(
+                "【商品评价情感参考】\n"
+                + json.dumps(review_sentiment_context, ensure_ascii=False)
+            )
+        if extra_sections:
+            user_message_with_context = (
+                f"{user_message_with_context}\n\n" + "\n\n".join(extra_sections)
             )
 
         # 5. 调用LLM生成回复（支持图片）
