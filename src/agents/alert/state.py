@@ -28,6 +28,7 @@ class AlertState(TypedDict, total=False):
     # 逐个异常的归因和行动（列表）
     root_causes: list[dict[str, Any]]
     actions: list[dict[str, Any]]
+    orchestrated_actions: list[dict[str, Any]]
 
     # 每条异常处理的当前索引
     current_anomaly_index: int

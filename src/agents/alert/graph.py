@@ -8,6 +8,29 @@ from .nodes import action_node, anomaly_detection_node, prophet_detection_node, 
 from .state import AlertState
 
 
+async def orchestration_node(state: AlertState) -> dict:
+    """在 Action 后追加跨 Agent 轻量协作。"""
+    anomalies_data = state.get("anomalies", {})
+    anomaly_list = anomalies_data.get("anomalies", []) if isinstance(anomalies_data, dict) else []
+    pool = state.get("db_pool")
+
+    if not anomaly_list or not pool:
+        return {"orchestrated_actions": []}
+
+    try:
+        from src.agents.orchestrator import handle_alert_actions
+
+        actions = await handle_alert_actions(anomaly_list, pool)
+        return {"orchestrated_actions": actions}
+    except Exception as e:
+        return {
+            "orchestrated_actions": [
+                {"auto_status": "failed", "message": "自动分析失败，请人工处理", "error": str(e)}
+            ],
+            "errors": state.get("errors", []) + [f"orchestration: {e}"],
+        }
+
+
 def build_alert_graph() -> StateGraph:
     """
     构建 Alert Agent 的 LangGraph 状态机。
@@ -21,6 +44,7 @@ def build_alert_graph() -> StateGraph:
     graph.add_node("anomaly_detection", anomaly_detection_node)
     graph.add_node("root_cause", root_cause_node)
     graph.add_node("action", action_node)
+    graph.add_node("orchestration", orchestration_node)
 
     # --- 定义边 ---
     graph.set_entry_point("prophet_detection")
@@ -44,7 +68,8 @@ def build_alert_graph() -> StateGraph:
     )
 
     graph.add_edge("root_cause", "action")
-    graph.add_edge("action", END)
+    graph.add_edge("action", "orchestration")
+    graph.add_edge("orchestration", END)
 
     return graph
 

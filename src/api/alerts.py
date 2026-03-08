@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
@@ -15,6 +16,60 @@ from .schemas import AlertScanResponse, AlertUpdateRequest, APIResponse
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 logger = logging.getLogger(__name__)
+
+
+def _extract_collaboration_from_metrics(metrics: object) -> list[dict]:
+    if not isinstance(metrics, dict):
+        return []
+    for key in ("collaboration_results", "orchestrated_actions", "agent_actions"):
+        value = metrics.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+def _matches_alert_for_collaboration(action: dict, alert_data: dict) -> bool:
+    alert_id = str(alert_data.get("alert_id") or "")
+    product_id = str(alert_data.get("product_id") or "")
+    metric_anomaly_id = str((alert_data.get("metrics") or {}).get("anomaly_id") or "")
+    action_anomaly_id = str(action.get("anomaly_id") or "")
+    action_product_id = str(action.get("product_id") or "")
+
+    if alert_id and action_anomaly_id and action_anomaly_id == alert_id:
+        return True
+    if metric_anomaly_id and action_anomaly_id and action_anomaly_id == metric_anomaly_id:
+        return True
+    if product_id and action_product_id and action_product_id == product_id:
+        return True
+    return False
+
+
+async def _extract_collaboration_from_scans(pool, alert_data: dict) -> list[dict]:
+    rows = await pool.fetch(
+        """
+        SELECT result
+        FROM alert_scans
+        WHERE status = 'completed'
+        ORDER BY created_at DESC
+        LIMIT 20
+        """
+    )
+    for row in rows:
+        result = row.get("result")
+        if isinstance(result, str):
+            try:
+                result = json.loads(result)
+            except Exception:
+                continue
+        if not isinstance(result, dict):
+            continue
+        actions = result.get("orchestrated_actions")
+        if not isinstance(actions, list):
+            continue
+        matched = [action for action in actions if isinstance(action, dict) and _matches_alert_for_collaboration(action, alert_data)]
+        if matched:
+            return matched
+    return []
 
 
 async def _generate_smart_alerts(pool) -> list[dict]:
@@ -304,7 +359,15 @@ async def get_alert(alert_id: str) -> APIResponse[dict]:
     row = await pool.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
     if not row:
         raise NotFoundError("Alert", alert_id)
-    return APIResponse(data=dict(row))
+    data = dict(row)
+
+    collaboration_results = _extract_collaboration_from_metrics(data.get("metrics"))
+    if not collaboration_results:
+        collaboration_results = await _extract_collaboration_from_scans(pool, data)
+    if collaboration_results:
+        data["collaboration_results"] = collaboration_results
+
+    return APIResponse(data=data)
 
 
 @router.patch("/{alert_id}", response_model=APIResponse[dict])
