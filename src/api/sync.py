@@ -247,6 +247,7 @@ async def _trigger_sync_all() -> None:
         from src.sync.im_history import IMHistorySyncer
         from src.sync.inventory import InventorySyncer
         from src.sync.meituan_client import MeituanBrowserClient
+        from src.sync.products import ProductSyncer
         from src.sync.promotions import PromotionSyncer
         from src.sync.qnh_auth import QNHAuth
         from src.sync.qnh_client import QNHClient
@@ -291,6 +292,7 @@ async def _trigger_sync_all() -> None:
         qnh_client = QNHClient(auth=qnh_auth)
         try:
             qnh_syncers = [
+                ProductSyncer(qnh_client, pool),
                 PromotionSyncer(qnh_client, pool),
                 TrafficSyncer(qnh_client, pool),
                 InventorySyncer(qnh_client, pool),

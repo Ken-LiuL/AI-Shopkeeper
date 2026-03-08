@@ -605,6 +605,7 @@ async def qnh_full_sync_task() -> None:
         from src.sync.finance import FinanceSyncer
         from src.sync.im_history import IMHistorySyncer
         from src.sync.inventory import InventorySyncer
+        from src.sync.products import ProductSyncer
         from src.sync.promotions import PromotionSyncer
         from src.sync.qnh_auth import QNHAuth
         from src.sync.qnh_client import QNHClient
@@ -640,6 +641,7 @@ async def qnh_full_sync_task() -> None:
             client = QNHClient(auth=auth)
             try:
                 syncers = [
+                    ProductSyncer(client, pool),
                     PromotionSyncer(client, pool),
                     TrafficSyncer(client, pool),
                     InventorySyncer(client, pool),
