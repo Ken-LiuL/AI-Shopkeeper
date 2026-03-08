@@ -755,6 +755,66 @@ async def meituan_promotions_stub_sync_task() -> None:
     await _run_meituan_db_only_etl("promotions")
 
 
+async def delivery_timeout_etl_task() -> None:
+    """配送超时检测 ETL。"""
+    logger.info("Starting delivery timeout ETL")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip delivery timeout ETL")
+        return
+    try:
+        import asyncpg
+        from src.sync.etl_delivery_timeout import run_delivery_timeout_etl
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            await run_delivery_timeout_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Delivery timeout ETL task failed")
+
+
+async def platform_penalties_etl_task() -> None:
+    """平台处罚/扣分检测 ETL。"""
+    logger.info("Starting platform penalties ETL")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip platform penalties ETL")
+        return
+    try:
+        import asyncpg
+        from src.sync.etl_platform_penalties import run_platform_penalties_etl
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            await run_platform_penalties_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Platform penalties ETL task failed")
+
+
+async def policy_crawler_etl_task() -> None:
+    """售后政策爬取 ETL。"""
+    logger.info("Starting policy crawler ETL")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip policy crawler ETL")
+        return
+    try:
+        import asyncpg
+        from src.sync.etl_policy_crawler import run_policy_crawler_etl
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            await run_policy_crawler_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Policy crawler ETL task failed")
+
+
 async def qnh_data_sync_task() -> None:
     """数据同步任务（已迁移到 Chrome 扩展 + nodriver 链路，此处保留为空操作）。"""
     logger.info("Data sync now handled by Chrome extension / nodriver — skipping legacy task")
@@ -1154,5 +1214,38 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="daily_insights_warmup",
+        replace_existing=True,
+    )
+
+    # 配送超时检测：每天 05:00 CST
+    scheduler.add_job(
+        _make_heartbeat_task("delivery_timeout_etl", delivery_timeout_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("delivery_timeout_etl", "0 5 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="delivery_timeout_etl",
+        replace_existing=True,
+    )
+
+    # 平台处罚检测：每 4 小时
+    scheduler.add_job(
+        _make_heartbeat_task("platform_penalties_etl", platform_penalties_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("platform_penalties_etl", "0 */4 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="platform_penalties_etl",
+        replace_existing=True,
+    )
+
+    # 政策爬取：每周一 06:00 CST
+    scheduler.add_job(
+        _make_heartbeat_task("policy_crawler_etl", policy_crawler_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("policy_crawler_etl", "0 6 * * 1"),
+            timezone=SH_TZ,
+        ),
+        id="policy_crawler_etl",
         replace_existing=True,
     )
