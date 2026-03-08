@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { withErrorBoundary } from '@/components/error-boundary';
-import { sendChatMessage } from '@/lib/api';
+import { fetchAPI, sendChatMessage } from '@/lib/api';
 import type { ChatMessage, ChatResponse } from '@/lib/api';
 
 interface Message {
@@ -73,9 +73,7 @@ function ChatPage() {
   const loadSessions = async () => {
     setSessionsLoading(true);
     try {
-      const res = await fetch('/api/customer-service/sessions');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchAPI<any>('/customer-service/sessions');
       const list: Session[] = Array.isArray(data) ? data : data.sessions || [];
       setSessions(list);
     } catch (err) {
@@ -89,9 +87,7 @@ function ChatPage() {
   const handleNewSession = async () => {
     setCreatingSession(true);
     try {
-      const res = await fetch('/api/customer-service/sessions', { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchAPI<any>('/customer-service/sessions', { method: 'POST' });
       const newId = data.id || data.session_id || generateSessionId();
       setCurrentSessionId(newId);
       setMessages([{
@@ -122,9 +118,7 @@ function ChatPage() {
     setCurrentSessionId(sessionId);
     setLoading(true);
     try {
-      const res = await fetch(`/api/customer-service/sessions/${sessionId}/messages`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchAPI<any>(`/customer-service/sessions/${sessionId}/messages`);
       const rawMessages = Array.isArray(data) ? data : data.messages || [];
       const restored: Message[] = rawMessages.map((m: any) => ({
         id: m.id || String(Date.now() + Math.random()),

@@ -1,9 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-  || (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
+import { fetchAPI } from '@/lib/api';
 
 interface SyncStatus {
   healthy: boolean;
@@ -46,10 +44,11 @@ export default function SyncSettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${BASE_URL}/api/sync/status`);
-      const json = await res.json();
-      if (json.data) {
+      const json = await fetchAPI<any>('/sync/status');
+      if (json?.data) {
         setStatus(json.data);
+      } else if (json) {
+        setStatus(json as SyncStatus);
       } else {
         setError('获取状态失败');
       }
@@ -74,13 +73,11 @@ export default function SyncSettingsPage() {
     setSubmitting(true);
     setSubmitMsg(null);
     try {
-      const res = await fetch(`${BASE_URL}/api/sync/cookie`, {
+      const json = await fetchAPI<any>('/sync/cookie', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ cookie_string: cookieInput.trim() }),
       });
-      const json = await res.json();
-      if (res.ok && json.ok) {
+      if (json?.ok ?? true) {
         setSubmitMsg({ ok: true, msg: `✅ ${json.message}` });
         setCookieInput('');
         fetchStatus();
@@ -98,8 +95,7 @@ export default function SyncSettingsPage() {
     setTriggering(true);
     setTriggerMsg(null);
     try {
-      const res = await fetch(`${BASE_URL}/api/sync/trigger`, { method: 'POST' });
-      const json = await res.json();
+      const json = await fetchAPI<any>('/sync/trigger', { method: 'POST' });
       setTriggerMsg(json.message || '同步已触发，请稍后刷新状态');
       setTimeout(fetchStatus, 5000);
     } catch (e: any) {

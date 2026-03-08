@@ -13,7 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { withErrorBoundary } from '@/components/error-boundary';
-import { getAlerts } from '@/lib/api';
+import { fetchAPI, getAlerts } from '@/lib/api';
 import type { Alert } from '@/lib/api';
 
 function AlertsPage() {
@@ -43,16 +43,11 @@ function AlertsPage() {
   const handleResolve = async (alertId: string) => {
     setResolvingIds(prev => new Set(prev).add(alertId));
     try {
-      const response = await fetch(`/api/alerts/${alertId}`, {
+      await fetchAPI(`/alerts/${alertId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'resolved' }),
       });
-      if (response.ok) {
-        setAlerts(prev => prev.filter(a => (a.alert_id || '') !== alertId));
-      } else {
-        console.error('Failed to resolve alert:', response.status);
-      }
+      setAlerts(prev => prev.filter(a => (a.alert_id || '') !== alertId));
     } catch (err) {
       console.error('Error resolving alert:', err);
     } finally {

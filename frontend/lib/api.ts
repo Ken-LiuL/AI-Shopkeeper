@@ -78,7 +78,7 @@ const getErrorMessage = (error: any, endpoint: string): string => {
   }
 };
 
-async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+export async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
   try {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};

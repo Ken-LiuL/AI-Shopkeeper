@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { withErrorBoundary } from '@/components/error-boundary';
+import { fetchAPI } from '@/lib/api';
 import {
   Table,
   TableBody,
@@ -58,9 +59,7 @@ function SelectionPage() {
       setLoading(true);
       setError(null);
 
-      const res = await fetch('/api/selection/recommendations');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchAPI<any>('/selection/recommendations');
 
       const productList: SelectionProduct[] = Array.isArray(data)
         ? data
@@ -121,19 +120,15 @@ function SelectionPage() {
       // Call real API for each selected product
       const promises = Array.from(targetIds).map(async (productId) => {
         if (operation === 'select') {
-          const res = await fetch('/api/selection/runs', {
+          await fetchAPI('/selection/runs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ product_id: productId, action: 'select' }),
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
         } else {
-          const res = await fetch('/api/selection/runs', {
+          await fetchAPI('/selection/runs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ product_id: productId, action: 'reject' }),
           });
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
         }
       });
 

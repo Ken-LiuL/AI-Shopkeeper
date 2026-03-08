@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { withErrorBoundary } from '@/components/error-boundary';
+import { fetchAPI } from '@/lib/api';
 
 interface BundleRecommendation {
   id: string;
@@ -27,9 +28,7 @@ function BundlesPage() {
   const fetchBundles = async () => {
     try {
       setError(null);
-      const res = await fetch('/api/bundles/recommendations');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const data = await fetchAPI<any>('/bundles/recommendations');
       setBundles(Array.isArray(data) ? data : data.bundles || data.recommendations || []);
     } catch (err) {
       console.error('Error fetching bundles:', err);
@@ -46,8 +45,7 @@ function BundlesPage() {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const res = await fetch('/api/bundles/generate', { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchAPI('/bundles/generate', { method: 'POST' });
       await fetchBundles();
     } catch (err) {
       console.error('Error generating bundles:', err);
@@ -60,8 +58,7 @@ function BundlesPage() {
   const handleActivate = async (id: string) => {
     setActionLoading(id + '_activate');
     try {
-      const res = await fetch(`/api/bundles/${id}/activate`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchAPI(`/bundles/${id}/activate`, { method: 'POST' });
       setBundles(prev =>
         prev.map(b => b.id === id ? { ...b, status: 'active' } : b)
       );
@@ -76,8 +73,7 @@ function BundlesPage() {
   const handleDeactivate = async (id: string) => {
     setActionLoading(id + '_deactivate');
     try {
-      const res = await fetch(`/api/bundles/${id}/deactivate`, { method: 'POST' });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await fetchAPI(`/bundles/${id}/deactivate`, { method: 'POST' });
       setBundles(prev =>
         prev.map(b => b.id === id ? { ...b, status: 'inactive' } : b)
       );

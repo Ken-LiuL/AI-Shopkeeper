@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { fetchAPI } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,29 +17,15 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      // Use relative path when NEXT_PUBLIC_API_URL is set — Next.js rewrite proxies server-side
-      // to avoid mixed content (HTTPS page → HTTP backend) blocks in the browser.
-      const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-        ? ''
-        : (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
-      const res = await fetch(`${BASE_URL}/api/auth/login`, {
+      const data = await fetchAPI<{ access_token: string }>('/auth/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setError(data.detail || '用户名或密码错误');
-        return;
-      }
-
-      const data = await res.json();
       localStorage.setItem('auth_token', data.access_token);
       localStorage.setItem('auth_username', username);
       router.push('/');
-    } catch {
-      setError('网络连接失败，请检查网络后重试');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '网络连接失败，请检查网络后重试');
     } finally {
       setLoading(false);
     }
