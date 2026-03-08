@@ -63,9 +63,12 @@ class Neo4jSkill:
     async def _execute(self, query: str, **params: Any) -> list[dict[str, Any]]:
         if self._driver is None:
             return []
-        async with self._driver.session() as session:
-            result = await session.run(query, params)
-            return [record.data() async for record in result]
+        try:
+            async with self._driver.session() as session:
+                result = await session.run(query, params)
+                return [record.data() async for record in result]
+        except Exception:
+            return []
 
     async def _execute_single(self, query: str, **params: Any) -> dict[str, Any] | None:
         rows = await self._execute(query, **params)
@@ -320,6 +323,159 @@ class Neo4jSkill:
             }
             for r in results
         ]
+
+    # ── GraphRAG Service 统一查询层 ──────────────────────────────────────
+
+    async def get_impact_chain(self, product_id: str, depth: int = 2) -> list[dict]:
+        """Alert Agent 调用：分析异常商品的影响传播链。"""
+        safe_depth = max(1, min(int(depth), 5))
+        query = f"""
+        MATCH path = (source:Product {{product_id: $product_id}})-[:OFTEN_BOUGHT_WITH*1..{safe_depth}]-(affected:Product)
+        WHERE affected.product_id <> $product_id
+        RETURN affected.product_id AS product_id,
+               affected.name AS name,
+               affected.price AS price,
+               affected.stock AS stock,
+               length(path) AS distance,
+               CASE WHEN affected.stock < 10 THEN 'high' ELSE 'medium' END AS risk_level
+        ORDER BY distance, affected.stock
+        """
+        try:
+            return await self._execute(query, product_id=product_id)
+        except Exception:
+            return []
+
+    async def find_category_gaps(self) -> list[dict]:
+        """Selection Agent 调用：发现竞品有但我方未覆盖的品类商品缺口。"""
+        query = """
+        MATCH (c:Competitor)
+        WHERE NOT EXISTS {
+            MATCH (p:Product) WHERE p.name CONTAINS c.product_name
+        }
+        RETURN c.product_name AS product_name,
+               c.store_name AS store_name,
+               c.price AS price
+        ORDER BY c.price DESC
+        """
+        try:
+            return await self._execute(query)
+        except Exception:
+            return []
+
+    async def find_scenario_gaps(self) -> list[dict]:
+        """Selection Agent 调用：发现商品未覆盖到的使用场景。"""
+        query = """
+        MATCH (s:Scenario)
+        WHERE NOT EXISTS { MATCH (:Product)-[:USED_IN]->(s) }
+        RETURN s.name AS name, s.description AS description
+        """
+        try:
+            return await self._execute(query)
+        except Exception:
+            return []
+
+    async def get_scenario_bundles(
+        self, scenario_name: str | None = None, limit: int = 10
+    ) -> list[dict]:
+        """Bundle Agent 调用：基于场景和共购关系返回套餐候选组合。"""
+        query = """
+        MATCH (p1:Product)-[:USED_IN]->(s:Scenario)<-[:USED_IN]-(p2:Product)
+        WHERE p1.product_id < p2.product_id
+          AND ($scenario_name IS NULL OR s.name = $scenario_name)
+        OPTIONAL MATCH (p1)-[bought:OFTEN_BOUGHT_WITH]-(p2)
+        WITH p1, p2, s, bought
+        WHERE bought IS NOT NULL OR s IS NOT NULL
+        RETURN s.name AS scenario,
+               p1.name AS product_1, p1.price AS price_1,
+               p2.name AS product_2, p2.price AS price_2,
+               bought.co_occurrence AS co_purchase_count
+        ORDER BY co_purchase_count DESC NULLS LAST
+        LIMIT $limit
+        """
+        try:
+            return await self._execute(
+                query, scenario_name=scenario_name, limit=limit
+            )
+        except Exception:
+            return []
+
+    async def suggest_category(self, product_name: str) -> list[dict]:
+        """Listing Agent 调用：根据商品名称推荐最可能的类目。"""
+        query = """
+        CALL db.index.fulltext.queryNodes('product_fulltext_index', $name)
+        YIELD node, score
+        MATCH (node)-[:BELONGS_TO]->(c:Category)
+        RETURN c.name AS category, count(*) AS freq, avg(score) AS relevance
+        ORDER BY freq DESC, relevance DESC
+        LIMIT 5
+        """
+        try:
+            return await self._execute(query, name=product_name)
+        except Exception:
+            return []
+
+    async def get_category_tree(self, category_name: str) -> dict:
+        """Listing Agent 调用：获取类目及其子类目树（最多 3 层）。"""
+        query = """
+        MATCH path = (c:Category {name: $name})-[:PARENT_OF*0..3]->(child:Category)
+        RETURN [node in nodes(path) | node.name] AS hierarchy
+        """
+        try:
+            rows = await self._execute(query, name=category_name)
+        except Exception:
+            return {}
+        if not rows:
+            return {}
+        return {
+            "category": category_name,
+            "hierarchies": [r.get("hierarchy", []) for r in rows],
+        }
+
+    async def get_deep_context(self, product_id: str) -> dict:
+        """Customer Service Agent 调用：获取增强版 3 跳商品上下文与竞品信息。"""
+        query = """
+        MATCH (p:Product {product_id: $product_id})
+        OPTIONAL MATCH (p)-[:SUITABLE_FOR]->(pop:Population)
+        OPTIONAL MATCH (p)-[:USED_IN]->(scenario:Scenario)
+        OPTIONAL MATCH (p)-[:OFTEN_BOUGHT_WITH]-(related:Product)
+        OPTIONAL MATCH (p)-[:COMPETES_WITH]->(comp:Competitor)
+        OPTIONAL MATCH (p)-[:BELONGS_TO]->(cat:Category)
+        OPTIONAL MATCH (p)-[:PEAKS_IN]->(season:Season)
+        OPTIONAL MATCH (faq:FAQ)-[:ANSWERS]->(p)
+        RETURN p { .* } AS product,
+               collect(DISTINCT {name: pop.name, description: pop.description}) AS populations,
+               collect(DISTINCT {name: scenario.name, description: scenario.description}) AS scenarios,
+               collect(DISTINCT {name: related.name, price: related.price, stock: related.stock}) AS related,
+               collect(DISTINCT {store: comp.store_name, name: comp.product_name, price: comp.price}) AS competitors,
+               cat.name AS category,
+               collect(DISTINCT season.name) AS seasons,
+               collect(DISTINCT {q: faq.question, a: faq.answer}) AS faqs
+        """
+        try:
+            row = await self._execute_single(query, product_id=product_id)
+        except Exception:
+            return {}
+        if not row:
+            return {}
+        return row
+
+    async def get_graph_stats(self) -> dict:
+        """前端/API 调用：返回图谱节点和关系统计信息。"""
+        query = """
+        MATCH (n) RETURN labels(n)[0] AS label, count(n) AS count
+        UNION ALL
+        MATCH ()-[r]->() RETURN type(r) AS label, count(r) AS count
+        """
+        try:
+            rows = await self._execute(query)
+        except Exception:
+            return {}
+        if not rows:
+            return {}
+        return {
+            "stats": rows,
+            "total": sum(int(item.get("count", 0) or 0) for item in rows),
+        }
 
 
 # asyncio imported at top for gather in hybrid_search
