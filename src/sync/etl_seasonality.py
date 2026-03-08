@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 
+from src.agents.llm import MODEL_FLASH, call_tool
+
 logger = logging.getLogger(__name__)
 
 _SEASONALITY_TABLE_SQL = """
@@ -25,12 +27,44 @@ _SEASON_KEYWORDS: list[tuple[tuple[str, ...], str]] = [
 ]
 
 
-def _infer_seasonal_tag(product_name: str, peak_months: list[int]) -> str:
-    lowered = (product_name or "").lower()
-    for keywords, tag in _SEASON_KEYWORDS:
-        if any(keyword in lowered for keyword in keywords):
-            return tag
+_SEASON_TAG_TOOL: dict = {
+    "name": "infer_seasonal_tag",
+    "description": "判断医疗器械商品的季节性需求标签",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "seasonal_tag": {
+                "type": "string",
+                "enum": ["春季", "夏季", "秋季", "冬季", "全年"],
+            },
+            "reason": {"type": "string"},
+        },
+        "required": ["seasonal_tag", "reason"],
+    },
+}
 
+
+async def _infer_seasonal_tag_llm(product_name: str) -> str | None:
+    prompt = f"判断以下医疗器械商品的季节性需求：{product_name}"
+    try:
+        result = await call_tool(
+            prompt,
+            _SEASON_TAG_TOOL,
+            model=MODEL_FLASH,
+            trace_name="etl_seasonality_infer_seasonal_tag",
+        )
+        if not isinstance(result, dict):
+            raise ValueError("LLM seasonal tag result is not dict")
+        seasonal_tag = str(result.get("seasonal_tag") or "").strip()
+        if seasonal_tag in {"春季", "夏季", "秋季", "冬季", "全年"}:
+            return seasonal_tag
+        raise ValueError(f"invalid seasonal_tag: {seasonal_tag}")
+    except Exception as exc:
+        logger.warning("Seasonality LLM infer failed for product=%s: %s", product_name, exc)
+        return None
+
+
+async def _infer_seasonal_tag(product_name: str, peak_months: list[int]) -> str:
     season_votes = {"春季": 0, "夏季": 0, "秋季": 0, "冬季": 0}
     for month in peak_months:
         if month in (3, 4, 5):
@@ -43,7 +77,18 @@ def _infer_seasonal_tag(product_name: str, peak_months: list[int]) -> str:
             season_votes["冬季"] += 1
 
     winner = max(season_votes, key=season_votes.get)
-    return winner if season_votes[winner] > 0 else "全年"
+    if season_votes[winner] > 0:
+        return winner
+
+    llm_tag = await _infer_seasonal_tag_llm(product_name)
+    if llm_tag:
+        return llm_tag
+
+    lowered = (product_name or "").lower()
+    for keywords, tag in _SEASON_KEYWORDS:
+        if any(keyword in lowered for keyword in keywords):
+            return tag
+    return "全年"
 
 
 async def run_seasonality_etl(pool) -> None:
@@ -91,7 +136,7 @@ async def run_seasonality_etl(pool) -> None:
                 )
                 peak_ratio = float(peak_value / total_sales) if total_sales > 0 else 0.0
                 avg_monthly_sales = float(total_sales / 12.0)
-                seasonal_tag = _infer_seasonal_tag(product_name, peak_months)
+                seasonal_tag = await _infer_seasonal_tag(product_name, peak_months)
                 upserts.append(
                     (
                         product_name,

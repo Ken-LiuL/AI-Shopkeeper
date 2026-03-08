@@ -9,6 +9,8 @@ from typing import Any
 import asyncpg
 from neo4j import AsyncDriver
 
+from src.agents.llm import MODEL_DEEPSEEK, call_tool
+
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = 500
@@ -33,6 +35,32 @@ MEDICAL_SCENARIOS: dict[str, tuple[str, list[str]]] = {
     "创可贴": ("伤口护理", ["全人群"]),
     "避孕": ("计生用品", ["成年人"]),
     "验孕": ("孕期护理", ["备孕女性"]),
+}
+
+_PRODUCT_SCENARIO_TOOL: dict[str, Any] = {
+    "name": "infer_product_scenarios",
+    "description": "批量推断医疗器械商品的场景与适用人群",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "products": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "scenario": {"type": "string"},
+                        "populations": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["name", "scenario", "populations"],
+                },
+            }
+        },
+        "required": ["products"],
+    },
 }
 
 
@@ -423,7 +451,62 @@ async def _fetch_seasonality(conn: asyncpg.Connection) -> list[dict[str, str]]:
     return records
 
 
-def _infer_scenario_population(
+async def _infer_product_scenarios(product_names: list[str]) -> dict[str, tuple[str, list[str]]]:
+    names = [name.strip() for name in product_names if isinstance(name, str) and name.strip()]
+    if not names:
+        return {}
+
+    # Keep order while de-duplicating to reduce LLM calls.
+    unique_names = list(dict.fromkeys(names))
+    inferred: dict[str, tuple[str, list[str]]] = {}
+
+    for i in range(0, len(unique_names), 20):
+        batch = unique_names[i : i + 20]
+        prompt = (
+            "你是医疗器械知识图谱助手。请为每个商品名推断一个最主要使用场景和适用人群。"
+            "若不确定，请返回场景“通用护理”，人群至少包含“全人群”。\n"
+            f"商品名列表：{json.dumps(batch, ensure_ascii=False)}"
+        )
+        try:
+            result = await call_tool(
+                prompt,
+                _PRODUCT_SCENARIO_TOOL,
+                model=MODEL_DEEPSEEK,
+                trace_name="etl_graph_builder_infer_product_scenarios",
+            )
+            if not isinstance(result, dict):
+                raise ValueError("LLM scenarios result is not dict")
+            items = result.get("products")
+            if not isinstance(items, list):
+                raise ValueError("LLM scenarios products field is not list")
+        except Exception as exc:
+            logger.warning("Product scenarios LLM infer failed for batch size=%d: %s", len(batch), exc)
+            continue
+
+        batch_set = set(batch)
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            name = _safe_text(item.get("name"))
+            scenario = _safe_text(item.get("scenario"))
+            populations_raw = item.get("populations")
+
+            if not name or name not in batch_set or not scenario:
+                continue
+            if not isinstance(populations_raw, list):
+                populations_raw = []
+
+            populations = [_safe_text(pop) for pop in populations_raw]
+            populations = [pop for pop in populations if pop]
+            if not populations:
+                populations = ["全人群"]
+
+            inferred[name] = (scenario, populations)
+
+    return inferred
+
+
+async def _infer_scenario_population(
     products: list[dict[str, Any]],
 ) -> tuple[
     list[dict[str, str]],
@@ -435,6 +518,7 @@ def _infer_scenario_population(
     populations: dict[str, dict[str, str]] = {}
     product_scenarios: dict[tuple[str, str], dict[str, str]] = {}
     product_populations: dict[tuple[str, str], dict[str, str]] = {}
+    unmatched_products: list[tuple[str, str]] = []
 
     for product in products:
         product_id = product.get("product_id")
@@ -442,9 +526,11 @@ def _infer_scenario_population(
         if not product_id or not title:
             continue
 
+        matched = False
         for keyword, (scenario_name, population_names) in MEDICAL_SCENARIOS.items():
             if keyword not in title:
                 continue
+            matched = True
 
             scenarios.setdefault(
                 scenario_name,
@@ -464,6 +550,41 @@ def _infer_scenario_population(
                     {
                         "name": pop_name,
                         "description": f"由商品关键词“{keyword}”推断的适用人群",
+                    },
+                )
+                product_populations[(product_id, pop_name)] = {
+                    "product_id": product_id,
+                    "population_name": pop_name,
+                }
+
+        if not matched:
+            unmatched_products.append((str(product_id), title))
+
+    if unmatched_products:
+        unmatched_names = [title for _, title in unmatched_products]
+        llm_mapping = await _infer_product_scenarios(unmatched_names)
+        for product_id, title in unmatched_products:
+            inferred = llm_mapping.get(title)
+            if not inferred:
+                continue
+            scenario_name, population_names = inferred
+            scenarios.setdefault(
+                scenario_name,
+                {
+                    "name": scenario_name,
+                    "description": "由LLM推断的使用场景",
+                },
+            )
+            product_scenarios[(product_id, scenario_name)] = {
+                "product_id": product_id,
+                "scenario_name": scenario_name,
+            }
+            for pop_name in population_names:
+                populations.setdefault(
+                    pop_name,
+                    {
+                        "name": pop_name,
+                        "description": "由LLM推断的适用人群",
                     },
                 )
                 product_populations[(product_id, pop_name)] = {
@@ -585,8 +706,8 @@ async def run_graph_builder_etl(pg_pool: asyncpg.Pool, neo4j_driver: AsyncDriver
         logger.exception("Graph builder ETL failed while fetching source data")
         return result
 
-    scenario_nodes, population_nodes, product_scenarios, product_populations = _infer_scenario_population(
-        products
+    scenario_nodes, population_nodes, product_scenarios, product_populations = (
+        await _infer_scenario_population(products)
     )
 
     belongs_to_rows = [
