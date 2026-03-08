@@ -815,6 +815,52 @@ async def policy_crawler_etl_task() -> None:
         logger.exception("Policy crawler ETL task failed")
 
 
+async def category_mapping_etl_task() -> None:
+    """类目映射 ETL — 从商品表/竞品表/QNH API 构建类目映射。"""
+    logger.info("Starting category mapping ETL")
+    try:
+        import asyncpg
+        import time
+
+        from src.sync.etl_category_mapping import run_category_mapping_etl
+        from src.sync.qnh_auth import QNHAuth
+        from src.sync.qnh_client import QNHClient
+
+        dsn = _resolve_database_url()
+        if not dsn:
+            logger.warning("DATABASE_URL unavailable — skip category mapping ETL")
+            return
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            # 尝试创建 QNH client（用于 storeCategory API）
+            qnh_client = None
+            try:
+                row = await pool.fetchrow(
+                    "SELECT cookie_json FROM merchant_sync_cookies "
+                    "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
+                )
+                if row and row["cookie_json"]:
+                    raw = row["cookie_json"]
+                    cookie_json = json.loads(raw) if isinstance(raw, str) else raw
+                    auth = QNHAuth()
+                    auth._cookies = {str(k): str(v) for k, v in cookie_json.items()}
+                    auth._session_expires = time.time() + 7200
+                    qnh_client = QNHClient(auth=auth)
+            except Exception:
+                logger.debug("无法创建 QNH client，仅使用本地数据")
+
+            results = await run_category_mapping_etl(pool, qnh_client)
+            logger.info("Category mapping ETL done: %s", results)
+
+            if qnh_client:
+                await qnh_client.close()
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Category mapping ETL failed")
+
+
 async def qnh_data_sync_task() -> None:
     """数据同步任务（已迁移到 Chrome 扩展 + nodriver 链路，此处保留为空操作）。"""
     logger.info("Data sync now handled by Chrome extension / nodriver — skipping legacy task")
@@ -1247,5 +1293,16 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="policy_crawler_etl",
+        replace_existing=True,
+    )
+
+    # 类目映射 ETL：每天 04:00 CST（商品同步后）
+    scheduler.add_job(
+        _make_heartbeat_task("category_mapping_etl", category_mapping_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("category_mapping_etl", "0 4 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="category_mapping_etl",
         replace_existing=True,
     )
