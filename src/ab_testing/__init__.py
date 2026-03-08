@@ -5,17 +5,17 @@ from src.ab_testing.experiment import (
     ExperimentManager,
     get_experiment_manager,
 )
-from src.ab_testing.variants import (
-    ModelVariant,
-    PromptVariant,
-    StrategyVariant,
-    VariantExecutor,
-)
 from src.ab_testing.stats import (
     calculate_confidence_interval,
     calculate_sample_size,
     chi_square_test,
     t_test,
+)
+from src.ab_testing.variants import (
+    ModelVariant,
+    PromptVariant,
+    StrategyVariant,
+    VariantExecutor,
 )
 
 __all__ = [

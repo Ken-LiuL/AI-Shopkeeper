@@ -63,7 +63,7 @@ async def create_experiment(req: CreateExperimentRequest) -> CreateExperimentRes
             description=req.description,
         )
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     mgr = get_experiment_manager()
     exp_id = mgr.create_experiment(config)
@@ -89,7 +89,7 @@ async def get_experiment_results(experiment_id: str) -> dict[str, Any]:
     try:
         results = mgr.get_results(experiment_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found") from None
 
     # 为每对变体的每个指标计算统计显著性
     variants_list = results["variants"]
@@ -137,7 +137,7 @@ async def stop_experiment(experiment_id: str) -> dict[str, str]:
     try:
         mgr.stop_experiment(experiment_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found") from None
     return {"status": "stopped", "experiment_id": experiment_id}
 
 
@@ -149,7 +149,7 @@ async def get_experiment_report(experiment_id: str) -> dict[str, Any]:
         results = mgr.get_results(experiment_id)
         exp = mgr.get_experiment(experiment_id)
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found") from None
 
     variants_list = results["variants"]
     metrics_data = results["metrics"]
@@ -250,5 +250,5 @@ async def record_outcome(experiment_id: str, req: RecordOutcomeRequest) -> dict[
             req.metadata,
         )
     except KeyError:
-        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found")
+        raise HTTPException(status_code=404, detail=f"Experiment {experiment_id} not found") from None
     return {"status": "recorded"}

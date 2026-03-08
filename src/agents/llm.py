@@ -147,8 +147,8 @@ async def _call_openrouter(
                 ),
                 timeout=120.0,
             )
-        except asyncio.TimeoutError:
-            raise ValueError(f"LLM call timeout after 120s (model={model})")
+        except TimeoutError:
+            raise ValueError(f"LLM call timeout after 120s (model={model})") from None
 
         choice = response.choices[0]
         if choice.message.tool_calls:
@@ -194,8 +194,8 @@ async def _call_anthropic(
             client.messages.create(**kwargs),
             timeout=120.0,
         )
-    except asyncio.TimeoutError:
-        raise ValueError(f"LLM call timeout after 120s (model={model})")
+    except TimeoutError:
+        raise ValueError(f"LLM call timeout after 120s (model={model})") from None
 
     result = None
     for block in response.content:

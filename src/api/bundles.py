@@ -53,7 +53,7 @@ async def get_bundle(bundle_id: str) -> APIResponse[dict]:
         raise
     except Exception as exc:
         logger.error("Failed to get bundle %s: %s", bundle_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/{bundle_id}/activate", response_model=APIResponse[dict])
@@ -71,7 +71,7 @@ async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
         raise
     except Exception as exc:
         logger.error("Failed to activate bundle %s: %s", bundle_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.post("/{bundle_id}/deactivate", response_model=APIResponse[dict])
@@ -89,7 +89,7 @@ async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
         raise
     except Exception as exc:
         logger.error("Failed to deactivate bundle %s: %s", bundle_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get("", response_model=APIResponse[list[dict]])
@@ -104,7 +104,7 @@ async def list_bundles() -> APIResponse[list[dict]]:
         return APIResponse(data=[dict(r) for r in rows])
     except Exception as exc:
         logger.error("Failed to list bundles: %s", exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 async def _run_bundle_generate(
@@ -145,7 +145,7 @@ async def generate_bundles(
         return TaskCreatedResponse(task_id=task_id, message="Bundle generation started")
     except Exception as exc:
         logger.error("Failed to create bundle task: %s", exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.patch("/{bundle_id}", response_model=APIResponse[dict])
@@ -169,7 +169,7 @@ async def update_bundle(bundle_id: str, body: BundleUpdateRequest) -> APIRespons
         raise
     except Exception as exc:
         logger.error("Failed to update bundle %s: %s", bundle_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.delete("/{bundle_id}", response_model=APIResponse[dict])
@@ -187,4 +187,4 @@ async def delete_bundle(bundle_id: str) -> APIResponse[dict]:
         raise
     except Exception as exc:
         logger.error("Failed to delete bundle %s: %s", bundle_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc

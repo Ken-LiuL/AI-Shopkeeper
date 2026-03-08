@@ -361,7 +361,7 @@ async def export_report(
     except Exception as e:
         logger.error("Failed to generate export data: %s", e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"导出失败: {e}")
+        raise HTTPException(status_code=500, detail=f"导出失败: {e}") from e
 
     if format == "csv" and data:
         buf = io.StringIO()

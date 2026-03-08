@@ -128,8 +128,8 @@ async def _call_llm_chat(
             timeout=30.0,
         )
         return response.choices[0].message.content or ""
-    except asyncio.TimeoutError:
-        raise ValueError("Boss assistant LLM timeout after 30s")
+    except TimeoutError:
+        raise ValueError("Boss assistant LLM timeout after 30s") from None
 
 
 async def boss_chat(

@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import math
 import statistics
-from typing import Sequence
-
+from collections.abc import Sequence
 
 # ──────────────────────────────────────────────────────────────
 # 内部工具
@@ -13,7 +12,7 @@ from typing import Sequence
 
 def _t_distribution_cdf(t: float, df: float) -> float:
     """Student's t 分布的 CDF（双尾 p-value 的一半）。
-    
+
     使用正则化不完全贝塔函数的级数展开近似。
     对于 df > 2 的情况精度较好（适合常见样本量）。
     """
@@ -41,8 +40,8 @@ def _regularized_incomplete_beta(x: float, a: float, b: float, max_iter: int = 2
     def _cf() -> float:
         tiny = 1e-30
         f = tiny
-        C = f
-        D = 0.0
+        c_cf = f
+        d_cf = 0.0
         for m in range(0, max_iter):
             for i in range(2):
                 if i == 0:
@@ -52,15 +51,15 @@ def _regularized_incomplete_beta(x: float, a: float, b: float, max_iter: int = 2
                         d = m * (b - m) * x / ((a + 2 * m - 1) * (a + 2 * m))
                 else:
                     d = -(a + m) * (a + b + m) * x / ((a + 2 * m) * (a + 2 * m + 1))
-                D = 1.0 + d * D
-                if abs(D) < tiny:
-                    D = tiny
-                D = 1.0 / D
-                C = 1.0 + d / C
-                if abs(C) < tiny:
-                    C = tiny
-                f *= C * D
-                if abs(C * D - 1.0) < 1e-10:
+                d_cf = 1.0 + d * d_cf
+                if abs(d_cf) < tiny:
+                    d_cf = tiny
+                d_cf = 1.0 / d_cf
+                c_cf = 1.0 + d / c_cf
+                if abs(c_cf) < tiny:
+                    c_cf = tiny
+                f *= c_cf * d_cf
+                if abs(c_cf * d_cf - 1.0) < 1e-10:
                     return f
         return f
 
@@ -231,20 +230,20 @@ def _gamma_continued_fraction(a: float, x: float, max_iter: int = 300) -> float:
     """正则化上不完全 Gamma 函数 Q(a,x) 的连分数展开。"""
     tiny = 1e-30
     b = x + 1.0 - a
-    C = 1.0 / tiny
-    D = 1.0 / b
-    f = D
+    c_cf = 1.0 / tiny
+    d_cf = 1.0 / b
+    f = d_cf
     for i in range(1, max_iter + 1):
         an = -i * (i - a)
         b += 2.0
-        D = an * D + b
-        if abs(D) < tiny:
-            D = tiny
-        C = b + an / C
-        if abs(C) < tiny:
-            C = tiny
-        D = 1.0 / D
-        delta = D * C
+        d_cf = an * d_cf + b
+        if abs(d_cf) < tiny:
+            d_cf = tiny
+        c_cf = b + an / c_cf
+        if abs(c_cf) < tiny:
+            c_cf = tiny
+        d_cf = 1.0 / d_cf
+        delta = d_cf * c_cf
         f *= delta
         if abs(delta - 1.0) < 1e-12:
             break

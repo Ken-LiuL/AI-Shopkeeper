@@ -779,7 +779,7 @@ async def get_daily_insights(
             business_data = await asyncio.wait_for(
                 _get_daily_business_data(target_date), timeout=8.0
             )
-        except (asyncio.TimeoutError, Exception) as exc:
+        except (TimeoutError, Exception) as exc:
             logger.warning(f"Business data fetch failed: {exc}")
             business_data = {}
 

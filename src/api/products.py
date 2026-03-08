@@ -870,7 +870,6 @@ async def list_products(
 @router.post("/batch-cost-price", response_model=APIResponse[dict])
 async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
     """批量更新成本价。Body: [{product_id, cost_price}, ...]"""
-    from fastapi import HTTPException
 
     pool = pg.get_pool()
     updated = 0

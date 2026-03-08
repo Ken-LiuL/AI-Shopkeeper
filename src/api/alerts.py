@@ -39,9 +39,7 @@ def _matches_alert_for_collaboration(action: dict, alert_data: dict) -> bool:
         return True
     if metric_anomaly_id and action_anomaly_id and action_anomaly_id == metric_anomaly_id:
         return True
-    if product_id and action_product_id and action_product_id == product_id:
-        return True
-    return False
+    return bool(product_id and action_product_id and action_product_id == product_id)
 
 
 async def _extract_collaboration_from_scans(pool, alert_data: dict) -> list[dict]:

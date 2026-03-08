@@ -16,6 +16,7 @@ from src.services.competitor_data_service import CompetitorDataService
 from src.services.medical_device_service import MedicalDeviceService
 from src.services.pricing import PricingService
 
+from .products import get_pricing_analysis
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])

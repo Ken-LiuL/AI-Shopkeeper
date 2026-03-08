@@ -7,11 +7,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import nodriver as uc
@@ -39,15 +40,13 @@ class MeituanOrderSyncer:
         with open(self.cookie_path) as f:
             cookies = json.load(f)
         for c in cookies:
-            try:
+            with contextlib.suppress(Exception):
                 await page.send(uc.cdp.network.set_cookie(
                     name=c["name"],
                     value=c["value"],
                     domain=c.get("domain", ".meituan.com"),
                     path=c.get("path", "/"),
                 ))
-            except Exception:
-                pass
 
     async def sync_orders(
         self,
@@ -132,7 +131,7 @@ class MeituanOrderSyncer:
                         # 检查是否有更多页
                         page_info = first_page.get("data", {}).get("pageInfo", {})
                         has_next = page_info.get("hasNext", False)
-                        next_label = page_info.get("nextLabel", "")
+                        page_info.get("nextLabel", "")
 
                         # 分页获取剩余
                         page_num = 2
@@ -183,10 +182,8 @@ class MeituanOrderSyncer:
             logger.exception("Order sync failed")
         finally:
             if browser:
-                try:
+                with contextlib.suppress(Exception):
                     browser.stop()
-                except Exception:
-                    pass
 
         logger.info(
             "Order sync complete: success=%s, orders=%d, error=%s",
@@ -231,7 +228,6 @@ class MeituanOrderSyncer:
                     name = item.get("name", "")
                     price_text = item.get("priceText", "￥0")
                     price_val = float(price_text.replace("￥", "").replace("¥", "").replace(",", "").replace("-", ""))
-                    is_negative = "-" in price_text
 
                     if "小计" in name:
                         total_price = price_val

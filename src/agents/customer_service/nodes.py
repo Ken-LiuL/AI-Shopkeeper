@@ -10,10 +10,7 @@ import asyncio
 import json
 import logging
 
-import re
-
 from ..llm import MODEL_DEEPSEEK, call_tool, call_tool_with_reflection, call_vision
-from .product_memory import get_product_memory  # kept for other potential callers
 
 logger = logging.getLogger(__name__)
 
@@ -576,7 +573,7 @@ async def chat(
             history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
             conversation_summary = await _summarize_conversation(history_to_summarize)
             effective_history = effective_history[-6:]
-            logger.info(f"[CS] Long conversation compressed: kept 6 msgs + summary")
+            logger.info("[CS] Long conversation compressed: kept 6 msgs + summary")
         conversation_history = effective_history
 
         faq_context = []

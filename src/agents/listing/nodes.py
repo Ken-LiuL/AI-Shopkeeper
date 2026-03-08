@@ -11,6 +11,7 @@ from src.db import postgres as pg
 from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.listing import compliance_prompt, filler_prompt, matcher_prompt, parser_prompt
 from ..tools import COMPLIANCE_CHECK_TOOL, LISTING_INFO_TOOL, PARSED_PRODUCT_TOOL
+from .state import ListingState
 
 MATCHER_TOOL = {
     "name": "match_meituan_standard",
@@ -38,7 +39,6 @@ MATCHER_TOOL = {
         "required": ["matched_id", "matched_name", "confidence", "match_reason"],
     },
 }
-from .state import ListingState
 
 logger = logging.getLogger(__name__)
 

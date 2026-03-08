@@ -6,8 +6,8 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
-from src.db import postgres as pg
 from src.api.schemas import APIResponse
+from src.db import postgres as pg
 
 router = APIRouter(prefix="/api/feedback", tags=["feedback"])
 logger = logging.getLogger(__name__)

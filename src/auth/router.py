@@ -27,7 +27,7 @@ async def login(request: LoginRequest):
         logger.error("DB error during login: %s", e)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="服务器内部错误"
-        )
+        ) from e
 
     if not row or not verify_password(request.password, row["password_hash"]):
         raise HTTPException(

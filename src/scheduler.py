@@ -631,9 +631,10 @@ async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) 
     """定时数据同步（使用 nodriver + YiyaoFullSyncer）。"""
     logger.info("Starting Meituan full sync via nodriver (target=%s)", target or "all")
     try:
+        import asyncpg
+
         from src.sync.meituan_client import MeituanBrowserClient
         from src.sync.yiyao_syncer import YiyaoFullSyncer
-        import asyncpg
 
         dsn = _resolve_database_url()
         if not dsn:
@@ -697,8 +698,9 @@ async def qnh_full_sync_task() -> None:
     """牵牛花全量同步任务（QNH goldengateway + IM）。"""
     logger.info("Starting QNH full sync")
     try:
-        import asyncpg
         import time
+
+        import asyncpg
 
         from src.sync.channels import ChannelSyncer
         from src.sync.competitors import CompetitorSyncer
@@ -806,6 +808,7 @@ async def _run_meituan_db_only_etl(target: str) -> None:
     logger.info("Starting Meituan DB-only ETL (target=%s)", target)
     try:
         import asyncpg
+
         from src.sync.yiyao_syncer import YiyaoFullSyncer
 
         dsn = _resolve_database_url()
@@ -865,6 +868,7 @@ async def delivery_timeout_etl_task() -> None:
         return
     try:
         import asyncpg
+
         from src.sync.etl_delivery_timeout import run_delivery_timeout_etl
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
@@ -885,6 +889,7 @@ async def platform_penalties_etl_task() -> None:
         return
     try:
         import asyncpg
+
         from src.sync.etl_platform_penalties import run_platform_penalties_etl
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
@@ -905,6 +910,7 @@ async def policy_crawler_etl_task() -> None:
         return
     try:
         import asyncpg
+
         from src.sync.etl_policy_crawler import run_policy_crawler_etl
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
@@ -921,6 +927,7 @@ async def competitor_changes_etl_task() -> None:
     logger.info("Starting competitor changes ETL")
     try:
         import asyncpg
+
         from src.sync.etl_competitor_changes import run_competitor_changes_etl
         dsn = _resolve_database_url()
         if not dsn:
@@ -939,6 +946,7 @@ async def product_associations_etl_task() -> None:
     logger.info("Starting product associations ETL")
     try:
         import asyncpg
+
         from src.sync.etl_product_associations import run_product_associations_etl
         dsn = _resolve_database_url()
         if not dsn:
@@ -957,6 +965,7 @@ async def seasonality_etl_task() -> None:
     logger.info("Starting seasonality ETL")
     try:
         import asyncpg
+
         from src.sync.etl_seasonality import run_seasonality_etl
         dsn = _resolve_database_url()
         if not dsn:
@@ -975,6 +984,7 @@ async def auto_faq_etl_task() -> None:
     logger.info("Starting auto FAQ ETL")
     try:
         import asyncpg
+
         from src.sync.etl_auto_faq import run_auto_faq_etl
         dsn = _resolve_database_url()
         if not dsn:
@@ -993,6 +1003,7 @@ async def effect_evaluation_etl_task() -> None:
     logger.info("Starting effect evaluation ETL")
     try:
         import asyncpg
+
         from src.sync.etl_effect_evaluation import run_effect_evaluation_etl
 
         dsn = _resolve_database_url()
@@ -1012,8 +1023,9 @@ async def category_mapping_etl_task() -> None:
     """类目映射 ETL — 从商品表/竞品表/QNH API 构建类目映射。"""
     logger.info("Starting category mapping ETL")
     try:
-        import asyncpg
         import time
+
+        import asyncpg
 
         from src.sync.etl_category_mapping import run_category_mapping_etl
         from src.sync.qnh_auth import QNHAuth
@@ -1111,6 +1123,7 @@ async def cookie_health_check_task() -> None:
         return
     try:
         import asyncpg
+
         from src.sync.cookie_health import check_cookie_health
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)

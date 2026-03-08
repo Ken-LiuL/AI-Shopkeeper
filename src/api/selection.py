@@ -89,7 +89,7 @@ async def list_runs() -> APIResponse[list[SelectionRunSummary]]:
         return APIResponse(data=items)
     except Exception as exc:
         logger.error("Failed to list selection runs: %s", exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get("/runs/{run_id}", response_model=APIResponse[SelectionRunDetail])
@@ -111,7 +111,7 @@ async def get_run(run_id: str) -> APIResponse[SelectionRunDetail]:
         raise
     except Exception as exc:
         logger.error("Failed to get selection run %s: %s", run_id, exc)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
 @router.get("/recommendations", response_model=APIResponse[list[dict]])

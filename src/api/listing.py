@@ -104,7 +104,7 @@ async def update_listing(listing_id: str, body: dict) -> APIResponse[dict]:
     except Exception as e:
         logger.error("Failed to update listing %s: %s", listing_id, e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to update listing")
+        raise HTTPException(status_code=500, detail="Failed to update listing") from e
 
 
 @router.post("/{listing_id}/publish", response_model=APIResponse[dict])
@@ -123,7 +123,7 @@ async def publish_listing(listing_id: str) -> APIResponse[dict]:
     except Exception as e:
         logger.error("Failed to publish listing %s: %s", listing_id, e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to publish listing")
+        raise HTTPException(status_code=500, detail="Failed to publish listing") from e
 
 
 @router.delete("/{listing_id}", response_model=APIResponse[dict])
@@ -142,7 +142,7 @@ async def delete_listing(listing_id: str) -> APIResponse[dict]:
     except Exception as e:
         logger.error("Failed to delete listing %s: %s", listing_id, e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to delete listing")
+        raise HTTPException(status_code=500, detail="Failed to delete listing") from e
 
 
 @router.post("/parse", response_model=APIResponse[dict])
@@ -160,7 +160,7 @@ async def parse_url(request: ListingParseRequest) -> APIResponse[dict]:
     except Exception as e:
         logger.error("Failed to parse URL %s: %s", request.url, e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"Failed to parse URL: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to parse URL: {e}") from e
 
 
 async def _run_listing_create(
@@ -230,4 +230,4 @@ async def get_listing(listing_id: str) -> APIResponse[ListingDetail]:
     except Exception as e:
         logger.error("Failed to get listing %s: %s", listing_id, e)
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to get listing")
+        raise HTTPException(status_code=500, detail="Failed to get listing") from e

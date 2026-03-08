@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ class PromptVariant:
     def build_executor(self) -> VariantExecutor:
         executor = VariantExecutor()
         for variant_name, template in self.templates.items():
-            def _make_fn(t: str | Callable[..., str]) -> VariantFn:
+            def _make_fn(t: str | Callable[..., str], vname: str) -> VariantFn:
                 async def _fn(**kwargs: Any) -> Any:
                     if callable(t):
                         prompt = t(**kwargs)
@@ -121,10 +122,10 @@ class PromptVariant:
                     # 从 kwargs 里分离 call_fn 专有参数
                     call_kwargs = {k: v for k, v in kwargs.items() if k not in ("prompt",)}
                     return await self.call_fn(prompt=prompt, **call_kwargs)
-                _fn.__name__ = f"prompt_variant_{variant_name}"
+                _fn.__name__ = f"prompt_variant_{vname}"
                 return _fn
 
-            executor.register(variant_name, _make_fn(template))
+            executor.register(variant_name, _make_fn(template, variant_name))
         return executor
 
 

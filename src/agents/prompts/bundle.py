@@ -192,6 +192,6 @@ rejection_reason: 如果不通过，说明原因并给出调整建议
 使用 output_bundle_pricing 工具输出结果
 
 定价建议必须包含计算过程：
-- cost_breakdown: {item1_cost: X, item2_cost: Y, total_cost: Z}
+- cost_breakdown: {{item1_cost: X, item2_cost: Y, total_cost: Z}}
 - pricing_logic: "成本¥X + 目标毛利30% = ¥Y，竞品套餐价¥Z，取较低值"
 - margin_analysis: "预计毛利率XX%，单套利润¥XX" """

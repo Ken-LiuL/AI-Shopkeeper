@@ -88,7 +88,7 @@ async def create_purchase_order(items: list[dict]) -> APIResponse:
     except Exception as exc:
         logger.exception("采购单生成失败")
         from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"采购单生成失败: {exc}")
+        raise HTTPException(status_code=500, detail=f"采购单生成失败: {exc}") from exc
 
 
 @router.get("/safety-stock", response_model=APIResponse[list])

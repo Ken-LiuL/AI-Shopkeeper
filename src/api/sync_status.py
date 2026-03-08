@@ -15,6 +15,7 @@ from typing import Any
 from fastapi import APIRouter
 
 from src.db import postgres as pg
+
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])

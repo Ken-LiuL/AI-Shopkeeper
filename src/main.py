@@ -15,15 +15,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from src.api.ab_testing import router as ab_testing_router
 from src.api.alerts import router as alerts_router
-from src.api.feedback import router as feedback_router
 from src.api.analytics import router as analytics_router
+from src.api.boss_assistant import router as boss_assistant_router
 from src.api.bundles import router as bundles_router
 from src.api.chat import router as chat_router
 from src.api.competitors import router as competitors_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
+from src.api.feedback import router as feedback_router
 from src.api.insights import router as insights_router
 from src.api.inventory import router as inventory_router
 from src.api.knowledge import router as knowledge_router
@@ -37,11 +39,9 @@ from src.api.products import router as products_router
 from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.reports import router as reports_router
-from src.api.store_config import router as store_config_router
 from src.api.selection import router as selection_router
 from src.api.selection_intelligence import router as selection_intel_router
-from src.api.ab_testing import router as ab_testing_router
-from src.api.boss_assistant import router as boss_assistant_router
+from src.api.store_config import router as store_config_router
 from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
@@ -177,7 +177,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         # Check if DB is empty → trigger full sync in background
         try:
-            import asyncio as _asyncio
 
             # Skip sync on server — sync runs locally via nodriver daemon
             if os.environ.get("DISABLE_SYNC", "").lower() in ("1", "true", "yes"):
@@ -200,7 +199,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     async def _lazy_init_skills():
         """后台延迟初始化 embedding/reranker，确保 scheduler、PG 等核心服务就绪。
-        
+
         EmbeddingSkill 使用 OpenRouter API（无本地模型），RerankerSkill 内部已懒加载
         CrossEncoder。此处仅在首次需要时才真正初始化，使 512MB 环境也能正常启动。
         """

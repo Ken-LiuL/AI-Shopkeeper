@@ -17,7 +17,7 @@ from typing import Any
 
 from src.services.raw_data import fetch_latest_raw
 
-from ..llm import MODEL_OPUS, MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
+from ..llm import MODEL_OPUS, MODEL_PRO, call_tool, call_tool_with_reflection
 from ..prompts.selection import (
     competitor_analysis_prompt,
     gap_identification_prompt,

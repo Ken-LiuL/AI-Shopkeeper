@@ -251,7 +251,7 @@ def _extract_keywords(category_name: str, sample_products: list[str]) -> list[st
             keywords.update(part.strip() for part in category_name.split(sep) if part.strip())
 
     # 药品类目常见关键词映射
-    PHARMA_KEYWORDS = {
+    pharma_keywords = {
         "感冒": ["感冒", "流感", "发热", "退烧"],
         "止痛": ["止痛", "镇痛", "头痛", "牙痛"],
         "消化": ["消化", "胃", "肠", "腹泻", "便秘"],
@@ -269,7 +269,7 @@ def _extract_keywords(category_name: str, sample_products: list[str]) -> list[st
     }
 
     cat_lower = category_name.lower()
-    for group, kws in PHARMA_KEYWORDS.items():
+    for _group, kws in pharma_keywords.items():
         if any(k in cat_lower for k in kws):
             keywords.update(kws)
 

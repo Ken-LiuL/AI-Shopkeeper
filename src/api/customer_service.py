@@ -160,7 +160,7 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
 
     start_ts = time.monotonic()
     # 美团要求 30 秒内回复，预留 5 秒余量，AI 调用限时 25 秒
-    _TIMEOUT_SECONDS = 25.0
+    _timeout_seconds = 25.0
 
     try:
         from src.agents.customer_service.nodes import chat as cs_chat
@@ -176,7 +176,7 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
                 conversation_history=[],
                 images=getattr(request, "images", None),
             ),
-            timeout=_TIMEOUT_SECONDS,
+            timeout=_timeout_seconds,
         )
 
         elapsed_ms = (time.monotonic() - start_ts) * 1000
@@ -190,9 +190,9 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
                 "response_ms": round(elapsed_ms),
             }
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         elapsed_ms = (time.monotonic() - start_ts) * 1000
-        logger.error("Auto-reply timeout after %.0fms (limit=%ss)", elapsed_ms, _TIMEOUT_SECONDS)
+        logger.error("Auto-reply timeout after %.0fms (limit=%ss)", elapsed_ms, _timeout_seconds)
         return APIResponse(
             data={
                 "reply": "亲，稍等一下，我马上为您处理～如有紧急问题可联系人工客服 😊",

@@ -9,7 +9,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -64,7 +64,7 @@ async def check_cookie_health(pool: Any) -> dict:
             "message": f"无法查询同步日志: {e}",
         }
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     if row is None or row["finished_at"] is None:
         return {
@@ -78,7 +78,7 @@ async def check_cookie_health(pool: Any) -> dict:
     last_success: datetime = row["finished_at"]
     # 确保时区一致
     if last_success.tzinfo is None:
-        last_success = last_success.replace(tzinfo=timezone.utc)
+        last_success = last_success.replace(tzinfo=UTC)
 
     hours_elapsed = (now - last_success).total_seconds() / 3600
 
@@ -121,7 +121,7 @@ async def get_sync_status(pool: Any) -> dict:
             "checked_at": ISO 时间字符串,
         }
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     sources: dict[str, dict] = {}
 
     try:
@@ -174,7 +174,7 @@ async def get_sync_status(pool: Any) -> dict:
         finished_at = row["finished_at"]
         if finished_at is not None:
             if finished_at.tzinfo is None:
-                finished_at = finished_at.replace(tzinfo=timezone.utc)
+                finished_at = finished_at.replace(tzinfo=UTC)
             hours_elapsed = (now - finished_at).total_seconds() / 3600
             is_stale = row["status"] != "success" or hours_elapsed > STALE_THRESHOLD_HOURS
         else:

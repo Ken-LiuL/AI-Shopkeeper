@@ -23,7 +23,7 @@ async def llm_metrics(
         return await _llm_metrics_impl(days)
     except Exception as e:
         logger.error("Failed to get LLM metrics: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to get LLM metrics")
+        raise HTTPException(status_code=500, detail="Failed to get LLM metrics") from e
 
 
 async def _llm_metrics_impl(days: int) -> APIResponse[dict]:
