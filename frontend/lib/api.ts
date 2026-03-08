@@ -309,6 +309,7 @@ export interface Alert {
   // Backward compatibility
   message?: string;
   action_suggestions?: string[];
+  recommended_action?: string;
 }
 
 export async function getAlerts(): Promise<Alert[]> {
@@ -539,6 +540,24 @@ export interface DailyInsight {
 
 export async function getDailyInsights(): Promise<DailyInsight> {
   return fetchAPI<DailyInsight>('/insights/daily');
+}
+
+// AI Work Stats API
+export interface AIWorkStats {
+  totalActions: number;
+  alertsHandled: number;
+  csReplies: number;
+  pricingAdj: number;
+  selectionRuns: number;
+  bundlesCreated: number;
+  listingsOptimized: number;
+  estimatedSaved: string;  // 预估增收金额
+  reflectionRounds: number;  // AI自检次数
+  factChecks: number;  // 事实核查次数
+}
+
+export async function getAIWorkStats(): Promise<AIWorkStats> {
+  return fetchAPI<AIWorkStats>('/dashboard/ai-stats');
 }
 
 // Listing API

@@ -15,6 +15,8 @@ import {
 import { withErrorBoundary } from '@/components/error-boundary';
 import { fetchAPI, getAlerts } from '@/lib/api';
 import type { Alert } from '@/lib/api';
+import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
+import { AIActionButton } from '@/components/ai-action-button';
 
 function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/sidebar';
 import { OnboardingGuide } from '@/components/onboarding/guide';
+import { AIAssistantFAB } from '@/components/ai-assistant-fab';
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
