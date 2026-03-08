@@ -8,7 +8,7 @@ from typing import Any
 
 from src.db import postgres as pg
 
-from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool
+from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.listing import compliance_prompt, filler_prompt, matcher_prompt, parser_prompt
 from ..tools import COMPLIANCE_CHECK_TOOL, LISTING_INFO_TOOL, PARSED_PRODUCT_TOOL
 
@@ -411,7 +411,24 @@ async def compliance_node(state: ListingState) -> dict:
             listing_info=_safe_json(listing_with_policy),
             product_category=category,
         )
-        result = await call_tool(prompt, COMPLIANCE_CHECK_TOOL, model=MODEL_SONNET)
+        def _reflect_compliance(initial_result_str: str) -> str:
+            return f"""请审查以下合规校验结论，检查：
+1. 是否遗漏了关键合规风险点
+2. 风险等级与问题优先级是否匹配
+3. 整改建议是否具体且可执行
+4. 数据引用与政策依据是否一致
+
+初始结论：
+{initial_result_str}
+
+请给出修订后的版本，如果没问题则保持不变。"""
+
+        result = await call_tool_with_reflection(
+            initial_prompt=prompt,
+            reflection_prompt_fn=_reflect_compliance,
+            tool=COMPLIANCE_CHECK_TOOL,
+            model=MODEL_SONNET,
+        )
         result_dict = result if isinstance(result, dict) else {"result": result}
 
         if pool:

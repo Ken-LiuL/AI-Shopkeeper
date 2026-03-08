@@ -14,11 +14,11 @@ from __future__ import annotations
 import json
 import logging
 import statistics
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 from src.services.raw_data import fetch_latest_raw
 
-from ..llm import MODEL_PRO, MODEL_SONNET, call_tool
+from ..llm import MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.alert import action_prompt, anomaly_detection_prompt, root_cause_prompt
 from ..tools import ACTIONS_TOOL, ANOMALIES_TOOL, ROOT_CAUSES_TOOL
 from .state import AlertState
@@ -283,7 +283,7 @@ def _zscore_anomaly(
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 async def _check_traffic_spike_drop_anomaly(pool, threshold: float = 0.30) -> list[dict]:
@@ -1016,7 +1016,24 @@ async def action_node(state: AlertState) -> dict:
             )
             if memory_ctx:
                 prompt = f"{prompt}\n{memory_ctx}"
-            result = await call_tool(prompt, ACTIONS_TOOL, model=MODEL_SONNET)
+            def _reflect_actions(initial_result_str: str) -> str:
+                return f"""请审查以下行动建议，检查：
+1. 建议价格是否在合理范围内（≥成本×1.25，≤竞品均价×1.05）
+2. 建议的优先级是否与严重程度匹配
+3. 是否遗漏了重要的行动项
+4. 数据引用是否准确
+
+初始建议：
+{initial_result_str}
+
+请给出修订后的版本，如果没问题则保持不变。"""
+
+            result = await call_tool_with_reflection(
+                initial_prompt=prompt,
+                reflection_prompt_fn=_reflect_actions,
+                tool=ACTIONS_TOOL,
+                model=MODEL_SONNET,
+            )
 
             # === 事实核查 ===
             try:

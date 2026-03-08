@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import json
 import logging
+from datetime import datetime
 from typing import Any
 
-from ..llm import MODEL_DEEPSEEK, MODEL_PRO, call_tool
+from ..llm import MODEL_DEEPSEEK, MODEL_PRO, MODEL_SONNET, call_tool, call_tool_with_reflection
 from ..prompts.bundle import order_mining_prompt, pricing_prompt, scene_design_prompt
 from ..tools import ASSOCIATION_RULES_TOOL, BUNDLE_PRICING_TOOL, BUNDLE_PROPOSALS_TOOL
 from .state import BundleState
@@ -355,7 +355,24 @@ async def pricing_node(state: BundleState) -> dict:
                 product_costs=cost_context,
                 lift_value=lift_value,
             )
-            result = await call_tool(prompt, BUNDLE_PRICING_TOOL, model=MODEL_DEEPSEEK)
+            def _reflect_bundle_pricing(initial_result_str: str) -> str:
+                return f"""请审查以下套餐定价建议，检查：
+1. 套餐价是否高于成本总和
+2. 毛利率是否合理（建议不低于25%）
+3. 折扣力度是否与场景和关联强度匹配
+4. 数据引用和计算是否一致
+
+初始定价建议：
+{initial_result_str}
+
+请给出修订后的版本，如果没问题则保持不变。"""
+
+            result = await call_tool_with_reflection(
+                initial_prompt=prompt,
+                reflection_prompt_fn=_reflect_bundle_pricing,
+                tool=BUNDLE_PRICING_TOOL,
+                model=MODEL_SONNET,
+            )
             if not isinstance(result, dict):
                 result = {}
 
