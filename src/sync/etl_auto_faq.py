@@ -94,6 +94,67 @@ def _classify_question(question: str) -> str:
     return "咨询"
 
 
+async def _classify_items_llm(items: list[str], item_type: str = "keyword") -> dict[str, str]:
+    """用 LLM 批量分类。"""
+    try:
+        from src.agents.llm import MODEL_FLASH, call_tool
+
+        classify_tool = {
+            "name": "classify_items",
+            "description": "为医疗器械客服FAQ内容分类",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "classifications": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "item": {"type": "string"},
+                                "category": {
+                                    "type": "string",
+                                    "enum": [
+                                        "产品使用",
+                                        "售后服务",
+                                        "配送物流",
+                                        "价格优惠",
+                                        "产品功能",
+                                        "安全注意",
+                                        "通用",
+                                    ],
+                                },
+                            },
+                            "required": ["item", "category"],
+                        },
+                    }
+                },
+                "required": ["classifications"],
+            },
+        }
+        prompt = f"为以下医疗器械电商{item_type}分配FAQ类别：\n" + "\n".join(
+            f"- {i}" for i in items[:30]
+        )
+        result = await call_tool(prompt, classify_tool, model=MODEL_FLASH)
+        if not isinstance(result, dict):
+            return {}
+        classifications = result.get("classifications", [])
+        if not isinstance(classifications, list):
+            return {}
+        return {
+            str(c.get("item")): str(c.get("category"))
+            for c in classifications
+            if isinstance(c, dict) and c.get("item") and c.get("category")
+        }
+    except Exception:
+        return {}
+
+
+def _chunk_items(items: list[str], chunk_size: int = 30) -> list[list[str]]:
+    if chunk_size <= 0:
+        return [items]
+    return [items[i : i + chunk_size] for i in range(0, len(items), chunk_size)]
+
+
 def _build_keyword_answer(keyword: str) -> str:
     return (
         f"关于“{keyword}”问题，建议先核对商品说明与订单信息；"
@@ -195,6 +256,17 @@ async def run_auto_faq_etl(pool) -> None:
                                 question_counter[question] += 1
 
             records: list[tuple[str, str, str, int, str]] = []
+            keyword_items = [keyword for keyword, _ in keyword_counter.most_common(30)]
+            question_items = [question for question, _ in question_counter.most_common(50)]
+
+            keyword_categories: dict[str, str] = {}
+            for batch in _chunk_items(keyword_items, chunk_size=30):
+                keyword_categories.update(await _classify_items_llm(batch, item_type="keyword"))
+
+            question_categories: dict[str, str] = {}
+            for batch in _chunk_items(question_items, chunk_size=30):
+                question_categories.update(await _classify_items_llm(batch, item_type="question"))
+
             for keyword, freq in keyword_counter.most_common(30):
                 question = f"{keyword}问题怎么处理？"
                 records.append(
@@ -203,7 +275,7 @@ async def run_auto_faq_etl(pool) -> None:
                         _build_keyword_answer(keyword),
                         "qnh_review_analysis",
                         int(freq),
-                        _classify_keyword(keyword),
+                        keyword_categories.get(keyword) or _classify_keyword(keyword),
                     )
                 )
             for question, freq in question_counter.most_common(50):
@@ -213,7 +285,7 @@ async def run_auto_faq_etl(pool) -> None:
                         _build_question_answer(question),
                         "qnh_im_sessions",
                         int(freq),
-                        _classify_question(question),
+                        question_categories.get(question) or _classify_question(question),
                     )
                 )
 
