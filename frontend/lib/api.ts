@@ -1,10 +1,9 @@
 // API client for AI店长 backend
 // When NEXT_PUBLIC_API_URL is set, Next.js rewrites proxy /api/* → backend server-side.
 // Client always uses relative /api/... paths to avoid mixed-content (HTTPS→HTTP) blocks.
-// Falls back to fly.dev in development when no env var is set.
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL
-  ? '' // relative path — Next.js rewrite handles the proxy (avoids mixed content)
-  : (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
+// When NEXT_PUBLIC_API_URL is set, Next.js rewrites proxy /api/* → backend.
+// Client always uses relative /api/... paths.
+const BASE_URL = '';
 
 // Error mapping for user-friendly messages
 const getErrorMessage = (error: unknown, endpoint: string): string => {

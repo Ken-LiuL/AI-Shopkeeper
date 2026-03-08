@@ -27,7 +27,10 @@ jobs:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: vercel deploy --prod --token $VERCEL_TOKEN --yes
+        run: |
+          vercel env rm NEXT_PUBLIC_API_URL production --token $VERCEL_TOKEN --yes 2>/dev/null || true
+          echo "${{ secrets.VPS_API_URL }}" | vercel env add NEXT_PUBLIC_API_URL production --token $VERCEL_TOKEN --yes 2>/dev/null || true
+          vercel deploy --prod --token $VERCEL_TOKEN --yes
 
   # ── 后端部署 → VPS（推送模式，无需服务器访问 GitHub） ──────────────────
   deploy-backend:
