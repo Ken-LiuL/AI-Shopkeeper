@@ -173,16 +173,21 @@ class MeituanBrowserClient:
             await page.sleep(3)
 
             cookies_dict = self._load_cookies_dict()
+            # Inject cookies for both .meituan.com and yiyao.meituan.com domains
+            domains = [".meituan.com", "yiyao.meituan.com", ".yiyao.meituan.com"]
+            injected = 0
             for name, value in cookies_dict.items():
-                await page.send(
-                    cdp_network.set_cookie(
-                        name=str(name),
-                        value=str(value),
-                        domain=".meituan.com",
-                        path="/",
+                for domain in domains:
+                    await page.send(
+                        cdp_network.set_cookie(
+                            name=str(name),
+                            value=str(value),
+                            domain=domain,
+                            path="/",
+                        )
                     )
-                )
-            logger.info("已注入 %d 个 cookies", len(cookies_dict))
+                injected += 1
+            logger.info("已注入 %d 个 cookies (x%d domains)", injected, len(domains))
 
             # 刷新页面让 cookies 生效，等待 h5guard.js 初始化
             self._page = await self._browser.get(f"{self.base_url}/")
