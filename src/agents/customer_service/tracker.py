@@ -72,6 +72,103 @@ class ConversationTracker:
             "非常不满意",
             "要曝光",
         ]
+        self.urgent_keywords = ["急", "马上", "立刻", "赶紧", "等不了", "催"]
+
+    async def classify_intent_llm(self, message: str) -> dict:
+        """用 LLM 做意图+情感分类。"""
+        try:
+            from src.agents.llm import MODEL_FLASH, call_tool
+
+            intent_tool = {
+                "name": "classify_message",
+                "description": "分类用户消息的意图和情感",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "intent": {
+                            "type": "string",
+                            "enum": ["greeting", "inquiry", "after_sales", "complaint", "chat"],
+                            "description": "用户意图：greeting=问候，inquiry=商品咨询，after_sales=售后/退换/质量问题，complaint=投诉升级，chat=闲聊",
+                        },
+                        "sentiment": {
+                            "type": "string",
+                            "enum": ["positive", "neutral", "frustrated", "angry"],
+                            "description": "情感：positive=满意，neutral=中性，frustrated=不耐烦/失望，angry=愤怒/激动",
+                        },
+                        "urgency": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high"],
+                            "description": "紧急程度",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "description": "置信度 0-1",
+                        },
+                    },
+                    "required": ["intent", "sentiment", "urgency", "confidence"],
+                },
+            }
+
+            prompt = f"分类以下医疗器械电商客服消息的意图和情感：\n\n用户消息：{message}"
+            result = await call_tool(prompt, intent_tool, model=MODEL_FLASH)
+            if not isinstance(result, dict):
+                raise ValueError("LLM classifier returned non-dict result")
+            return result
+        except Exception as e:
+            # LLM 失败时降级到关键词
+            logger.warning(f"LLM intent classification failed, falling back to keywords: {e}")
+            return self._classify_by_keywords(message)
+
+    def _classify_by_keywords(self, message: str) -> dict:
+        """关键词 fallback（保留关键词规则）"""
+        message_lower = (message or "").lower()
+        intent = "chat"
+        sentiment = "neutral"
+        urgency = "low"
+
+        for kw in self.complaint_keywords:
+            if kw in message_lower:
+                intent = "complaint"
+                sentiment = "angry"
+                urgency = "high"
+                break
+
+        if intent == "chat":
+            for kw in self.after_sales_keywords:
+                if kw in message_lower:
+                    intent = "after_sales"
+                    sentiment = "frustrated"
+                    urgency = "medium"
+                    break
+
+        if intent == "chat":
+            for kw in self.inquiry_keywords:
+                if kw in message_lower:
+                    intent = "inquiry"
+                    sentiment = "neutral"
+                    urgency = "low"
+                    break
+
+        if intent == "chat":
+            for kw in self.greeting_keywords:
+                if kw in message_lower:
+                    intent = "greeting"
+                    sentiment = "positive"
+                    urgency = "low"
+                    break
+
+        urgent_hits = sum(1 for kw in self.urgent_keywords if kw in message_lower)
+        if urgent_hits >= 2:
+            urgency = "high"
+        elif urgent_hits >= 1 and urgency == "low":
+            urgency = "medium"
+
+        return {
+            "intent": intent,
+            "sentiment": sentiment,
+            "urgency": urgency,
+            "confidence": 0.5,
+        }
 
     def _build_state_machine(self) -> dict[ConversationState, list[ConversationState]]:
         """构建状态转换规则"""
@@ -171,6 +268,8 @@ class ConversationTracker:
         intent_state_mapping = {
             "after_sales": ConversationState.AFTER_SALES,
             "complaint": ConversationState.COMPLAINT,
+            "inquiry": ConversationState.INQUIRY,
+            "chat": ConversationState.INQUIRY,
             "product_inquiry": ConversationState.INQUIRY,
             "usage_question": ConversationState.INQUIRY,
             "recommendation": ConversationState.INQUIRY,
