@@ -328,7 +328,7 @@ async def call_tool_with_reflection(
     system: str | None = None,
     trace_name: str | None = None,
 ) -> dict[str, Any]:
-    """两轮调用模式 (Self-Reflection)"""
+    """两轮调用模式 (Self-Reflection)。第一轮失败直接抛出；第二轮（反思）失败则降级返回第一轮结果。"""
     initial_result = await call_tool(
         prompt=initial_prompt,
         tool=tool,
@@ -339,15 +339,23 @@ async def call_tool_with_reflection(
         trace_metadata={"stage": "initial"},
     )
 
-    reflection_prompt = reflection_prompt_fn(json.dumps(initial_result, ensure_ascii=False))
-    reflected_result = await call_tool(
-        prompt=reflection_prompt,
-        tool=tool,
-        model=model,
-        max_tokens=max_tokens,
-        system=system,
-        trace_name=f"{trace_name or tool['name']}_reflection",
-        trace_metadata={"stage": "reflection"},
-    )
+    try:
+        reflection_prompt = reflection_prompt_fn(json.dumps(initial_result, ensure_ascii=False))
+        reflected_result = await call_tool(
+            prompt=reflection_prompt,
+            tool=tool,
+            model=model,
+            max_tokens=max_tokens,
+            system=system,
+            trace_name=f"{trace_name or tool['name']}_reflection",
+            trace_metadata={"stage": "reflection"},
+        )
+    except Exception as exc:
+        logger.warning(
+            "Self-reflection round failed (%s), falling back to initial result: %s",
+            trace_name or tool.get("name", "unknown"),
+            exc,
+        )
+        return initial_result
 
     return reflected_result

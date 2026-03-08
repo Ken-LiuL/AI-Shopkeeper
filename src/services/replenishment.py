@@ -270,17 +270,23 @@ class ReplenishmentService:
 
     async def generate_purchase_order(self, items: list[dict]) -> PurchaseOrder:
         """汇总补货建议生成采购单"""
+        import json
+
         pool = pg.get_pool()
         order_id = f"po_{uuid.uuid4().hex[:12]}"
 
         order_items = []
         total = 0.0
         for item in items:
-            cost = float(item.get("estimated_cost", 0))
+            try:
+                cost = float(item.get("estimated_cost", 0))
+            except (TypeError, ValueError) as exc:
+                logger.warning("Invalid estimated_cost for item %s: %s", item.get("product_id"), exc)
+                cost = 0.0
             total += cost
             order_items.append(
                 {
-                    "product_id": item["product_id"],
+                    "product_id": item.get("product_id", ""),
                     "product_name": item.get("product_name", ""),
                     "quantity": item.get("suggested_qty", 0),
                     "unit_cost": item.get("cost_price", 0),
@@ -288,15 +294,17 @@ class ReplenishmentService:
                 }
             )
 
-        import json
-
-        await pool.execute(
-            """INSERT INTO purchase_orders (order_id, items, total_cost, status, created_at, updated_at)
-               VALUES ($1, $2, $3, 'draft', NOW(), NOW())""",
-            order_id,
-            json.dumps(order_items),
-            total,
-        )
+        try:
+            await pool.execute(
+                """INSERT INTO purchase_orders (order_id, items, total_cost, status, created_at, updated_at)
+                   VALUES ($1, $2, $3, 'draft', NOW(), NOW())""",
+                order_id,
+                json.dumps(order_items),
+                total,
+            )
+        except Exception as exc:
+            logger.error("Failed to persist purchase order %s to DB: %s", order_id, exc)
+            # Return the order object anyway — caller can retry persistence
 
         return PurchaseOrder(
             order_id=order_id,
@@ -373,7 +381,7 @@ class ReplenishmentService:
                             "status": "ok" if ss.current_stock >= ss.safety_stock else "low",
                         }
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Failed to calculate safety stock for product %s: %s", p["product_id"], exc)
 
         return results

@@ -411,36 +411,46 @@ class PricingService:
         results = []
 
         for c in changes:
-            pid = c["product_id"]
-            new_price = float(c["new_price"])
+            pid = c.get("product_id", "")
+            try:
+                new_price = float(c["new_price"])
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Skipping price change with invalid new_price for product %s: %s", pid, exc)
+                results.append({"product_id": pid, "status": "error", "error": "invalid new_price"})
+                continue
+
             reason = c.get("reason", "manual")
 
-            old = await pool.fetchval(
-                "SELECT retail_price FROM products WHERE product_id = $1", pid
-            )
-            old_price = float(old or 0)
+            try:
+                old = await pool.fetchval(
+                    "SELECT retail_price FROM products WHERE product_id = $1", pid
+                )
+                old_price = float(old or 0)
 
-            await pool.execute(
-                "UPDATE products SET retail_price = $1 WHERE product_id = $2",
-                new_price,
-                pid,
-            )
-            await pool.execute(
-                """INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
-                   VALUES ($1, $2, $3, $4, NOW())""",
-                pid,
-                old_price,
-                new_price,
-                reason,
-            )
-            results.append(
-                {
-                    "product_id": pid,
-                    "old_price": old_price,
-                    "new_price": new_price,
-                    "status": "applied",
-                }
-            )
+                await pool.execute(
+                    "UPDATE products SET retail_price = $1 WHERE product_id = $2",
+                    new_price,
+                    pid,
+                )
+                await pool.execute(
+                    """INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
+                       VALUES ($1, $2, $3, $4, NOW())""",
+                    pid,
+                    old_price,
+                    new_price,
+                    reason,
+                )
+                results.append(
+                    {
+                        "product_id": pid,
+                        "old_price": old_price,
+                        "new_price": new_price,
+                        "status": "applied",
+                    }
+                )
+            except Exception as exc:
+                logger.error("Failed to apply price change for product %s: %s", pid, exc)
+                results.append({"product_id": pid, "status": "error", "error": str(exc)})
 
         return results
 
@@ -475,48 +485,65 @@ class PricingService:
 
     async def _estimate_elasticity(self, pool, product_id: str) -> float:
         """基于历史调价记录估算价格弹性"""
-        rows = await pool.fetch(
-            """SELECT old_price, new_price, sales_before, sales_after
-               FROM price_history
-               WHERE product_id = $1 AND sales_before > 0 AND sales_after > 0
-               ORDER BY changed_at DESC LIMIT 5""",
-            product_id,
-        )
+        try:
+            rows = await pool.fetch(
+                """SELECT old_price, new_price, sales_before, sales_after
+                   FROM price_history
+                   WHERE product_id = $1 AND sales_before > 0 AND sales_after > 0
+                   ORDER BY changed_at DESC LIMIT 5""",
+                product_id,
+            )
+        except Exception as exc:
+            logger.warning("Failed to fetch price history for elasticity (product %s): %s", product_id, exc)
+            return -1.0
         if not rows:
             return -1.0  # 默认弹性
 
         elasticities = []
         for r in rows:
-            pct_price = (r["new_price"] - r["old_price"]) / r["old_price"]
-            pct_sales = (r["sales_after"] - r["sales_before"]) / r["sales_before"]
-            if abs(pct_price) > 0.01:
-                elasticities.append(pct_sales / pct_price)
+            try:
+                old_price = float(r["old_price"])
+                if old_price == 0:
+                    continue
+                pct_price = (float(r["new_price"]) - old_price) / old_price
+                sales_before = float(r["sales_before"])
+                if sales_before == 0:
+                    continue
+                pct_sales = (float(r["sales_after"]) - sales_before) / sales_before
+                if abs(pct_price) > 0.01:
+                    elasticities.append(pct_sales / pct_price)
+            except (TypeError, ZeroDivisionError) as exc:
+                logger.warning("Skipping malformed price_history row for %s: %s", product_id, exc)
 
         return sum(elasticities) / len(elasticities) if elasticities else -1.0
 
     async def _sales_trend(self, pool, product_id: str) -> float:
         """近期vs前期销量变化率"""
-        recent = (
-            await pool.fetchval(
-                """SELECT COALESCE(SUM(oi.quantity), 0)
-               FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
-               WHERE oi.product_id = $1 AND o.order_time >= CURRENT_DATE - INTERVAL '7 days'""",
-                product_id,
+        try:
+            recent = (
+                await pool.fetchval(
+                    """SELECT COALESCE(SUM(oi.quantity), 0)
+                   FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
+                   WHERE oi.product_id = $1 AND o.order_time >= CURRENT_DATE - INTERVAL '7 days'""",
+                    product_id,
+                )
+                or 0
             )
-            or 0
-        )
 
-        prev = (
-            await pool.fetchval(
-                """SELECT COALESCE(SUM(oi.quantity), 0)
-               FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
-               WHERE oi.product_id = $1
-                 AND o.order_time >= CURRENT_DATE - INTERVAL '14 days'
-                 AND o.order_time < CURRENT_DATE - INTERVAL '7 days'""",
-                product_id,
+            prev = (
+                await pool.fetchval(
+                    """SELECT COALESCE(SUM(oi.quantity), 0)
+                   FROM order_items oi JOIN orders o ON oi.order_id = o.order_id
+                   WHERE oi.product_id = $1
+                     AND o.order_time >= CURRENT_DATE - INTERVAL '14 days'
+                     AND o.order_time < CURRENT_DATE - INTERVAL '7 days'""",
+                    product_id,
+                )
+                or 0
             )
-            or 0
-        )
+        except Exception as exc:
+            logger.warning("Failed to fetch sales trend for product %s: %s", product_id, exc)
+            return 0.0
 
         if prev == 0:
             return 0.0

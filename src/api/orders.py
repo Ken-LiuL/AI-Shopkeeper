@@ -483,16 +483,17 @@ async def order_stats() -> APIResponse[dict]:
 @router.get("/debug-raw")
 async def debug_raw():
     """Debug endpoint to check raw data structure"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
+    try:
+        orders_rows = await pool.fetch("SELECT raw_data FROM qnh_orders_raw LIMIT 3")
+        metrics_rows = await pool.fetch("SELECT raw_data FROM qnh_store_metrics_raw LIMIT 3")
+        metrics = await _get_latest_metrics(pool)
+    except Exception as exc:
+        logger.error("debug-raw failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Debug query failed: {exc}") from exc
 
-    # Check qnh_orders_raw data
-    orders_rows = await pool.fetch("SELECT raw_data FROM qnh_orders_raw LIMIT 3")
-
-    # Check qnh_store_metrics_raw data
-    metrics_rows = await pool.fetch("SELECT raw_data FROM qnh_store_metrics_raw LIMIT 3")
-
-    # Test metrics extraction
-    metrics = await _get_latest_metrics(pool)
     test_extraction = {
         "eff_ord_cnt": _extract_metric(metrics, "eff_ord_cnt"),
         "sale_amt_gmv": _extract_metric(metrics, "sale_amt_gmv"),

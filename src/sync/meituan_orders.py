@@ -292,41 +292,48 @@ class MeituanOrderSyncer:
         return orders
 
     async def _save_orders(self, orders: list[dict]) -> None:
-        """写入 orders 表。"""
+        """写入 orders 表。单条失败不中断整个批次。"""
         if not orders or not self.pool:
             return
 
+        saved = 0
+        failed = 0
         async with self.pool.acquire() as conn:
             for order in orders:
-                await conn.execute(
-                    """
-                    INSERT INTO orders (
-                        order_id, store_id, customer_name, total_amount, status,
-                        items, order_time, order_date, commission, delivery_fee,
-                        merchant_discount, customer_paid, day_seq, created_at
-                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
-                    ON CONFLICT (order_id) DO UPDATE SET
-                        status = EXCLUDED.status,
-                        total_amount = EXCLUDED.total_amount,
-                        items = EXCLUDED.items,
-                        customer_paid = EXCLUDED.customer_paid,
-                        commission = EXCLUDED.commission
-                    """,
-                    order["order_id"],
-                    order["store_id"],
-                    order["recipient_name"],
-                    order["total_price"],
-                    order["status"],
-                    json.dumps({
-                        "products": order["items"],
-                    }, ensure_ascii=False),
-                    order["order_time"],
-                    order["order_time"].date(),
-                    order["commission"],
-                    order["delivery_fee"],
-                    order["merchant_discount"],
-                    order["customer_paid"],
-                    order["day_seq"],
-                )
+                try:
+                    await conn.execute(
+                        """
+                        INSERT INTO orders (
+                            order_id, store_id, customer_name, total_amount, status,
+                            items, order_time, order_date, commission, delivery_fee,
+                            merchant_discount, customer_paid, day_seq, created_at
+                        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+                        ON CONFLICT (order_id) DO UPDATE SET
+                            status = EXCLUDED.status,
+                            total_amount = EXCLUDED.total_amount,
+                            items = EXCLUDED.items,
+                            customer_paid = EXCLUDED.customer_paid,
+                            commission = EXCLUDED.commission
+                        """,
+                        order["order_id"],
+                        order["store_id"],
+                        order["recipient_name"],
+                        order["total_price"],
+                        order["status"],
+                        json.dumps({
+                            "products": order["items"],
+                        }, ensure_ascii=False),
+                        order["order_time"],
+                        order["order_time"].date(),
+                        order["commission"],
+                        order["delivery_fee"],
+                        order["merchant_discount"],
+                        order["customer_paid"],
+                        order["day_seq"],
+                    )
+                    saved += 1
+                except Exception as exc:
+                    logger.error("Failed to save order %s: %s", order.get("order_id"), exc)
+                    failed += 1
 
-        logger.info("Saved %d orders to database", len(orders))
+        logger.info("Saved %d/%d orders to database (%d failed)", saved, len(orders), failed)

@@ -149,15 +149,20 @@ async def export_products(
     import csv
     import io
 
+    from fastapi import HTTPException
     from fastapi.responses import StreamingResponse
 
     pool = pg.get_pool()
-    if status:
-        rows = await pool.fetch(
-            "SELECT * FROM products WHERE status = $1 ORDER BY created_at DESC", status
-        )
-    else:
-        rows = await pool.fetch("SELECT * FROM products ORDER BY created_at DESC")
+    try:
+        if status:
+            rows = await pool.fetch(
+                "SELECT * FROM products WHERE status = $1 ORDER BY created_at DESC", status
+            )
+        else:
+            rows = await pool.fetch("SELECT * FROM products ORDER BY created_at DESC")
+    except Exception as exc:
+        logger.error("Failed to export products: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to export products") from exc
 
     buf = io.StringIO()
     if rows:
@@ -175,12 +180,18 @@ async def export_products(
 
 @router.get("/categories", response_model=APIResponse[list[dict]])
 async def list_categories() -> APIResponse[list[dict]]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    rows = await pool.fetch(
-        """SELECT category, COUNT(*)::int AS product_count
-           FROM products WHERE category IS NOT NULL
-           GROUP BY category ORDER BY product_count DESC"""
-    )
+    try:
+        rows = await pool.fetch(
+            """SELECT category, COUNT(*)::int AS product_count
+               FROM products WHERE category IS NOT NULL
+               GROUP BY category ORDER BY product_count DESC"""
+        )
+    except Exception as exc:
+        logger.error("Failed to query product categories: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch categories") from exc
     return APIResponse(data=[dict(r) for r in rows])
 
 
@@ -190,7 +201,17 @@ async def low_stock(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ) -> PaginatedResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
+    try:
+        return await _low_stock_impl(pool, threshold, page, page_size)
+    except Exception as exc:
+        logger.error("Failed to fetch low-stock products: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch low-stock products") from exc
+
+
+async def _low_stock_impl(pool, threshold: int, page: int, page_size: int) -> PaginatedResponse[dict]:
 
     # Dynamic low-stock thresholds based on monthly_sales:
     #   monthly_sales >= 100 → low if stock < monthly_sales * 0.5
@@ -280,8 +301,17 @@ async def low_stock(
 @router.get("/inventory", response_model=APIResponse[dict])
 async def inventory_overview() -> APIResponse[dict]:
     """Inventory overview and status summary."""
-    pool = pg.get_pool()
+    from fastapi import HTTPException
 
+    pool = pg.get_pool()
+    try:
+        return await _inventory_overview_impl(pool)
+    except Exception as exc:
+        logger.error("Failed to fetch inventory overview: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch inventory overview") from exc
+
+
+async def _inventory_overview_impl(pool) -> APIResponse[dict]:
     # Get inventory status summary from products table
     total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
     active_products = (
@@ -448,11 +478,17 @@ async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> 
 @router.get("/knowledge/stats", response_model=APIResponse[dict])
 async def knowledge_stats() -> APIResponse[dict]:
     """商品知识库统计信息。"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    source_products = await pool.fetchval("SELECT COUNT(*) FROM products")
-    with_category = await pool.fetchval(
-        "SELECT COUNT(*) FROM products WHERE category IS NOT NULL AND category != ''"
-    )
+    try:
+        source_products = await pool.fetchval("SELECT COUNT(*) FROM products")
+        with_category = await pool.fetchval(
+            "SELECT COUNT(*) FROM products WHERE category IS NOT NULL AND category != ''"
+        )
+    except Exception as exc:
+        logger.error("Failed to query knowledge stats: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch knowledge stats") from exc
     with_embedding = 0  # products table no longer stores embeddings directly
     return APIResponse(
         data={
@@ -792,6 +828,8 @@ async def list_products(
     status: str | None = Query(None),
     store_id: str | None = Query(None, description="按门店 ID 过滤"),
 ) -> PaginatedResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
     conditions: list[str] = []
     params: list = []
@@ -812,14 +850,18 @@ async def list_products(
 
     where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
-    total = await pool.fetchval(f"SELECT COUNT(*) FROM products{where}", *params)
+    try:
+        total = await pool.fetchval(f"SELECT COUNT(*) FROM products{where}", *params)
 
-    offset = (page - 1) * page_size
-    params_page = params + [page_size, offset]
-    rows = await pool.fetch(
-        f"SELECT * FROM products{where} ORDER BY monthly_sales DESC NULLS LAST LIMIT ${idx} OFFSET ${idx + 1}",
-        *params_page,
-    )
+        offset = (page - 1) * page_size
+        params_page = params + [page_size, offset]
+        rows = await pool.fetch(
+            f"SELECT * FROM products{where} ORDER BY monthly_sales DESC NULLS LAST LIMIT ${idx} OFFSET ${idx + 1}",
+            *params_page,
+        )
+    except Exception as exc:
+        logger.error("Failed to list products: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to list products") from exc
     return PaginatedResponse(
         data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
     )
@@ -828,36 +870,46 @@ async def list_products(
 @router.post("/batch-cost-price", response_model=APIResponse[dict])
 async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
     """批量更新成本价。Body: [{product_id, cost_price}, ...]"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
     updated = 0
     not_found = []
+    errors = []
     for item in items:
         pid = item.get("product_id", "")
         barcode = item.get("barcode", "")
         cost = item.get("cost_price")
         if cost is None:
             continue
-        row = None
-        if pid:
-            row = await pool.fetchrow(
-                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE product_id = $2 RETURNING product_id",
-                float(cost), str(pid))
-        if not row and barcode:
-            row = await pool.fetchrow(
-                "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE barcode = $2 RETURNING product_id",
-                float(cost), str(barcode))
-        if row:
-            updated += 1
-        else:
-            not_found.append(pid or barcode)
-    return APIResponse(data={"updated": updated, "not_found": not_found[:20], "total": len(items)})
+        try:
+            row = None
+            if pid:
+                row = await pool.fetchrow(
+                    "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE product_id = $2 RETURNING product_id",
+                    float(cost), str(pid))
+            if not row and barcode:
+                row = await pool.fetchrow(
+                    "UPDATE products SET cost_price = $1, updated_at = NOW() WHERE barcode = $2 RETURNING product_id",
+                    float(cost), str(barcode))
+            if row:
+                updated += 1
+            else:
+                not_found.append(pid or barcode)
+        except Exception as exc:
+            logger.error("Failed to update cost price for product %s: %s", pid or barcode, exc)
+            errors.append({"product_id": pid or barcode, "error": str(exc)})
+    return APIResponse(data={"updated": updated, "not_found": not_found[:20], "errors": errors[:20], "total": len(items)})
 
 
 @router.get("/profit-analysis", response_model=APIResponse[dict])
 async def profit_analysis() -> APIResponse[dict]:
     """利润分析：按商品维度的利润率、毛利贡献"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    rows = await pool.fetch("""
+    try:
+        rows = await pool.fetch("""
         SELECT product_id, name, category,
                retail_price, cost_price, monthly_sales, stock,
                CASE WHEN COALESCE(cost_price, 0) > 0 THEN cost_price
@@ -866,6 +918,9 @@ async def profit_analysis() -> APIResponse[dict]:
         FROM products WHERE status = 'active' AND retail_price > 0
         ORDER BY monthly_sales DESC NULLS LAST
     """)
+    except Exception as exc:
+        logger.error("Failed to query profit analysis data: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch profit analysis") from exc
     products = []
     total_revenue = total_profit = 0
     real_cost_count = 0
@@ -916,8 +971,14 @@ async def profit_analysis() -> APIResponse[dict]:
 
 @router.get("/{product_id}", response_model=APIResponse[dict])
 async def get_product(product_id: str) -> APIResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    row = await pool.fetchrow("SELECT * FROM products WHERE product_id = $1", product_id)
+    try:
+        row = await pool.fetchrow("SELECT * FROM products WHERE product_id = $1", product_id)
+    except Exception as exc:
+        logger.error("Failed to fetch product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch product") from exc
     if not row:
         raise NotFoundError("Product", product_id)
     return APIResponse(data=dict(row))
@@ -925,27 +986,35 @@ async def get_product(product_id: str) -> APIResponse[dict]:
 
 @router.post("", response_model=APIResponse[dict], status_code=201)
 async def create_product(body: ProductCreateRequest) -> APIResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
     product_id = gen_id("prod_")
-    row = await pool.fetchrow(
-        """INSERT INTO products (product_id, name, barcode, category, brand, description, cost_price, retail_price, stock, status, created_at, updated_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) RETURNING *""",
-        product_id,
-        body.name,
-        body.barcode,
-        body.category,
-        body.brand,
-        body.description,
-        body.cost_price,
-        body.retail_price,
-        body.stock,
-        body.status,
-    )
+    try:
+        row = await pool.fetchrow(
+            """INSERT INTO products (product_id, name, barcode, category, brand, description, cost_price, retail_price, stock, status, created_at, updated_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NOW(),NOW()) RETURNING *""",
+            product_id,
+            body.name,
+            body.barcode,
+            body.category,
+            body.brand,
+            body.description,
+            body.cost_price,
+            body.retail_price,
+            body.stock,
+            body.status,
+        )
+    except Exception as exc:
+        logger.error("Failed to create product: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to create product") from exc
     return APIResponse(data=dict(row))
 
 
 @router.put("/{product_id}", response_model=APIResponse[dict])
 async def update_product(product_id: str, body: ProductUpdateRequest) -> APIResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
@@ -964,10 +1033,14 @@ async def update_product(product_id: str, body: ProductUpdateRequest) -> APIResp
             idx += 1
     params.append(product_id)
 
-    row = await pool.fetchrow(
-        f"UPDATE products SET {', '.join(set_parts)} WHERE product_id = ${idx} RETURNING *",
-        *params,
-    )
+    try:
+        row = await pool.fetchrow(
+            f"UPDATE products SET {', '.join(set_parts)} WHERE product_id = ${idx} RETURNING *",
+            *params,
+        )
+    except Exception as exc:
+        logger.error("Failed to update product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update product") from exc
     if not row:
         raise NotFoundError("Product", product_id)
     return APIResponse(data=dict(row))
@@ -976,11 +1049,17 @@ async def update_product(product_id: str, body: ProductUpdateRequest) -> APIResp
 @router.delete("/{product_id}", response_model=APIResponse[dict])
 async def delete_product(product_id: str) -> APIResponse[dict]:
     """Soft-delete a product."""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    row = await pool.fetchrow(
-        "UPDATE products SET status = 'delisted', updated_at = NOW() WHERE product_id = $1 RETURNING *",
-        product_id,
-    )
+    try:
+        row = await pool.fetchrow(
+            "UPDATE products SET status = 'delisted', updated_at = NOW() WHERE product_id = $1 RETURNING *",
+            product_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to delete product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to delete product") from exc
     if not row:
         raise NotFoundError("Product", product_id)
     return APIResponse(data=dict(row), message="Product deleted")
@@ -988,25 +1067,37 @@ async def delete_product(product_id: str) -> APIResponse[dict]:
 
 @router.get("/{product_id}/competitors", response_model=APIResponse[list[dict]])
 async def product_competitors(product_id: str) -> APIResponse[list[dict]]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    product = await pool.fetchrow(
-        "SELECT name, category FROM products WHERE product_id = $1", product_id
-    )
+    try:
+        product = await pool.fetchrow(
+            "SELECT name, category FROM products WHERE product_id = $1", product_id
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch product %s for competitor lookup: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch product") from exc
     if not product:
         raise NotFoundError("Product", product_id)
-    rows = await pool.fetch(
-        """SELECT * FROM competitor_products
-           WHERE category = $1 AND name ILIKE '%' || $2 || '%'
-           ORDER BY price LIMIT 20""",
-        product["category"],
-        product["name"],
-    )
+    try:
+        rows = await pool.fetch(
+            """SELECT * FROM competitor_products
+               WHERE category = $1 AND name ILIKE '%' || $2 || '%'
+               ORDER BY price LIMIT 20""",
+            product["category"],
+            product["name"],
+        )
+    except Exception as exc:
+        logger.warning("Failed to fetch competitor products for %s: %s", product_id, exc)
+        rows = []
     return APIResponse(data=[dict(r) for r in rows])
 
 
 @router.patch("/{product_id}/price", response_model=APIResponse[dict])
 async def update_price(product_id: str, body: dict) -> APIResponse[dict]:
     """Update product price. Body: {retail_price?, cost_price?}"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
     sets = []
     params = []
@@ -1020,10 +1111,14 @@ async def update_price(product_id: str, body: dict) -> APIResponse[dict]:
         return APIResponse(success=False, message="No price fields provided")
     sets.append("updated_at = NOW()")
     params.append(product_id)
-    row = await pool.fetchrow(
-        f"UPDATE products SET {', '.join(sets)} WHERE product_id = ${idx} RETURNING *",
-        *params,
-    )
+    try:
+        row = await pool.fetchrow(
+            f"UPDATE products SET {', '.join(sets)} WHERE product_id = ${idx} RETURNING *",
+            *params,
+        )
+    except Exception as exc:
+        logger.error("Failed to update price for product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update price") from exc
     if not row:
         raise NotFoundError("Product", product_id)
     return APIResponse(data=dict(row))
@@ -1031,12 +1126,18 @@ async def update_price(product_id: str, body: dict) -> APIResponse[dict]:
 
 @router.get("/{product_id}/sales", response_model=APIResponse[list[SalesRecord]])
 async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    rows = await pool.fetch(
-        """SELECT sale_date AS date, quantity, revenue FROM sales_history
-           WHERE product_id = $1 ORDER BY sale_date DESC LIMIT 90""",
-        product_id,
-    )
+    try:
+        rows = await pool.fetch(
+            """SELECT sale_date AS date, quantity, revenue FROM sales_history
+               WHERE product_id = $1 ORDER BY sale_date DESC LIMIT 90""",
+            product_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to fetch sales history for product %s: %s", product_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch sales data") from exc
     return APIResponse(
         data=[
             SalesRecord(date=str(r["date"]), quantity=r["quantity"], revenue=r["revenue"])

@@ -123,8 +123,14 @@ async def get_cs_stats(
     start_date: date | None = Query(None),
     end_date: date | None = Query(None),
 ) -> APIResponse:
-    svc = CSAnalyticsService()
-    stats = await svc.get_cs_stats(start_date, end_date)
+    from fastapi import HTTPException
+
+    try:
+        svc = CSAnalyticsService()
+        stats = await svc.get_cs_stats(start_date, end_date)
+    except Exception as exc:
+        logger.error("Failed to get CS stats: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch customer service stats") from exc
     return APIResponse(
         data={
             "total_inquiries": stats.total_inquiries,
@@ -192,8 +198,14 @@ async def get_trends(days: int = Query(7, ge=1, le=90)) -> APIResponse:
 
 @router.get("/conversion", response_model=APIResponse[list])
 async def get_conversion(days: int = Query(7, ge=1, le=90)) -> APIResponse:
-    svc = CSAnalyticsService()
-    records = await svc.get_conversion_tracking(days)
+    from fastapi import HTTPException
+
+    try:
+        svc = CSAnalyticsService()
+        records = await svc.get_conversion_tracking(days)
+    except Exception as exc:
+        logger.error("Failed to get conversion tracking data: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch conversion data") from exc
     return APIResponse(
         data=[
             {
@@ -267,14 +279,20 @@ async def sales_trend(days: int = Query(30, ge=1, le=90)) -> APIResponse:
 @router.get("/product-performance", response_model=APIResponse[list[dict]])
 async def product_performance() -> APIResponse:
     """Product performance analysis from products."""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    rows = await pool.fetch(
-        """SELECT product_id, name, category, retail_price, cost_price, status
-           FROM products
-           WHERE name != '' AND retail_price IS NOT NULL
-           ORDER BY retail_price DESC
-           LIMIT 50"""
-    )
+    try:
+        rows = await pool.fetch(
+            """SELECT product_id, name, category, retail_price, cost_price, status
+               FROM products
+               WHERE name != '' AND retail_price IS NOT NULL
+               ORDER BY retail_price DESC
+               LIMIT 50"""
+        )
+    except Exception as exc:
+        logger.error("Failed to query product performance data: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch product performance") from exc
 
     return APIResponse(
         data=[
@@ -297,19 +315,25 @@ async def product_performance() -> APIResponse:
 @router.get("/category-analysis", response_model=APIResponse[list[dict]])
 async def category_analysis() -> APIResponse:
     """Category analysis aggregated from products."""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    rows = await pool.fetch(
-        """SELECT category,
-                  COUNT(*)::int AS product_count,
-                  AVG(retail_price) AS avg_price,
-                  MIN(retail_price) AS min_price,
-                  MAX(retail_price) AS max_price,
-                  COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS active_products
-           FROM products
-           WHERE category IS NOT NULL AND category != '' AND retail_price IS NOT NULL
-           GROUP BY category
-           ORDER BY product_count DESC"""
-    )
+    try:
+        rows = await pool.fetch(
+            """SELECT category,
+                      COUNT(*)::int AS product_count,
+                      AVG(retail_price) AS avg_price,
+                      MIN(retail_price) AS min_price,
+                      MAX(retail_price) AS max_price,
+                      COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS active_products
+               FROM products
+               WHERE category IS NOT NULL AND category != '' AND retail_price IS NOT NULL
+               GROUP BY category
+               ORDER BY product_count DESC"""
+        )
+    except Exception as exc:
+        logger.error("Failed to query category analysis data: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch category analysis") from exc
 
     return APIResponse(
         data=[
