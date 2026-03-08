@@ -88,6 +88,7 @@ class YiyaoFullSyncer:
 
         # 先导航到商品管理页，让 h5guard 初始化正确的上下文
         await self.client.navigate_to("/merch/product/list")
+        await asyncio.sleep(5)  # 等待 h5guard.js 初始化
 
         while True:
             resp = await self.client.execute_api(
