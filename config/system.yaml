@@ -30,6 +30,7 @@ scheduled_tasks:
   bundle_mining: "0 23 * * *"
   daily_report: "0 22 * * *"
   prophet_retrain: "0 3 * * 0"
+  graph_builder_etl: "30 5 * * *"
 
 database:
   postgres:

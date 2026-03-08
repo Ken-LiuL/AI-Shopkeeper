@@ -933,6 +933,41 @@ async def category_mapping_etl_task() -> None:
         logger.exception("Category mapping ETL failed")
 
 
+async def graph_builder_etl_task() -> None:
+    """PG -> Neo4j 图谱构建 ETL。"""
+    logger.info("Starting graph builder ETL")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip graph builder ETL")
+        return
+    try:
+        import asyncpg
+
+        from src.db import neo4j as neo4j_db
+        from src.sync.etl_graph_builder import run_graph_builder_etl
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            try:
+                neo4j_driver = neo4j_db.get_driver()
+            except Exception:
+                neo4j_driver = await neo4j_db.init_driver()
+
+            etl_result = await run_graph_builder_etl(pool, neo4j_driver)
+            logger.info(
+                "Graph builder ETL done: nodes_created=%d relationships_created=%d errors=%d",
+                etl_result.get("nodes_created", 0),
+                etl_result.get("relationships_created", 0),
+                len(etl_result.get("errors", [])),
+            )
+            if etl_result.get("errors"):
+                logger.warning("Graph builder ETL errors: %s", etl_result["errors"])
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Graph builder ETL failed")
+
+
 async def qnh_data_sync_task() -> None:
     """数据同步任务（已迁移到 Chrome 扩展 + nodriver 链路，此处保留为空操作）。"""
     logger.info("Data sync now handled by Chrome extension / nodriver — skipping legacy task")
@@ -1420,5 +1455,16 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="category_mapping_etl",
+        replace_existing=True,
+    )
+
+    # PG -> Neo4j 图谱构建：每天 05:30 CST（在商品同步和 ETL 之后）
+    scheduler.add_job(
+        _make_heartbeat_task("graph_builder_etl", graph_builder_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("graph_builder_etl", "30 5 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="graph_builder_etl",
         replace_existing=True,
     )
