@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import statistics
-from datetime import date
+from datetime import date, datetime, timezone
 
 from src.services.raw_data import fetch_latest_raw
 
@@ -206,17 +206,17 @@ async def _get_active_products(pool) -> list[dict]:
         today = date.today().isoformat()
         rows = await pool.fetch(
             """
-            SELECT p.product_id, p.name,
-                   COALESCE(sh.quantity, 0) AS today_sales
-            FROM products p
-            LEFT JOIN sales_history sh
-                ON sh.product_id = p.product_id AND sh.sale_date = $1
+            SELECT p.spu_id AS product_id, p.name,
+                   COALESCE(sh.quantity_sold, 0) AS today_sales
+            FROM qnh_products p
+            LEFT JOIN qnh_sales_history sh
+                ON sh.spu_id = p.spu_id AND sh.date = $1
             WHERE p.status = 'active'
-              AND p.product_id IN (
-                  SELECT DISTINCT product_id FROM sales_history
-                  WHERE sale_date >= CURRENT_DATE - INTERVAL '30 days'
+              AND p.spu_id IN (
+                  SELECT DISTINCT spu_id FROM qnh_sales_history
+                  WHERE date >= CURRENT_DATE - INTERVAL '30 days'
               )
-            ORDER BY COALESCE(sh.quantity, 0) DESC
+            ORDER BY COALESCE(sh.quantity_sold, 0) DESC
             LIMIT 50
             """,
             today,
@@ -234,11 +234,11 @@ async def _fetch_recent_sales_series(pool, product_id: str, days: int = 30) -> l
     try:
         rows = await pool.fetch(
             """
-            SELECT quantity
-            FROM sales_history
-            WHERE product_id = $1
-              AND sale_date >= CURRENT_DATE - $2 * INTERVAL '1 day'
-            ORDER BY sale_date ASC
+            SELECT quantity_sold AS quantity
+            FROM qnh_sales_history
+            WHERE spu_id = $1
+              AND date >= CURRENT_DATE - $2 * INTERVAL '1 day'
+            ORDER BY date ASC
             """,
             product_id,
             days,
@@ -280,6 +280,278 @@ def _zscore_anomaly(
         "severity": severity,
         "reason": f"zscore={z:.2f}",
     }
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+async def _check_traffic_spike_drop_anomaly(pool, threshold: float = 0.30) -> list[dict]:
+    """检测 qnh_traffic 流量突降/突增。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT traffic_date,
+                   SUM(COALESCE(impressions, 0)) AS impressions,
+                   SUM(COALESCE(clicks, 0)) AS clicks
+            FROM qnh_traffic
+            GROUP BY traffic_date
+            ORDER BY traffic_date DESC
+            LIMIT 2
+            """
+        )
+        if len(rows) < 2:
+            return []
+
+        latest = dict(rows[0])
+        previous = dict(rows[1])
+        latest_val = float(latest.get("impressions") or latest.get("clicks") or 0)
+        previous_val = float(previous.get("impressions") or previous.get("clicks") or 0)
+        if previous_val <= 0:
+            return []
+
+        change_pct = (latest_val - previous_val) / previous_val
+        if abs(change_pct) < threshold:
+            return []
+
+        is_drop = change_pct < 0
+        return [
+            {
+                "anomaly_id": f"traffic_{latest['traffic_date']}",
+                "product_id": "store_traffic",
+                "product_name": "门店整体流量",
+                "anomaly_type": "exposure_drop" if is_drop else "multi_factor",
+                "severity": "critical" if is_drop and abs(change_pct) >= 0.50 else "warning",
+                "detection_method": "rule",
+                "metrics": {
+                    "expected_value": round(previous_val, 2),
+                    "actual_value": round(latest_val, 2),
+                    "deviation_percent": round(change_pct * 100, 2),
+                    "threshold": round(threshold * 100, 2),
+                },
+                "description": (
+                    f"近两日流量{'突降' if is_drop else '突增'}"
+                    f"{abs(change_pct):.1%}（{previous['traffic_date']} -> {latest['traffic_date']}）"
+                ),
+                "detected_at": _utc_now_iso(),
+            }
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to check qnh_traffic anomaly: {e}")
+        return []
+
+
+async def _check_inventory_low_stock_anomaly(pool, low_stock_threshold: int = 10) -> list[dict]:
+    """检测 qnh_inventory 低库存/断货。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            WITH latest_stock AS (
+                SELECT DISTINCT ON (spu_id)
+                    spu_id,
+                    product_name,
+                    COALESCE(current_stock, available_stock, 0) AS stock,
+                    snapshot_time
+                FROM qnh_inventory
+                WHERE spu_id IS NOT NULL
+                ORDER BY spu_id, snapshot_time DESC
+            )
+            SELECT spu_id, product_name, stock
+            FROM latest_stock
+            WHERE stock < $1
+            ORDER BY stock ASC
+            LIMIT 50
+            """,
+            low_stock_threshold,
+        )
+        anomalies = []
+        for r in rows:
+            row_data = dict(r)
+            stock = int(row_data.get("stock") or 0)
+            is_stockout = stock <= 0
+            anomalies.append(
+                {
+                    "anomaly_id": f"inventory_{row_data['spu_id']}_{'stockout' if is_stockout else 'low'}",
+                    "product_id": str(row_data.get("spu_id") or ""),
+                    "product_name": row_data.get("product_name") or "未知商品",
+                    "anomaly_type": "stockout_urgent" if is_stockout else "stockout_warning",
+                    "severity": "critical" if is_stockout else "warning",
+                    "detection_method": "rule",
+                    "metrics": {
+                        "expected_value": float(low_stock_threshold),
+                        "actual_value": float(stock),
+                        "deviation_percent": round(((stock - low_stock_threshold) / low_stock_threshold) * 100, 2),
+                        "threshold": float(low_stock_threshold),
+                    },
+                    "description": (
+                        f"{'断货' if is_stockout else '低库存'}预警：当前库存 {stock}，阈值 < {low_stock_threshold}"
+                    ),
+                    "detected_at": _utc_now_iso(),
+                }
+            )
+        return anomalies
+    except Exception as e:
+        logger.warning(f"Failed to check qnh_inventory anomaly: {e}")
+        return []
+
+
+async def _check_delivery_timeout_anomaly(pool, threshold: float = 0.05) -> list[dict]:
+    """检测最近24小时配送超时率。"""
+    if not pool:
+        return []
+    try:
+        row = await pool.fetchrow(
+            """
+            WITH timeout_stats AS (
+                SELECT COUNT(*)::int AS timeout_count
+                FROM delivery_timeouts
+                WHERE create_time >= NOW() - INTERVAL '24 hours'
+            ),
+            order_stats AS (
+                SELECT COUNT(*)::int AS total_orders
+                FROM qnh_orders
+                WHERE order_time >= NOW() - INTERVAL '24 hours'
+            )
+            SELECT
+                t.timeout_count,
+                o.total_orders,
+                CASE
+                    WHEN o.total_orders > 0 THEN t.timeout_count::float / o.total_orders
+                    ELSE NULL
+                END AS timeout_rate
+            FROM timeout_stats t, order_stats o
+            """
+        )
+        if not row:
+            return []
+
+        row_data = dict(row)
+        timeout_count = int(row_data.get("timeout_count") or 0)
+        total_orders = int(row_data.get("total_orders") or 0)
+        timeout_rate = float(row_data.get("timeout_rate") or 0)
+
+        if total_orders <= 0 or timeout_rate < threshold:
+            return []
+
+        return [
+            {
+                "anomaly_id": "delivery_timeout_24h",
+                "product_id": "store_delivery",
+                "product_name": "门店配送",
+                "anomaly_type": "multi_factor",
+                "severity": "critical" if timeout_rate >= threshold * 2 else "warning",
+                "detection_method": "rule",
+                "metrics": {
+                    "expected_value": round(threshold * 100, 2),
+                    "actual_value": round(timeout_rate * 100, 2),
+                    "deviation_percent": round((timeout_rate - threshold) * 100, 2),
+                    "threshold": round(threshold * 100, 2),
+                },
+                "description": (
+                    f"最近24小时配送超时率 {timeout_rate:.1%}，"
+                    f"超时 {timeout_count}/{total_orders} 单"
+                ),
+                "detected_at": _utc_now_iso(),
+            }
+        ]
+    except Exception as e:
+        logger.warning(f"Failed to check delivery timeout anomaly: {e}")
+        return []
+
+
+async def _check_competitor_price_change_anomaly(pool, threshold_pct: float = 5.0) -> list[dict]:
+    """检测 competitor_price_changes 竞品价格异动。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT product_name, store_name, old_price, new_price, change_pct, detected_at
+            FROM competitor_price_changes
+            WHERE detected_at >= NOW() - INTERVAL '24 hours'
+              AND ABS(COALESCE(change_pct, 0)) >= $1
+            ORDER BY ABS(change_pct) DESC
+            LIMIT 10
+            """,
+            threshold_pct,
+        )
+        anomalies = []
+        for i, r in enumerate(rows, start=1):
+            row_data = dict(r)
+            change_pct = float(row_data.get("change_pct") or 0)
+            anomalies.append(
+                {
+                    "anomaly_id": f"competitor_change_{i}",
+                    "product_id": "market_competitor",
+                    "product_name": row_data.get("product_name") or "竞品",
+                    "anomaly_type": "competitor_price_drop",
+                    "severity": "warning" if change_pct < 0 else "info",
+                    "detection_method": "rule",
+                    "metrics": {
+                        "expected_value": float(row_data.get("old_price") or 0),
+                        "actual_value": float(row_data.get("new_price") or 0),
+                        "deviation_percent": round(change_pct, 2),
+                        "threshold": float(threshold_pct),
+                    },
+                    "description": (
+                        f"竞品 {row_data.get('store_name') or '未知店铺'} 价格变动 {change_pct:.2f}%"
+                    ),
+                    "detected_at": _utc_now_iso(),
+                }
+            )
+        return anomalies
+    except Exception as e:
+        logger.warning(f"Failed to check competitor price change anomaly: {e}")
+        return []
+
+
+async def _check_platform_penalty_anomaly(pool) -> list[dict]:
+    """检测 platform_penalties 平台处罚通知。"""
+    if not pool:
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT keyword_matched, content, COALESCE(original_time, detected_at) AS event_time
+            FROM platform_penalties
+            WHERE detected_at >= NOW() - INTERVAL '24 hours'
+            ORDER BY detected_at DESC
+            LIMIT 5
+            """
+        )
+        anomalies = []
+        for i, r in enumerate(rows, start=1):
+            row_data = dict(r)
+            content = str(row_data.get("content") or "")
+            short_content = (content[:100] + "...") if len(content) > 100 else content
+            anomalies.append(
+                {
+                    "anomaly_id": f"platform_penalty_{i}",
+                    "product_id": "store_platform",
+                    "product_name": "平台通知",
+                    "anomaly_type": "multi_factor",
+                    "severity": "critical",
+                    "detection_method": "rule",
+                    "metrics": {
+                        "expected_value": 0,
+                        "actual_value": 1,
+                        "deviation_percent": 100,
+                        "threshold": 0,
+                    },
+                    "description": (
+                        f"检测到平台处罚/警告关键词「{row_data.get('keyword_matched') or '未知'}」：{short_content}"
+                    ),
+                    "detected_at": _utc_now_iso(),
+                }
+            )
+        return anomalies
+    except Exception as e:
+        logger.warning(f"Failed to check platform penalty anomaly: {e}")
+        return []
 
 
 async def prophet_detection_node(state: AlertState) -> dict:
@@ -440,6 +712,13 @@ async def anomaly_detection_node(state: AlertState) -> dict:
         traffic_alerts = await _check_traffic_trend_anomaly(pool)
         inventory_alerts = await _check_inventory_anomaly(pool)
 
+        # 新增: 结构化表异常检测（全部独立 try/except）
+        traffic_table_alerts = await _check_traffic_spike_drop_anomaly(pool)
+        inventory_table_alerts = await _check_inventory_low_stock_anomaly(pool)
+        delivery_timeout_alerts = await _check_delivery_timeout_anomaly(pool)
+        competitor_change_alerts = await _check_competitor_price_change_anomaly(pool)
+        platform_penalty_alerts = await _check_platform_penalty_anomaly(pool)
+
         raw_data_context = ""
         if kpi_alerts:
             raw_data_context += (
@@ -477,6 +756,18 @@ async def anomaly_detection_node(state: AlertState) -> dict:
                         anomaly.get("description", "") + "（已确认有活动进行中，非异常波动）"
                     )
 
+        # 新增: 结构化数据源异常直接注入 anomalies
+        anomaly_list.extend(traffic_table_alerts)
+        anomaly_list.extend(inventory_table_alerts)
+        anomaly_list.extend(delivery_timeout_alerts)
+        anomaly_list.extend(competitor_change_alerts)
+        anomaly_list.extend(platform_penalty_alerts)
+
+        summary = result.setdefault("detection_summary", {})
+        summary["anomalies_found"] = len(anomaly_list)
+        summary["critical_count"] = sum(1 for a in anomaly_list if a.get("severity") == "critical")
+        summary["warning_count"] = sum(1 for a in anomaly_list if a.get("severity") == "warning")
+
         prophet_meta = state.get("prophet_detection_metadata", {}) or {}
         fallback_events = prophet_meta.get("fallback_events", [])
         metadata = result.setdefault("metadata", {})
@@ -505,7 +796,7 @@ async def _fetch_competitor_data(pool, product_id: str) -> str:
             FROM competitor_products cp
             JOIN competitor_stores cs ON cs.competitor_id = cp.competitor_id
             WHERE cp.barcode IN (
-                SELECT barcode FROM products WHERE product_id = $1 AND barcode IS NOT NULL
+                SELECT barcode FROM qnh_products WHERE spu_id = $1 AND barcode IS NOT NULL
             )
             ORDER BY cp.crawled_at DESC
             LIMIT 10
@@ -526,7 +817,7 @@ async def _fetch_inventory_status(pool, product_id: str) -> str:
         return "暂无库存数据"
     try:
         row = await pool.fetchrow(
-            "SELECT name, stock, monthly_sales, status FROM products WHERE product_id = $1",
+            "SELECT name, stock, monthly_sales, status FROM qnh_products WHERE spu_id = $1",
             product_id,
         )
         if not row:
@@ -545,9 +836,12 @@ async def _fetch_pricing_history(pool, product_id: str) -> str:
         rows = await pool.fetch(
             """
             SELECT sale_date, quantity, revenue
-            FROM sales_history
-            WHERE product_id = $1 AND sale_date >= CURRENT_DATE - INTERVAL '30 days'
-            ORDER BY sale_date DESC
+            FROM (
+                SELECT date AS sale_date, quantity_sold AS quantity, revenue, spu_id
+                FROM qnh_sales_history
+            ) sh
+            WHERE sh.spu_id = $1 AND sh.sale_date >= CURRENT_DATE - INTERVAL '30 days'
+            ORDER BY sh.sale_date DESC
             LIMIT 30
             """,
             product_id,
@@ -622,8 +916,8 @@ async def _fetch_product_details(pool, product_id: str) -> dict:
             """
             SELECT name, retail_price, cost_price, stock,
                    ROUND(COALESCE(monthly_sales, 0) / 30.0, 2) AS avg_daily_sales
-            FROM products
-            WHERE product_id = $1
+            FROM qnh_products
+            WHERE spu_id = $1
             """,
             product_id,
         )
@@ -644,7 +938,7 @@ async def _fetch_competitor_avg_price(pool, product_id: str) -> float:
             SELECT AVG(cp.price)
             FROM competitor_products cp
             WHERE cp.barcode IN (
-                SELECT barcode FROM products WHERE product_id = $1 AND barcode IS NOT NULL
+                SELECT barcode FROM qnh_products WHERE spu_id = $1 AND barcode IS NOT NULL
             )
             AND cp.crawled_at >= NOW() - INTERVAL '7 days'
             """,
