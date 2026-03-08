@@ -49,7 +49,7 @@ class CompetitorSyncer(BaseSyncer):
         location: tuple = DEFAULT_LOCATION,
         keywords: list[str] | None = None,
     ):
-        super().__init__()
+        super().__init__(client=None, db_pool=db_pool)
         self._db_pool = db_pool
         self._location = location
         self._keywords = keywords or COMPETITOR_KEYWORDS
