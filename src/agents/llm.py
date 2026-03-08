@@ -319,6 +319,43 @@ async def call_vision(
     )
 
 
+def _add_reflection_fields(tool: dict) -> dict:
+    """
+    返回一个临时的 tool 副本，在 input_schema 中注入两个自检字段：
+    - _reflection_confidence: float 0-1，LLM 对本轮结果的信心
+    - _reflection_changes_made: bool，本轮是否做了实质性修改
+    这两个字段仅用于收敛判断，调用后会从结果中 pop 掉，不影响下游。
+    """
+    import copy
+
+    reflection_tool = copy.deepcopy(tool)
+    schema = reflection_tool.setdefault("input_schema", {})
+    props = schema.setdefault("properties", {})
+    required = schema.setdefault("required", [])
+
+    props["_reflection_confidence"] = {
+        "type": "number",
+        "description": (
+            "Your confidence in the quality of this result, as a float between 0 and 1. "
+            "1.0 means perfect, no further improvement possible; 0.0 means very low quality."
+        ),
+    }
+    props["_reflection_changes_made"] = {
+        "type": "boolean",
+        "description": (
+            "Whether you made any meaningful changes compared to the previous result. "
+            "Set to false if the result is already optimal and you changed nothing substantial."
+        ),
+    }
+
+    # 将两个字段加入 required，确保模型必须输出
+    for field in ("_reflection_confidence", "_reflection_changes_made"):
+        if field not in required:
+            required.append(field)
+
+    return reflection_tool
+
+
 async def call_tool_with_reflection(
     initial_prompt: str,
     reflection_prompt_fn,
@@ -327,35 +364,87 @@ async def call_tool_with_reflection(
     max_tokens: int = 4096,
     system: str | None = None,
     trace_name: str | None = None,
+    max_rounds: int = 3,
+    quality_threshold: float = 0.8,
 ) -> dict[str, Any]:
-    """两轮调用模式 (Self-Reflection)。第一轮失败直接抛出；第二轮（反思）失败则降级返回第一轮结果。"""
-    initial_result = await call_tool(
+    """
+    动态多轮自检模式 (Dynamic Self-Reflection)。
+
+    - 第一轮：正常调用，获取初始结果。
+    - 后续轮（最多 max_rounds 轮）：每轮注入 _reflection_confidence / _reflection_changes_made
+      字段，LLM 填写后由框架提取并决定是否提前收敛。
+    - 若 confidence >= quality_threshold 且 changes_made=False，则提前退出。
+    - 第一轮失败直接抛出；反思轮失败则降级返回上一轮结果。
+    - 保持向后兼容：现有调用方无需改动。
+    """
+    base_name = trace_name or tool["name"]
+
+    # ── 第一轮 ──────────────────────────────────────────────────────────────
+    current_result = await call_tool(
         prompt=initial_prompt,
         tool=tool,
         model=model,
         max_tokens=max_tokens,
         system=system,
-        trace_name=f"{trace_name or tool['name']}_initial",
-        trace_metadata={"stage": "initial"},
+        trace_name=f"{base_name}_round1",
+        trace_metadata={"stage": "initial", "round": 1},
     )
 
-    try:
-        reflection_prompt = reflection_prompt_fn(json.dumps(initial_result, ensure_ascii=False))
-        reflected_result = await call_tool(
-            prompt=reflection_prompt,
-            tool=tool,
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            trace_name=f"{trace_name or tool['name']}_reflection",
-            trace_metadata={"stage": "reflection"},
-        )
-    except Exception as exc:
-        logger.warning(
-            "Self-reflection round failed (%s), falling back to initial result: %s",
-            trace_name or tool.get("name", "unknown"),
-            exc,
-        )
-        return initial_result
+    last_round = 1
 
-    return reflected_result
+    # ── 反思轮 ──────────────────────────────────────────────────────────────
+    reflection_tool = _add_reflection_fields(tool)
+
+    for round_num in range(2, max_rounds + 1):
+        try:
+            reflection_prompt = reflection_prompt_fn(
+                json.dumps(current_result, ensure_ascii=False)
+            )
+            reflected_result = await call_tool(
+                prompt=reflection_prompt,
+                tool=reflection_tool,
+                model=model,
+                max_tokens=max_tokens,
+                system=system,
+                trace_name=f"{base_name}_round{round_num}",
+                trace_metadata={"stage": "reflection", "round": round_num},
+            )
+        except Exception as exc:
+            logger.warning(
+                "Self-reflection round %d failed (%s), keeping previous result: %s",
+                round_num,
+                base_name,
+                exc,
+            )
+            break
+
+        # 提取并移除自检字段，不让它们污染下游结果
+        confidence: float = reflected_result.pop("_reflection_confidence", 0.9)
+        changes_made: bool = reflected_result.pop("_reflection_changes_made", False)
+
+        current_result = reflected_result
+        last_round = round_num
+
+        logger.debug(
+            "Self-reflection round %d/%d — confidence=%.2f changes_made=%s (%s)",
+            round_num,
+            max_rounds,
+            confidence,
+            changes_made,
+            base_name,
+        )
+
+        # 收敛判断：高置信度且无改动 → 提前退出
+        if confidence >= quality_threshold and not changes_made:
+            logger.info(
+                "Self-reflection converged at round %d (confidence=%.2f, threshold=%.2f) [%s]",
+                round_num,
+                confidence,
+                quality_threshold,
+                base_name,
+            )
+            break
+
+    # 记录实际轮数，供调用方或日志参考（可选字段，不影响业务逻辑）
+    current_result["_reflection_rounds"] = last_round
+    return current_result

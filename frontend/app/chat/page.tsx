@@ -120,13 +120,13 @@ function ChatPage() {
     setCurrentSessionId(sessionId);
     setLoading(true);
     try {
-      interface RawMessage { id?: string; role?: string; is_user?: boolean; content?: string; message?: string; text?: string; created_at?: string; sources?: Message['sources']; intent?: string; }
+      interface RawMessage { id?: string; role?: string; is_user?: boolean; content?: string; message?: string; text?: string; created_at?: string; sources?: Message['sources']; intent?: string; needs_human?: boolean; }
       type MessagesApiResponse = RawMessage[] | { messages: RawMessage[] };
       const data = await fetchAPI<MessagesApiResponse>(`/customer-service/sessions/${sessionId}/messages`);
       const rawMessages = Array.isArray(data) ? data : (data as { messages: RawMessage[] }).messages || [];
       const restored: Message[] = rawMessages.map((m: RawMessage) => ({
         id: m.id || String(Date.now() + Math.random()),
-        role: m.role || (m.is_user ? 'user' : 'assistant'),
+        role: (m.role === 'user' || m.role === 'assistant' ? m.role : (m.is_user ? 'user' : 'assistant')) as 'user' | 'assistant',
         content: m.content || m.message || m.text || '',
         timestamp: m.created_at ? new Date(m.created_at) : new Date(),
         sources: m.sources,

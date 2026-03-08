@@ -59,7 +59,7 @@ function SelectionPage() {
       setLoading(true);
       setError(null);
 
-      type SelectionApiResponse = SelectionProduct[] | { products?: SelectionProduct[]; recommendations?: SelectionProduct[] };
+      type SelectionApiResponse = SelectionProduct[] | { products?: SelectionProduct[]; recommendations?: SelectionProduct[]; summary?: SelectionSummary };
       const data = await fetchAPI<SelectionApiResponse>('/selection/recommendations');
 
       const productList: SelectionProduct[] = Array.isArray(data)
@@ -77,7 +77,7 @@ function SelectionPage() {
       };
 
       setProducts(productList);
-      setSummary(data.summary || calcSummary);
+      setSummary((!Array.isArray(data) && (data as { summary?: SelectionSummary }).summary) || calcSummary);
     } catch (err) {
       setError('加载选品数据失败，请稍后重试');
       console.error('Error loading selection data:', err);
