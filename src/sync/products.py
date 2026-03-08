@@ -409,7 +409,7 @@ class ProductSyncer(BaseSyncer):
                     item.get("name", item.get("spuName", "")),
                     item.get("barcode", item.get("upc", "")),
                     item.get("categoryName", item.get("category", "")),
-                    item.get("brandName", item.get("brand", "")),
+                    (lambda b: b.get("brandName", "") if isinstance(b, dict) else (b or ""))(item.get("brandName", item.get("brand", ""))),
                     item.get("spec", item.get("specification", "")),
                     item.get("unit", ""),
                     item.get("costPrice"),
