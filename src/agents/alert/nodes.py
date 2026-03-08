@@ -876,6 +876,25 @@ async def root_cause_node(state: AlertState) -> dict:
         competitor_data = await _fetch_competitor_data(pool, product_id)
         inventory_status = await _fetch_inventory_status(pool, product_id)
         pricing_history = await _fetch_pricing_history(pool, product_id)
+        # === GraphRAG 增强 ===
+        graph_context = ""
+        try:
+            from src.db import neo4j as neo4j_db
+            from src.skills.neo4j_skill import Neo4jSkill
+
+            driver = neo4j_db.get_driver()
+            skill = Neo4jSkill(driver=driver)
+            impact_chain = await skill.get_impact_chain(product_id, depth=2)
+            if impact_chain:
+                lines = ["\n\n# 关联商品影响分析", "该商品异常可能影响以下关联商品："]
+                for item in impact_chain:
+                    name = str(item.get("name") or item.get("product_id") or "未知商品")
+                    stock = item.get("stock")
+                    distance = item.get("distance", 1)
+                    lines.append(f"- {name}（库存:{stock}，距离:{distance}跳）")
+                graph_context = "\n".join(lines) + "\n"
+        except Exception:
+            graph_context = ""
 
         try:
             prompt = root_cause_prompt(
@@ -888,7 +907,7 @@ async def root_cause_node(state: AlertState) -> dict:
                 our_data_changes=pricing_history,
                 inventory_status=inventory_status,
                 pricing_history=pricing_history,
-                external_factors="暂无外部因素数据",
+                external_factors=f"暂无外部因素数据{graph_context}",
                 operation_metrics="暂无运营指标数据",
             )
             result = await call_tool(prompt, ROOT_CAUSES_TOOL, model=MODEL_PRO)

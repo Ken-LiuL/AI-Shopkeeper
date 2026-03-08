@@ -115,6 +115,19 @@ async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
                             for r in (graph_ctx.related_products or [])
                         ]
                         enriched_product["scenarios"] = graph_ctx.scenarios or []
+                    deep_ctx = await neo4j_skill.get_deep_context(product_id)
+                    if deep_ctx:
+                        competitors = deep_ctx.get("competitors") or []
+                        seasons = deep_ctx.get("seasons") or []
+                        if competitors:
+                            enriched_product["deep_competitors"] = competitors
+                        if seasons:
+                            enriched_product["deep_seasons"] = seasons
+                        if competitors or seasons:
+                            enriched_product["deep_context"] = {
+                                "competitors": competitors,
+                                "seasons": seasons,
+                            }
             except Exception as e:
                 logger.warning(
                     f"[CS] GraphRAG enrichment failed for {enriched_product.get('id')} (graceful): {e}"

@@ -297,6 +297,31 @@ async def matcher_node(state: ListingState) -> dict:
         category_candidates,
         similar_products,
     )
+    # === GraphRAG 增强 ===
+    graph_context = ""
+    try:
+        from src.db import neo4j as neo4j_db
+        from src.skills.neo4j_skill import Neo4jSkill
+
+        driver = neo4j_db.get_driver()
+        skill = Neo4jSkill(driver=driver)
+        product_name = str(
+            parsed.get("cleaned_title")
+            or parsed_data.get("product_name")
+            or parsed_data.get("name")
+            or ""
+        ).strip()
+        if product_name:
+            suggested_categories = await skill.suggest_category(product_name)
+            if suggested_categories:
+                graph_context = (
+                    "\n\n[图谱类目推荐]\n"
+                    f"{_safe_json(suggested_categories)}"
+                )
+    except Exception:
+        graph_context = ""
+    if graph_context:
+        meituan_candidates_context = f"{meituan_candidates_context}{graph_context}"
 
     try:
         prompt = matcher_prompt(

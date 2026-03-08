@@ -528,9 +528,32 @@ async def seasonal_analysis_node(state: SelectionState) -> dict:
 async def gap_identification_node(state: SelectionState) -> dict:
     """Gap Identification: 缺品机会识别"""
     try:
+        # === GraphRAG 增强 ===
+        graph_context = ""
+        try:
+            from src.db import neo4j as neo4j_db
+            from src.skills.neo4j_skill import Neo4jSkill
+
+            driver = neo4j_db.get_driver()
+            skill = Neo4jSkill(driver=driver)
+            category_gaps = await skill.find_category_gaps()
+            scenario_gaps = await skill.find_scenario_gaps()
+            if category_gaps or scenario_gaps:
+                graph_context = (
+                    "\n\n# 图谱缺口发现\n"
+                    f"竞品品类缺口：{json.dumps(category_gaps[:20], ensure_ascii=False)}\n"
+                    f"场景缺口：{json.dumps(scenario_gaps[:20], ensure_ascii=False)}"
+                )
+        except Exception:
+            graph_context = ""
+
+        competitor_data = json.dumps(state.get("competitor_analysis", {}), ensure_ascii=False)
+        if graph_context:
+            competitor_data = f"{competitor_data}{graph_context}"
+
         prompt = gap_identification_prompt(
             market_data=json.dumps(state.get("market_analysis", {}), ensure_ascii=False),
-            competitor_data=json.dumps(state.get("competitor_analysis", {}), ensure_ascii=False),
+            competitor_data=competitor_data,
             inventory_data=json.dumps(state.get("inventory_analysis", {}), ensure_ascii=False),
             seasonal_data=json.dumps(state.get("seasonal_factors", {}), ensure_ascii=False),
         )

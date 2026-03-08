@@ -218,6 +218,25 @@ async def order_mining_node(state: BundleState) -> dict:
                     ensure_ascii=False,
                 )
 
+        # === GraphRAG 增强 ===
+        graph_context = ""
+        try:
+            from src.db import neo4j as neo4j_db
+            from src.skills.neo4j_skill import Neo4jSkill
+
+            driver = neo4j_db.get_driver()
+            skill = Neo4jSkill(driver=driver)
+            scenario_bundles = await skill.get_scenario_bundles(limit=15)
+            if scenario_bundles:
+                graph_context = (
+                    "\n\n# 图谱场景组合推荐\n"
+                    f"{json.dumps(scenario_bundles, ensure_ascii=False)}"
+                )
+        except Exception:
+            graph_context = ""
+        if graph_context:
+            orders_summary = f"{orders_summary}{graph_context}"
+
         prompt = order_mining_prompt(
             orders_summary=orders_summary,
             fp_growth_config=state.get("fp_growth_config", DEFAULT_FP_CONFIG),
