@@ -85,23 +85,26 @@ class OrderSyncer(BaseSyncer):
         if not self.pool:
             return
 
+        saved = 0
+        failed = 0
         for item in items:
             order_id = str(item.get("orderId", item.get("id", "")))
             if not order_id:
                 continue
 
-            channel = _detect_channel(item)
+            try:
+                channel = _detect_channel(item)
 
-            items_json = (
-                json.dumps(
-                    item.get("orderItems", item.get("items", [])),
-                    ensure_ascii=False,
+                items_json = (
+                    json.dumps(
+                        item.get("orderItems", item.get("items", [])),
+                        ensure_ascii=False,
+                    )
+                    if item.get("orderItems") or item.get("items")
+                    else None
                 )
-                if item.get("orderItems") or item.get("items")
-                else None
-            )
 
-            await self.pool.execute(
+                await self.pool.execute(
                 """
                 INSERT INTO qnh_orders
                     (order_id, tenant_id, channel, store_name, total_amount,
@@ -160,7 +163,14 @@ class OrderSyncer(BaseSyncer):
                     ensure_ascii=False,
                     default=str,
                 ),
-            )
+                )
+                saved += 1
+            except Exception:
+                logger.error("Failed to upsert order %s", order_id, exc_info=True)
+                failed += 1
+
+        if failed:
+            logger.warning("_upsert_orders: saved=%d, failed=%d", saved, failed)
 
 
 def _detect_channel(item: dict[str, Any]) -> str:

@@ -306,117 +306,127 @@ class ProductSyncer(BaseSyncer):
     # ── Upsert ──────────────────────────────────────────────────────────
 
     async def _upsert_products(self, items: list[dict[str, Any]]) -> None:
-        """Upsert product records into qnh_products."""
+        """Upsert product records into qnh_products. Single item failure does not abort batch."""
         if not self.pool:
             return
 
+        saved = 0
+        failed = 0
         for item in items:
             spu_id = str(item.get("spuId", item.get("id", "")))
             sku_id = str(item.get("skuId", ""))
             if not spu_id:
                 continue
 
-            # Extract image URLs (new API uses picUrlList)
-            pic_url_list = item.get("picUrlList", [])
-            main_image = (
-                pic_url_list[0]
-                if pic_url_list
-                else item.get("imageUrl", item.get("picUrl", item.get("mainImage", "")))
-            )
+            try:
+                # Extract image URLs (new API uses picUrlList)
+                pic_url_list = item.get("picUrlList", [])
+                main_image = (
+                    pic_url_list[0]
+                    if pic_url_list
+                    else item.get("imageUrl", item.get("picUrl", item.get("mainImage", "")))
+                )
 
-            # Collect all image URLs into extra
-            image_list = pic_url_list or item.get(
-                "imageUrls", item.get("images", item.get("picUrls", []))
-            )
-            description = item.get("description", item.get("desc", item.get("detail", "")))
+                # Collect all image URLs into extra
+                image_list = pic_url_list or item.get(
+                    "imageUrls", item.get("images", item.get("picUrls", []))
+                )
+                description = item.get("description", item.get("desc", item.get("detail", "")))
 
-            extra_data = {
-                k: v
-                for k, v in item.items()
-                if k
-                not in {
-                    "spuId",
-                    "id",
-                    "skuId",
-                    "name",
-                    "spuName",
-                    "barcode",
-                    "upc",
-                    "categoryName",
-                    "category",
-                    "brandName",
-                    "brand",
-                    "spec",
-                    "specification",
-                    "unit",
-                    "costPrice",
-                    "retailPrice",
-                    "price",
-                    "channelPrice",
-                    "status",
-                    "spuStatus",
-                    "channelStatus",
-                    "imageUrl",
-                    "picUrl",
-                    "mainImage",
-                    "picUrlList",
-                    "tenantId",
-                    "weightType",
+                extra_data = {
+                    k: v
+                    for k, v in item.items()
+                    if k
+                    not in {
+                        "spuId",
+                        "id",
+                        "skuId",
+                        "name",
+                        "spuName",
+                        "barcode",
+                        "upc",
+                        "categoryName",
+                        "category",
+                        "brandName",
+                        "brand",
+                        "spec",
+                        "specification",
+                        "unit",
+                        "costPrice",
+                        "retailPrice",
+                        "price",
+                        "channelPrice",
+                        "status",
+                        "spuStatus",
+                        "channelStatus",
+                        "imageUrl",
+                        "picUrl",
+                        "mainImage",
+                        "picUrlList",
+                        "tenantId",
+                        "weightType",
+                    }
                 }
-            }
-            # Ensure images, description, and SKU data are in extra for knowledge base
-            if image_list:
-                extra_data["imageUrls"] = image_list
-            if description:
-                extra_data["description"] = description
-            # Preserve embedded SKU data from new API
-            skus = item.get("skus", [])
-            if skus:
-                extra_data["skus"] = skus
-            weight_type = item.get("weightType")
-            if weight_type:
-                extra_data["weightType"] = weight_type
+                # Ensure images, description, and SKU data are in extra for knowledge base
+                if image_list:
+                    extra_data["imageUrls"] = image_list
+                if description:
+                    extra_data["description"] = description
+                # Preserve embedded SKU data from new API
+                skus = item.get("skus", [])
+                if skus:
+                    extra_data["skus"] = skus
+                weight_type = item.get("weightType")
+                if weight_type:
+                    extra_data["weightType"] = weight_type
 
-            await self.pool.execute(
-                """
-                INSERT INTO qnh_products
-                    (spu_id, sku_id, tenant_id, name, barcode, category, brand,
-                     spec, unit, cost_price, retail_price, channel_price,
-                     status, channel_status, image_url, extra, synced_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
-                ON CONFLICT (spu_id, sku_id) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    barcode = EXCLUDED.barcode,
-                    category = EXCLUDED.category,
-                    brand = EXCLUDED.brand,
-                    spec = EXCLUDED.spec,
-                    unit = EXCLUDED.unit,
-                    cost_price = EXCLUDED.cost_price,
-                    retail_price = EXCLUDED.retail_price,
-                    channel_price = EXCLUDED.channel_price,
-                    status = EXCLUDED.status,
-                    channel_status = EXCLUDED.channel_status,
-                    image_url = EXCLUDED.image_url,
-                    extra = EXCLUDED.extra,
-                    synced_at = NOW()
-                """,
-                spu_id,
-                sku_id or "",
-                self.client.tenant_id,
-                item.get("name", item.get("spuName", "")),
-                item.get("barcode", item.get("upc", "")),
-                item.get("categoryName", item.get("category", "")),
-                item.get("brandName", item.get("brand", "")),
-                item.get("spec", item.get("specification", "")),
-                item.get("unit", ""),
-                item.get("costPrice"),
-                item.get("retailPrice", item.get("price")),
-                _json_or_none(item.get("channelPrice")),
-                item.get("status", item.get("spuStatus", "")),
-                _json_or_none(item.get("channelStatus")),
-                main_image,
-                _json_or_none(extra_data),
-            )
+                await self.pool.execute(
+                    """
+                    INSERT INTO qnh_products
+                        (spu_id, sku_id, tenant_id, name, barcode, category, brand,
+                         spec, unit, cost_price, retail_price, channel_price,
+                         status, channel_status, image_url, extra, synced_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+                    ON CONFLICT (spu_id, sku_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        barcode = EXCLUDED.barcode,
+                        category = EXCLUDED.category,
+                        brand = EXCLUDED.brand,
+                        spec = EXCLUDED.spec,
+                        unit = EXCLUDED.unit,
+                        cost_price = EXCLUDED.cost_price,
+                        retail_price = EXCLUDED.retail_price,
+                        channel_price = EXCLUDED.channel_price,
+                        status = EXCLUDED.status,
+                        channel_status = EXCLUDED.channel_status,
+                        image_url = EXCLUDED.image_url,
+                        extra = EXCLUDED.extra,
+                        synced_at = NOW()
+                    """,
+                    spu_id,
+                    sku_id or "",
+                    self.client.tenant_id,
+                    item.get("name", item.get("spuName", "")),
+                    item.get("barcode", item.get("upc", "")),
+                    item.get("categoryName", item.get("category", "")),
+                    item.get("brandName", item.get("brand", "")),
+                    item.get("spec", item.get("specification", "")),
+                    item.get("unit", ""),
+                    item.get("costPrice"),
+                    item.get("retailPrice", item.get("price")),
+                    _json_or_none(item.get("channelPrice")),
+                    item.get("status", item.get("spuStatus", "")),
+                    _json_or_none(item.get("channelStatus")),
+                    main_image,
+                    _json_or_none(extra_data),
+                )
+                saved += 1
+            except Exception:
+                logger.error("Failed to upsert product spu_id=%s sku_id=%s", spu_id, sku_id, exc_info=True)
+                failed += 1
+
+        if failed:
+            logger.warning("_upsert_products: saved=%d, failed=%d", saved, failed)
 
 
 def _json_or_none(val: Any) -> Any:

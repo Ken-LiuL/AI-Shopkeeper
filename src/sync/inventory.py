@@ -116,41 +116,51 @@ class InventorySyncer(BaseSyncer):
             return
 
         now = datetime.now(CST)
+        saved = 0
+        failed = 0
         for item in items:
             sku_id = str(item.get("skuId", item.get("goodsId", "")))
             if not sku_id:
                 continue
 
-            current_stock = item.get("currentStock", item.get("totalStock", 0))
-            cost_price = item.get("costPrice")
-            stock_value = None
-            if current_stock and cost_price:
-                with contextlib.suppress(ValueError, TypeError):
-                    stock_value = float(current_stock) * float(cost_price)
+            try:
+                current_stock = item.get("currentStock", item.get("totalStock", 0))
+                cost_price = item.get("costPrice")
+                stock_value = None
+                if current_stock and cost_price:
+                    with contextlib.suppress(ValueError, TypeError):
+                        stock_value = float(current_stock) * float(cost_price)
 
-            await self.pool.execute(
-                """
-                INSERT INTO qnh_inventory
-                    (tenant_id, spu_id, sku_id, barcode, product_name,
-                     current_stock, available_stock, locked_stock,
-                     cost_price, stock_value, warehouse,
-                     snapshot_time, extra, synced_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
-                """,
-                self.client.tenant_id,
-                str(item.get("spuId", "")),
-                sku_id,
-                item.get("barcode", item.get("upc", "")),
-                item.get("goodsName", item.get("name", "")),
-                _safe_int(current_stock),
-                _safe_int(item.get("availableStock", item.get("sellableStock"))),
-                _safe_int(item.get("lockedStock")),
-                _safe_float(cost_price),
-                stock_value,
-                item.get("warehouseName", item.get("warehouse", "")),
-                now,
-                json.dumps(item, ensure_ascii=False, default=str),
-            )
+                await self.pool.execute(
+                    """
+                    INSERT INTO qnh_inventory
+                        (tenant_id, spu_id, sku_id, barcode, product_name,
+                         current_stock, available_stock, locked_stock,
+                         cost_price, stock_value, warehouse,
+                         snapshot_time, extra, synced_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+                    """,
+                    self.client.tenant_id,
+                    str(item.get("spuId", "")),
+                    sku_id,
+                    item.get("barcode", item.get("upc", "")),
+                    item.get("goodsName", item.get("name", "")),
+                    _safe_int(current_stock),
+                    _safe_int(item.get("availableStock", item.get("sellableStock"))),
+                    _safe_int(item.get("lockedStock")),
+                    _safe_float(cost_price),
+                    stock_value,
+                    item.get("warehouseName", item.get("warehouse", "")),
+                    now,
+                    json.dumps(item, ensure_ascii=False, default=str),
+                )
+                saved += 1
+            except Exception:
+                logger.error("Failed to upsert inventory sku_id=%s", sku_id, exc_info=True)
+                failed += 1
+
+        if failed:
+            logger.warning("_upsert_inventory: saved=%d, failed=%d", saved, failed)
 
 
 def _safe_int(val: Any) -> int | None:

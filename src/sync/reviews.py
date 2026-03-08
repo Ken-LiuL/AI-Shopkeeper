@@ -82,50 +82,60 @@ class ReviewSyncer(BaseSyncer):
         if not self.pool:
             return
 
+        saved = 0
+        failed = 0
         for item in items:
             review_id = str(item.get("reviewId", item.get("id", "")))
             if not review_id:
                 continue
 
-            review_time = item.get("reviewTime", item.get("createTime"))
-            if isinstance(review_time, int | float):
-                review_time = datetime.fromtimestamp(
-                    review_time / 1000 if review_time > 1e12 else review_time,
-                    tz=CST,
+            try:
+                review_time = item.get("reviewTime", item.get("createTime"))
+                if isinstance(review_time, int | float):
+                    review_time = datetime.fromtimestamp(
+                        review_time / 1000 if review_time > 1e12 else review_time,
+                        tz=CST,
+                    )
+                elif isinstance(review_time, str):
+                    try:
+                        review_time = datetime.fromisoformat(review_time)
+                    except Exception:
+                        review_time = None
+
+                platform = str(item.get("platform", item.get("channel", ""))).lower()
+                channel = "unknown"
+                if "meituan" in platform or "美团" in platform:
+                    channel = "meituan"
+                elif "eleme" in platform or "饿了么" in platform:
+                    channel = "eleme"
+                elif "jddj" in platform or "京东" in platform:
+                    channel = "jddj"
+
+                await self.pool.execute(
+                    """
+                    INSERT INTO qnh_reviews
+                        (tenant_id, review_id, order_id, channel, rating,
+                         content, reply, review_time, extra, synced_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
+                    ON CONFLICT (review_id) DO UPDATE SET
+                        reply = EXCLUDED.reply,
+                        extra = EXCLUDED.extra,
+                        synced_at = NOW()
+                    """,
+                    self.client.tenant_id,
+                    review_id,
+                    str(item.get("orderId", "")) or None,
+                    channel,
+                    item.get("rating", item.get("score")),
+                    item.get("content", item.get("comment", "")),
+                    item.get("reply", item.get("merchantReply", "")),
+                    review_time,
+                    json.dumps(item, ensure_ascii=False, default=str),
                 )
-            elif isinstance(review_time, str):
-                try:
-                    review_time = datetime.fromisoformat(review_time)
-                except Exception:
-                    review_time = None
+                saved += 1
+            except Exception:
+                logger.error("Failed to upsert review %s", review_id, exc_info=True)
+                failed += 1
 
-            platform = str(item.get("platform", item.get("channel", ""))).lower()
-            channel = "unknown"
-            if "meituan" in platform or "美团" in platform:
-                channel = "meituan"
-            elif "eleme" in platform or "饿了么" in platform:
-                channel = "eleme"
-            elif "jddj" in platform or "京东" in platform:
-                channel = "jddj"
-
-            await self.pool.execute(
-                """
-                INSERT INTO qnh_reviews
-                    (tenant_id, review_id, order_id, channel, rating,
-                     content, reply, review_time, extra, synced_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NOW())
-                ON CONFLICT (review_id) DO UPDATE SET
-                    reply = EXCLUDED.reply,
-                    extra = EXCLUDED.extra,
-                    synced_at = NOW()
-                """,
-                self.client.tenant_id,
-                review_id,
-                str(item.get("orderId", "")) or None,
-                channel,
-                item.get("rating", item.get("score")),
-                item.get("content", item.get("comment", "")),
-                item.get("reply", item.get("merchantReply", "")),
-                review_time,
-                json.dumps(item, ensure_ascii=False, default=str),
-            )
+        if failed:
+            logger.warning("Reviews upsert: saved=%d, failed=%d", saved, failed)

@@ -38,6 +38,18 @@ def get_driver() -> AsyncDriver:
     return _driver
 
 
+async def get_driver_safe() -> AsyncDriver | None:
+    """Return the driver if available, or None if Neo4j is unavailable."""
+    global _driver
+    if _driver is not None:
+        return _driver
+    try:
+        return await init_driver()
+    except Exception as exc:
+        logger.warning("Neo4j unavailable: %s", exc)
+        return None
+
+
 async def close_driver() -> None:
     """Gracefully close the driver."""
     global _driver
@@ -52,13 +64,23 @@ async def query(
     parameters: dict[str, Any] | None = None,
     database: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Run a read query and return a list of record dicts."""
-    driver = get_driver()
-    db = database or get_settings().system.database["neo4j"].get("database", "neo4j")
-    async with driver.session(database=db) as session:
-        result = await session.run(cypher, parameters or {})
-        records = await result.data()
-        return records
+    """Run a read query and return a list of record dicts.
+
+    Returns an empty list (instead of raising) if Neo4j is unavailable.
+    """
+    driver = await get_driver_safe()
+    if driver is None:
+        logger.warning("Neo4j query skipped: driver unavailable. cypher=%s", cypher[:80])
+        return []
+    try:
+        db = database or get_settings().system.database["neo4j"].get("database", "neo4j")
+        async with driver.session(database=db) as session:
+            result = await session.run(cypher, parameters or {})
+            records = await result.data()
+            return records
+    except Exception as exc:
+        logger.error("Neo4j query failed: %s | cypher=%s", exc, cypher[:80], exc_info=True)
+        return []
 
 
 async def execute_write(
@@ -66,10 +88,20 @@ async def execute_write(
     parameters: dict[str, Any] | None = None,
     database: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Run a write query inside an implicit transaction."""
-    driver = get_driver()
-    db = database or get_settings().system.database["neo4j"].get("database", "neo4j")
-    async with driver.session(database=db) as session:
-        result = await session.run(cypher, parameters or {})
-        records = await result.data()
-        return records
+    """Run a write query inside an implicit transaction.
+
+    Returns an empty list (instead of raising) if Neo4j is unavailable.
+    """
+    driver = await get_driver_safe()
+    if driver is None:
+        logger.warning("Neo4j write skipped: driver unavailable. cypher=%s", cypher[:80])
+        return []
+    try:
+        db = database or get_settings().system.database["neo4j"].get("database", "neo4j")
+        async with driver.session(database=db) as session:
+            result = await session.run(cypher, parameters or {})
+            records = await result.data()
+            return records
+    except Exception as exc:
+        logger.error("Neo4j write failed: %s | cypher=%s", exc, cypher[:80], exc_info=True)
+        return []

@@ -69,7 +69,10 @@ class IMHistorySyncer(BaseSyncer):
                 if not chat_id:
                     continue
 
-                await self._upsert_session(chat_id, session)
+                try:
+                    await self._upsert_session(chat_id, session)
+                except Exception:
+                    self.logger.error("Failed to upsert IM session %s", chat_id, exc_info=True)
                 total_sessions += 1
 
                 # 2. 拉取聊天历史 via neixin chat/range API
@@ -156,28 +159,38 @@ class IMHistorySyncer(BaseSyncer):
         if not self.pool:
             return
 
+        saved = 0
+        failed = 0
         for msg in messages:
             msg_id = str(msg.get("messageId", msg.get("id", "")))
             if not msg_id:
                 continue
 
-            msg_time = self._parse_time(msg.get("time", msg.get("createTime")))
+            try:
+                msg_time = self._parse_time(msg.get("time", msg.get("createTime")))
 
-            await self.pool.execute(
-                """
-                INSERT INTO qnh_im_messages
-                    (session_id, message_id, role, content, msg_time, msg_type, extra, synced_at)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
-                ON CONFLICT (message_id) DO NOTHING
-                """,
-                session_id,
-                msg_id,
-                msg.get("role", msg.get("sender", "customer")),
-                msg.get("content", msg.get("text", "")),
-                msg_time,
-                msg.get("msgType", msg.get("type", "text")),
-                json.dumps(msg, ensure_ascii=False, default=str),
-            )
+                await self.pool.execute(
+                    """
+                    INSERT INTO qnh_im_messages
+                        (session_id, message_id, role, content, msg_time, msg_type, extra, synced_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+                    ON CONFLICT (message_id) DO NOTHING
+                    """,
+                    session_id,
+                    msg_id,
+                    msg.get("role", msg.get("sender", "customer")),
+                    msg.get("content", msg.get("text", "")),
+                    msg_time,
+                    msg.get("msgType", msg.get("type", "text")),
+                    json.dumps(msg, ensure_ascii=False, default=str),
+                )
+                saved += 1
+            except Exception:
+                logger.error("Failed to upsert IM message %s (session=%s)", msg_id, session_id, exc_info=True)
+                failed += 1
+
+        if failed:
+            logger.warning("_upsert_messages session=%s: saved=%d, failed=%d", session_id, saved, failed)
 
     def _parse_time(self, val: Any) -> datetime | None:
         if val is None:

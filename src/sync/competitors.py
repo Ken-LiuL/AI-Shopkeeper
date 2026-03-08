@@ -125,54 +125,75 @@ class CompetitorSyncer(BaseSyncer):
         return await self.full_sync()
 
     async def _save_products(self, products: list, keyword: str):
-        """保存竞品商品到数据库。"""
+        """保存竞品商品到数据库。单条失败不中断批次。"""
         if not self._db_pool:
             return
+        failed = 0
         for p in products:
-            await self._db_pool.execute(
-                """
-                INSERT INTO competitor_products
-                    (product_id, name, price, monthly_sales, store_name, keyword)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                p.product_id,
-                p.name,
-                p.price,
-                p.monthly_sales,
-                p.store_name,
-                keyword,
-            )
+            try:
+                await self._db_pool.execute(
+                    """
+                    INSERT INTO competitor_products
+                        (product_id, name, price, monthly_sales, store_name, keyword)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    p.product_id,
+                    p.name,
+                    p.price,
+                    p.monthly_sales,
+                    p.store_name,
+                    keyword,
+                )
+            except Exception:
+                logger.error("Failed to save competitor product %s (kw=%s)", getattr(p, "product_id", "?"), keyword, exc_info=True)
+                failed += 1
+        if failed:
+            logger.warning("_save_products: %d/%d failed for keyword=%s", failed, len(products), keyword)
 
     async def _save_stores(self, stores: list[dict], keyword: str):
-        """保存竞品店铺到数据库。"""
+        """保存竞品店铺到数据库。单条失败不中断批次。"""
         if not self._db_pool:
             return
+        failed = 0
         for s in stores:
-            await self._db_pool.execute(
-                """
-                INSERT INTO competitor_stores
-                    (store_id, name, monthly_sales, product_count, threat_level, keyword)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                """,
-                s["store_id"],
-                s["name"],
-                s["monthly_sales"],
-                s["product_count"],
-                s["threat_level"],
-                keyword,
-            )
+            try:
+                await self._db_pool.execute(
+                    """
+                    INSERT INTO competitor_stores
+                        (store_id, name, monthly_sales, product_count, threat_level, keyword)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    """,
+                    s["store_id"],
+                    s["name"],
+                    s["monthly_sales"],
+                    s["product_count"],
+                    s["threat_level"],
+                    keyword,
+                )
+            except Exception:
+                logger.error("Failed to save competitor store %s (kw=%s)", s.get("store_id", "?"), keyword, exc_info=True)
+                failed += 1
+        if failed:
+            logger.warning("_save_stores: %d/%d failed for keyword=%s", failed, len(stores), keyword)
 
     async def _save_keywords(self, keywords: list[str]):
-        """保存热搜词到数据库。"""
+        """保存热搜词到数据库。单条失败不中断批次。"""
         if not self._db_pool:
             return
+        failed = 0
         for kw in keywords:
-            await self._db_pool.execute(
-                """
-                INSERT INTO competitor_keywords (keyword) VALUES ($1)
-                """,
-                kw,
-            )
+            try:
+                await self._db_pool.execute(
+                    """
+                    INSERT INTO competitor_keywords (keyword) VALUES ($1)
+                    """,
+                    kw,
+                )
+            except Exception:
+                logger.error("Failed to save competitor keyword %r", kw, exc_info=True)
+                failed += 1
+        if failed:
+            logger.warning("_save_keywords: %d/%d failed", failed, len(keywords))
 
     async def _record_sync_error(self, keyword: str, error: str):
         """记录同步错误到 sync_state 表。"""
