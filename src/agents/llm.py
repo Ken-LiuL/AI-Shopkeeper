@@ -217,10 +217,17 @@ async def call_tool(
     system: str | None = None,
     trace_name: str | None = None,
     trace_metadata: dict[str, Any] | None = None,
+    experiment_id: str | None = None,
+    ab_variant: str | None = None,
 ) -> dict[str, Any]:
     """
     统一调用接口：根据 LLM_PROVIDER 选择 OpenRouter 或 Anthropic。
     tool 格式统一用 Anthropic 格式（name + input_schema），内部自动转换。
+
+    Args:
+        experiment_id: A/B 实验 ID（可选）。若提供，自动将 latency 和 token 用量
+                       记录为该实验的 outcome。
+        ab_variant:    实验变体名称（配合 experiment_id 使用）。
     """
     langfuse = _init_langfuse()
 
@@ -252,6 +259,8 @@ async def call_tool(
                 prompt, tool, model, max_tokens, system
             )
 
+        elapsed = time.time() - start_time
+
         if generation:
             generation.end(
                 output=result,
@@ -259,7 +268,22 @@ async def call_tool(
                 level="DEFAULT",
             )
 
-        _record_llm_metrics(model, input_tokens, output_tokens, time.time() - start_time)
+        _record_llm_metrics(model, input_tokens, output_tokens, elapsed)
+
+        # ── A/B 实验：记录 latency 和 token 用量 ──────────────────
+        if experiment_id and ab_variant:
+            try:
+                from src.ab_testing.experiment import get_experiment_manager
+                _ab_mgr = get_experiment_manager()
+                _ab_mgr.record_outcome(experiment_id, ab_variant, "latency_ms", elapsed * 1000)
+                _ab_mgr.record_outcome(experiment_id, ab_variant, "input_tokens", float(input_tokens))
+                _ab_mgr.record_outcome(experiment_id, ab_variant, "output_tokens", float(output_tokens))
+                _ab_mgr.record_outcome(
+                    experiment_id, ab_variant, "total_tokens", float(input_tokens + output_tokens)
+                )
+            except Exception as _ab_err:
+                logger.debug("A/B outcome recording failed: %s", _ab_err)
+
         return result
 
     except Exception as e:

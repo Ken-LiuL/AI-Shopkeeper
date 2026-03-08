@@ -40,6 +40,7 @@ from src.api.reports import router as reports_router
 from src.api.store_config import router as store_config_router
 from src.api.selection import router as selection_router
 from src.api.selection_intelligence import router as selection_intel_router
+from src.api.ab_testing import router as ab_testing_router
 from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
@@ -551,6 +552,7 @@ app.include_router(feedback_router)
 app.include_router(inventory_router)
 app.include_router(insights_router)
 app.include_router(stores_router)
+app.include_router(ab_testing_router)
 
 
 # ─── Frontend static files ──────────────────────────────────
