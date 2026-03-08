@@ -152,6 +152,107 @@ def _make_heartbeat_task(task_id: str, task_func):
 # ── 任务实现 ────────────────────────────────────────────────────────────────
 
 
+async def feedback_tracking_job() -> None:
+    """追踪过去 N 天内的 AI 推荐效果，并更新模型权重 (每天凌晨 2:00 CST)。"""
+    logger.info("Starting feedback tracking job")
+    try:
+        from src.db import postgres as pg
+        from src.services.feedback_loop import FeedbackLoopService
+
+        pool = pg.get_pool()
+        feedback = FeedbackLoopService()
+        all_outcomes: list[dict] = []
+
+        # ── 1. 追踪选品推荐效果（30天前创建的 run） ────────────────────
+        try:
+            selection_runs = await pool.fetch(
+                """
+                SELECT run_id FROM selection_runs
+                WHERE created_at >= NOW() - INTERVAL '31 days'
+                  AND created_at < NOW() - INTERVAL '30 days'
+                """
+            )
+            logger.info("Tracking %d selection runs", len(selection_runs))
+            for row in selection_runs:
+                try:
+                    outcome = await feedback.track_selection_outcome(str(row["run_id"]))
+                    if "error" not in outcome:
+                        all_outcomes.append(
+                            {"tracking_type": "selection", "performance_score": outcome.get("outcomes", [{}])[0].get("predicted_score", 0) if outcome.get("outcomes") else 0}
+                        )
+                except Exception as exc:
+                    logger.error("Failed to track selection run %s: %s", row["run_id"], exc)
+                    continue
+        except Exception as exc:
+            logger.error("Failed to query selection_runs for feedback tracking: %s", exc)
+
+        # ── 2. 追踪套餐效果（30天前创建的 bundle） ──────────────────────
+        try:
+            bundles = await pool.fetch(
+                """
+                SELECT bundle_id FROM bundles
+                WHERE created_at >= NOW() - INTERVAL '31 days'
+                  AND created_at < NOW() - INTERVAL '30 days'
+                """
+            )
+            logger.info("Tracking %d bundles", len(bundles))
+            for row in bundles:
+                try:
+                    outcome = await feedback.track_bundle_outcome(str(row["bundle_id"]))
+                    if "error" not in outcome:
+                        all_outcomes.append(
+                            {"tracking_type": "bundle", "performance_score": float(outcome.get("co_purchases", 0))}
+                        )
+                except Exception as exc:
+                    logger.error("Failed to track bundle %s: %s", row["bundle_id"], exc)
+                    continue
+        except Exception as exc:
+            logger.error("Failed to query bundles for feedback tracking: %s", exc)
+
+        # ── 3. 追踪调价效果（7天前未追踪的 price_history 记录） ─────────
+        try:
+            price_changes = await pool.fetch(
+                """
+                SELECT id FROM price_history
+                WHERE changed_at < NOW() - INTERVAL '7 days'
+                  AND (outcome_tracked IS NULL OR outcome_tracked = FALSE)
+                ORDER BY changed_at ASC
+                LIMIT 200
+                """
+            )
+            logger.info("Tracking %d price changes", len(price_changes))
+            for row in price_changes:
+                try:
+                    outcome = await feedback.track_pricing_outcome(int(row["id"]))
+                    if "error" not in outcome:
+                        pct = outcome.get("sales_change_pct", 0.0)
+                        all_outcomes.append(
+                            {"tracking_type": "pricing", "performance_score": pct / 100.0}
+                        )
+                except Exception as exc:
+                    logger.error("Failed to track price change %s: %s", row["id"], exc)
+                    continue
+        except Exception as exc:
+            logger.error("Failed to query price_history for feedback tracking: %s", exc)
+
+        # ── 4. 汇总并更新模型权重 ────────────────────────────────────────
+        if all_outcomes:
+            try:
+                weight_result = await feedback.update_model_weights(all_outcomes)
+                logger.info(
+                    "Feedback tracking job done: tracked=%d weight_update=%s",
+                    len(all_outcomes),
+                    weight_result.get("status"),
+                )
+            except Exception as exc:
+                logger.error("Failed to update model weights: %s", exc)
+        else:
+            logger.info("Feedback tracking job done: no outcomes to process")
+
+    except Exception:
+        logger.exception("Feedback tracking job failed")
+
+
 async def daily_selection_task() -> None:
     """每日选品任务 (6:00)"""
     logger.info("Starting daily selection task")
@@ -1202,6 +1303,17 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
         _make_heartbeat_task("alert_scan", alert_scan_task),
         CronTrigger.from_crontab(tasks.get("alert_scan", "*/5 * * * *")),
         id="alert_scan",
+        replace_existing=True,
+    )
+
+    # 反馈闭环追踪 (凌晨 2:00 CST)
+    scheduler.add_job(
+        _make_heartbeat_task("feedback_tracking", feedback_tracking_job),
+        CronTrigger.from_crontab(
+            tasks.get("feedback_tracking", "0 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="feedback_tracking",
         replace_existing=True,
     )
 

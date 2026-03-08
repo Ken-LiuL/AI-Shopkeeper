@@ -20,11 +20,17 @@ logger = logging.getLogger(__name__)
 @router.get("/overview", response_model=APIResponse[dict])
 async def get_overview() -> APIResponse:
     """返回店铺基本统计概览。"""
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
-    active_products = (
-        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
-    )
+    try:
+        total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
+        active_products = (
+            await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+        )
+    except Exception as exc:
+        logger.error("Failed to query product counts for overview: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch overview data") from exc
     total_orders = 0
     total_revenue = 0.0
 

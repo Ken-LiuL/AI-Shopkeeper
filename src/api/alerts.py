@@ -45,15 +45,19 @@ def _matches_alert_for_collaboration(action: dict, alert_data: dict) -> bool:
 
 
 async def _extract_collaboration_from_scans(pool, alert_data: dict) -> list[dict]:
-    rows = await pool.fetch(
-        """
-        SELECT result
-        FROM alert_scans
-        WHERE status = 'completed'
-        ORDER BY created_at DESC
-        LIMIT 20
-        """
-    )
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT result
+            FROM alert_scans
+            WHERE status = 'completed'
+            ORDER BY created_at DESC
+            LIMIT 20
+            """
+        )
+    except Exception as exc:
+        logger.warning("Failed to query alert_scans for collaboration data: %s", exc)
+        return []
     for row in rows:
         result = row.get("result")
         if isinstance(result, str):
@@ -332,12 +336,20 @@ async def list_alerts(
         query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at DESC LIMIT 100"
 
-    rows = await pool.fetch(query, *params)
+    try:
+        rows = await pool.fetch(query, *params)
+    except Exception as exc:
+        logger.error("Failed to query alerts table: %s", exc)
+        rows = []
 
     # If no structured alerts exist, generate smart alerts based on real data
     if not rows:
         logger.info("No structured alerts found, generating smart alerts from business data")
-        smart_alerts = await _generate_smart_alerts(pool)
+        try:
+            smart_alerts = await _generate_smart_alerts(pool)
+        except Exception as exc:
+            logger.error("Failed to generate smart alerts: %s", exc)
+            return APIResponse(data=[])
 
         # Apply filters to generated alerts
         filtered_alerts = smart_alerts
@@ -355,30 +367,45 @@ async def list_alerts(
 
 @router.get("/{alert_id}", response_model=APIResponse[dict])
 async def get_alert(alert_id: str) -> APIResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    row = await pool.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
+    try:
+        row = await pool.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
+    except Exception as exc:
+        logger.error("Failed to fetch alert %s: %s", alert_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch alert") from exc
     if not row:
         raise NotFoundError("Alert", alert_id)
     data = dict(row)
 
-    collaboration_results = _extract_collaboration_from_metrics(data.get("metrics"))
-    if not collaboration_results:
-        collaboration_results = await _extract_collaboration_from_scans(pool, data)
-    if collaboration_results:
-        data["collaboration_results"] = collaboration_results
+    try:
+        collaboration_results = _extract_collaboration_from_metrics(data.get("metrics"))
+        if not collaboration_results:
+            collaboration_results = await _extract_collaboration_from_scans(pool, data)
+        if collaboration_results:
+            data["collaboration_results"] = collaboration_results
+    except Exception as exc:
+        logger.warning("Failed to enrich alert %s with collaboration data: %s", alert_id, exc)
 
     return APIResponse(data=data)
 
 
 @router.patch("/{alert_id}", response_model=APIResponse[dict])
 async def update_alert(alert_id: str, body: AlertUpdateRequest) -> APIResponse[dict]:
+    from fastapi import HTTPException
+
     pool = pg.get_pool()
-    row = await pool.fetchrow(
-        """UPDATE alerts SET status = $1, resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE resolved_at END
-           WHERE alert_id = $2 RETURNING *""",
-        body.status,
-        alert_id,
-    )
+    try:
+        row = await pool.fetchrow(
+            """UPDATE alerts SET status = $1, resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE resolved_at END
+               WHERE alert_id = $2 RETURNING *""",
+            body.status,
+            alert_id,
+        )
+    except Exception as exc:
+        logger.error("Failed to update alert %s: %s", alert_id, exc)
+        raise HTTPException(status_code=500, detail="Failed to update alert") from exc
     if not row:
         raise NotFoundError("Alert", alert_id)
     return APIResponse(data=dict(row))
@@ -415,15 +442,29 @@ async def trigger_scan(
 @router.post("/push", response_model=APIResponse[dict])
 async def push_alerts() -> APIResponse[dict]:
     """手动触发告警推送（Telegram/Webhook）"""
+    from fastapi import HTTPException
+
     from src.services.notification import check_and_push_alerts
+
     pool = pg.get_pool()
-    result = await check_and_push_alerts(pool)
+    try:
+        result = await check_and_push_alerts(pool)
+    except Exception as exc:
+        logger.error("Failed to push alerts: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Alert push failed: {exc}") from exc
     return APIResponse(data=result)
 
 
 @router.post("/test-push", response_model=APIResponse[dict])
 async def test_push(message: str = "这是一条测试告警") -> APIResponse[dict]:
     """测试推送通道"""
+    from fastapi import HTTPException
+
     from src.services.notification import send_alert
-    result = await send_alert("测试告警", message, "medium")
+
+    try:
+        result = await send_alert("测试告警", message, "medium")
+    except Exception as exc:
+        logger.error("Test push failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Test push failed: {exc}") from exc
     return APIResponse(data=result)

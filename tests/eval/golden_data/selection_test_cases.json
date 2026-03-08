@@ -1,0 +1,93 @@
+{
+  "description": "选品推荐 Agent 评估用例集",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "SEL001",
+      "description": "高热度医疗器械品类推荐",
+      "input": {
+        "store_id": "STORE_001",
+        "categories": ["血压计", "体温计"],
+        "trigger_type": "scheduled",
+        "current_season": "winter"
+      },
+      "expected": {
+        "has_recommendations": true,
+        "min_recommendation_count": 1,
+        "score_range": [0, 100],
+        "required_fields": ["recommendations", "scoring_summary"],
+        "season_sensitive": true
+      },
+      "notes": "冬季场景：体温计/血压计应有高推荐分"
+    },
+    {
+      "id": "SEL002",
+      "description": "竞品缺货机会推荐",
+      "input": {
+        "store_id": "STORE_001",
+        "categories": ["口罩", "消毒液"],
+        "trigger_type": "event",
+        "stockout_competitors": ["康复之家", "医疗便利店"],
+        "current_season": "spring"
+      },
+      "expected": {
+        "has_recommendations": true,
+        "min_recommendation_count": 1,
+        "score_range": [0, 100],
+        "required_fields": ["recommendations"],
+        "stockout_opportunities_considered": true
+      },
+      "notes": "竞品缺货：应优先推荐缺货品类"
+    },
+    {
+      "id": "SEL003",
+      "description": "评分逻辑一致性验证",
+      "input": {
+        "store_id": "STORE_001",
+        "categories": ["制氧机"],
+        "trigger_type": "manual",
+        "current_season": "winter"
+      },
+      "expected": {
+        "has_recommendations": true,
+        "score_range": [0, 100],
+        "score_consistency": true,
+        "required_fields": ["recommendations", "scoring_summary"],
+        "required_score_fields": ["market_heat", "competition_gap", "profit_margin"]
+      },
+      "notes": "评分各维度应在 [0,100] 内且逻辑自洽"
+    },
+    {
+      "id": "SEL004",
+      "description": "季节性因素考量验证",
+      "input": {
+        "store_id": "STORE_001",
+        "categories": ["暖宝宝", "感冒药"],
+        "trigger_type": "scheduled",
+        "current_season": "winter",
+        "upcoming_events": ["流感季节"]
+      },
+      "expected": {
+        "has_recommendations": true,
+        "seasonal_factors_present": true,
+        "required_fields": ["recommendations", "seasonal_factors"]
+      },
+      "notes": "冬季流感季：应在结果中体现季节性因素"
+    },
+    {
+      "id": "SEL005",
+      "description": "低优先级品类过滤",
+      "input": {
+        "store_id": "STORE_001",
+        "categories": ["家用美容仪"],
+        "trigger_type": "manual",
+        "current_season": "summer"
+      },
+      "expected": {
+        "recommendations_filtered_properly": true,
+        "score_range": [0, 100]
+      },
+      "notes": "非核心医疗器械品类，推荐分应相对低"
+    }
+  ]
+}

@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.alerts import router as alerts_router
+from src.api.feedback import router as feedback_router
 from src.api.analytics import router as analytics_router
 from src.api.bundles import router as bundles_router
 from src.api.chat import router as chat_router
@@ -546,6 +547,7 @@ app.include_router(pricing_intel_router)
 app.include_router(selection_intel_router)
 # products_pricing_router moved above products_router
 app.include_router(analytics_router)
+app.include_router(feedback_router)
 app.include_router(inventory_router)
 app.include_router(insights_router)
 app.include_router(stores_router)

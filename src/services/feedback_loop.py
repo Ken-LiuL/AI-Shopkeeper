@@ -182,27 +182,53 @@ class FeedbackLoopService:
         return outcome
 
     async def update_model_weights(self, outcomes: list[dict]) -> dict:
-        """根据反馈调整 self-learning 权重"""
+        """根据反馈调整 self-learning 权重。
+
+        将各类型的平均 performance_score 汇总后记录到 learning_weights 表。
+        WeightLearner 通过 load_weights() 读取历史权重；此处写入最新汇总分数
+        供后续 learn_from_outcomes 使用。
+        """
         try:
             from src.learning.weight_learner import WeightLearner
 
-            learner = WeightLearner()
+            pool = pg.get_pool()
+            learner = WeightLearner(pool=pool)
+            # 加载当前权重作为基础
+            current = await learner.load_weights()
 
-            adjustments = {}
+            adjustments: dict[str, float] = {}
+            type_scores: dict[str, list[float]] = {}
+
             for o in outcomes:
                 t = o.get("tracking_type", "")
-                score = o.get("performance_score", 0)
-                if t == "selection":
-                    adjustments["selection_accuracy"] = score
-                elif t == "pricing":
-                    adjustments["pricing_effectiveness"] = score
-                elif t == "bundle":
-                    adjustments["bundle_conversion"] = score
+                score = float(o.get("performance_score", 0) or 0)
+                type_scores.setdefault(t, []).append(score)
 
-            if adjustments:
-                await learner.update_weights(adjustments)
+            # 计算各类型平均分，映射到权重维度
+            dim_map = {
+                "selection": "market_heat",
+                "pricing": "profit_margin",
+                "bundle": "category_synergy",
+            }
+            for t, scores in type_scores.items():
+                avg = sum(scores) / len(scores) if scores else 0
+                dim = dim_map.get(t)
+                if dim:
+                    adjustments[t] = avg
+                    # Nudge corresponding weight by learning_rate * normalised_avg
+                    lr = learner._learning_rate
+                    lo, hi = learner.WEIGHT_RANGES.get(dim, (0.05, 0.35))
+                    current[dim] = max(lo, min(hi, current[dim] + lr * (avg - 0.5) * 0.1))
+
+            # Persist updated weights
+            learner._weights = current
+            learner._normalize_weights()
+            await learner._save_weights()
 
             return {"status": "updated", "adjustments": adjustments}
         except ImportError:
             logger.warning("WeightLearner not available, skipping weight update")
             return {"status": "skipped", "reason": "WeightLearner not available"}
+        except Exception as exc:
+            logger.error("update_model_weights failed: %s", exc)
+            return {"status": "error", "reason": str(exc)}

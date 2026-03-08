@@ -1,0 +1,150 @@
+{
+  "description": "客服 Agent 评估用例集 — 覆盖咨询/售后/情感/意图/幻觉检测",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "CS001",
+      "category": "product_inquiry_normal",
+      "user_message": "请问有适合老人用的血压计推荐吗？",
+      "expected_intent": "product_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100", "P101"],
+      "valid_reply_keywords": ["血压计"],
+      "forbidden_reply_keywords": [],
+      "notes": "正常商品咨询，应推荐数据库中存在的商品"
+    },
+    {
+      "id": "CS002",
+      "category": "product_inquiry_vague",
+      "user_message": "我想买个量血压的东西",
+      "expected_intent": "product_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100", "P101"],
+      "valid_reply_keywords": ["血压"],
+      "forbidden_reply_keywords": [],
+      "notes": "模糊咨询，Agent 应能识别意图并给出合理回复"
+    },
+    {
+      "id": "CS003",
+      "category": "product_inquiry_comparison",
+      "user_message": "鱼跃血压计和欧姆龙血压计哪个好？有什么区别？",
+      "expected_intent": "product_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100", "P200"],
+      "valid_reply_keywords": ["鱼跃", "欧姆龙"],
+      "forbidden_reply_keywords": [],
+      "notes": "多商品比较场景"
+    },
+    {
+      "id": "CS004",
+      "category": "aftersale_return",
+      "user_message": "我买的血压计到了，发现包装破损，我要退货",
+      "expected_intent": "return_request",
+      "expected_sentiment": "negative",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100"],
+      "valid_reply_keywords": ["退"],
+      "forbidden_reply_keywords": [],
+      "notes": "退货场景"
+    },
+    {
+      "id": "CS005",
+      "category": "aftersale_exchange",
+      "user_message": "体温计买回来发现测量不准，能换一个吗？",
+      "expected_intent": "exchange_request",
+      "expected_sentiment": "negative",
+      "expected_requires_human": false,
+      "known_product_ids": ["P200"],
+      "valid_reply_keywords": ["换"],
+      "forbidden_reply_keywords": [],
+      "notes": "换货场景"
+    },
+    {
+      "id": "CS006",
+      "category": "aftersale_complaint_escalation",
+      "user_message": "这已经是第三次了！你们的体温计总是有问题，我要投诉！",
+      "expected_intent": "complaint",
+      "expected_sentiment": "negative",
+      "expected_requires_human": true,
+      "known_product_ids": ["P200"],
+      "valid_reply_keywords": [],
+      "forbidden_reply_keywords": [],
+      "notes": "投诉升级场景，应触发人工介入"
+    },
+    {
+      "id": "CS007",
+      "category": "sentiment_positive",
+      "user_message": "太好了，血压计用着超顺手，下次还来你家买！",
+      "expected_intent": "praise",
+      "expected_sentiment": "positive",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100"],
+      "valid_reply_keywords": [],
+      "forbidden_reply_keywords": [],
+      "notes": "正面情感，应识别为好评"
+    },
+    {
+      "id": "CS008",
+      "category": "sentiment_neutral",
+      "user_message": "请问营业时间是几点到几点？",
+      "expected_intent": "store_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": [],
+      "valid_reply_keywords": [],
+      "forbidden_reply_keywords": [],
+      "notes": "中性咨询，非商品相关"
+    },
+    {
+      "id": "CS009",
+      "category": "sentiment_angry",
+      "user_message": "你们这是什么破店！东西贵质量还差，骗人！",
+      "expected_intent": "complaint",
+      "expected_sentiment": "negative",
+      "expected_requires_human": true,
+      "known_product_ids": [],
+      "valid_reply_keywords": [],
+      "forbidden_reply_keywords": [],
+      "notes": "愤怒情感，高强度投诉，应升级人工"
+    },
+    {
+      "id": "CS010",
+      "category": "hallucination_detection",
+      "user_message": "请推荐一款血压计",
+      "expected_intent": "product_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": ["P100", "P101"],
+      "hallucination_check": true,
+      "valid_product_names": ["鱼跃电子血压计", "鱼跃血压计 A2"],
+      "notes": "幻觉检测：回复中不应出现数据库中不存在的商品"
+    },
+    {
+      "id": "CS011",
+      "category": "product_inquiry_medical_device",
+      "user_message": "有没有适合糖尿病患者的血糖监测套装？",
+      "expected_intent": "product_inquiry",
+      "expected_sentiment": "neutral",
+      "expected_requires_human": false,
+      "known_product_ids": ["P300"],
+      "valid_reply_keywords": ["血糖"],
+      "forbidden_reply_keywords": ["治愈", "根治"],
+      "notes": "医疗器械咨询，回复不应包含医疗声明"
+    },
+    {
+      "id": "CS012",
+      "category": "greeting",
+      "user_message": "您好！",
+      "expected_intent": "greeting",
+      "expected_sentiment": "positive",
+      "expected_requires_human": false,
+      "known_product_ids": [],
+      "valid_reply_keywords": [],
+      "forbidden_reply_keywords": [],
+      "notes": "问候场景"
+    }
+  ]
+}

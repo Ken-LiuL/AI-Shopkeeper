@@ -1,0 +1,97 @@
+{
+  "description": "预警 Agent 评估用例集",
+  "version": "1.0",
+  "cases": [
+    {
+      "id": "ALT001",
+      "description": "库存告急触发预警",
+      "product": {"spu_id": "P100", "title": "鱼跃血压计", "stock": 2, "avg_daily_sales": 5},
+      "expected": {
+        "should_trigger_alert": true,
+        "alert_type": "stock_critical",
+        "severity": "critical",
+        "action_required": true
+      },
+      "notes": "库存不足1天销量，必须触发紧急预警"
+    },
+    {
+      "id": "ALT002",
+      "description": "库存充足不触发预警",
+      "product": {"spu_id": "P200", "title": "欧姆龙体温计", "stock": 200, "avg_daily_sales": 3},
+      "expected": {
+        "should_trigger_alert": false,
+        "notes": "库存充足（>60天），不应触发预警"
+      },
+      "notes": "正常库存，不触发"
+    },
+    {
+      "id": "ALT003",
+      "description": "价格异常检测 — 远低于竞品",
+      "product": {
+        "spu_id": "P100",
+        "title": "鱼跃血压计",
+        "retail_price": 99.0,
+        "cost_price": 95.0,
+        "competitor_avg_price": 189.0
+      },
+      "expected": {
+        "should_trigger_alert": true,
+        "alert_type": "price_anomaly",
+        "severity": "warning",
+        "action_required": true,
+        "suggested_action_types": ["price_adjust"]
+      },
+      "notes": "零售价接近成本价且远低于竞品，触发价格预警"
+    },
+    {
+      "id": "ALT004",
+      "description": "销量骤降检测",
+      "product": {
+        "spu_id": "P300",
+        "title": "血糖仪套装",
+        "expected_daily_sales": 10,
+        "actual_daily_sales": 2,
+        "deviation_percent": -80
+      },
+      "expected": {
+        "should_trigger_alert": true,
+        "alert_type": "sales_drop_prophet",
+        "severity": "critical",
+        "action_required": true
+      },
+      "notes": "销量偏离超过 -50%，触发紧急预警"
+    },
+    {
+      "id": "ALT005",
+      "description": "建议动作可执行性验证",
+      "anomaly": {
+        "anomaly_type": "stock_low",
+        "product_id": "P100",
+        "product_name": "鱼跃血压计",
+        "severity": "critical"
+      },
+      "expected": {
+        "action_has_required_fields": ["action_type", "priority", "action_detail"],
+        "action_type_valid": ["restock", "price_adjust", "promote", "delist"],
+        "priority_valid": ["P0", "P1", "P2"],
+        "deadline_present": true
+      },
+      "notes": "预警建议动作应包含完整字段且优先级合理"
+    },
+    {
+      "id": "ALT006",
+      "description": "轻微波动不触发预警",
+      "product": {
+        "spu_id": "P200",
+        "title": "欧姆龙体温计",
+        "expected_daily_sales": 10,
+        "actual_daily_sales": 9,
+        "deviation_percent": -10
+      },
+      "expected": {
+        "should_trigger_alert": false
+      },
+      "notes": "偏差 <15%，不触发预警"
+    }
+  ]
+}

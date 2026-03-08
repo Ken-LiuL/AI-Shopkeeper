@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -19,6 +19,52 @@ import {
 import { getSalesTrend, getProductPerformance, getCategoryAnalysis } from '@/lib/api';
 import type { SalesTrendData, ProductPerformance, CategoryAnalysis } from '@/lib/api';
 
+// ── AI 效果追踪类型 ──────────────────────────────────────────
+interface FeedbackSummaryItem {
+  tracking_type: string;
+  total: number;
+  avg_score: number;
+  last_tracked_at: string | null;
+}
+
+interface ModelWeights {
+  [key: string]: number;
+}
+
+async function fetchFeedbackSummary(): Promise<FeedbackSummaryItem[]> {
+  try {
+    const res = await fetch('/api/feedback/summary');
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.data?.summary ?? [];
+  } catch {
+    return [];
+  }
+}
+
+async function fetchModelWeights(): Promise<ModelWeights> {
+  try {
+    const res = await fetch('/api/feedback/weights');
+    if (!res.ok) return {};
+    const json = await res.json();
+    return json.data?.weights ?? {};
+  } catch {
+    return {};
+  }
+}
+
+const TRACKING_TYPE_LABELS: Record<string, string> = {
+  selection: '选品推荐',
+  pricing: '智能调价',
+  bundle: '套餐组合',
+};
+
+const TRACKING_TYPE_EMOJI: Record<string, string> = {
+  selection: '🎯',
+  pricing: '💰',
+  bundle: '📦',
+};
+
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
 
 export default function AnalyticsPage() {
@@ -28,18 +74,26 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // AI 效果追踪状态
+  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummaryItem[]>([]);
+  const [modelWeights, setModelWeights] = useState<ModelWeights>({});
+
   useEffect(() => {
     const fetchData = async () => {
       try {
         setError(null);
-        const [trendData, productsData, categoriesData] = await Promise.all([
+        const [trendData, productsData, categoriesData, summaryData, weightsData] = await Promise.all([
           getSalesTrend(),
           getProductPerformance(),
           getCategoryAnalysis(),
+          fetchFeedbackSummary(),
+          fetchModelWeights(),
         ]);
         setTrend(trendData);
         setProducts(productsData);
         setCategories(categoriesData);
+        setFeedbackSummary(summaryData);
+        setModelWeights(weightsData);
       } catch (error) {
         console.error('Error fetching analytics data:', error);
         setError('加载分析数据失败，请稍后重试');
@@ -292,6 +346,80 @@ export default function AnalyticsPage() {
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               暂无商品数据
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── AI 效果追踪区块 ──────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>🤖</span>
+            AI 效果追踪
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {feedbackSummary.length === 0 ? (
+            <div className="text-center py-8 text-muted-foreground">
+              暂无反馈追踪数据（每天凌晨 2:00 自动更新）
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              {feedbackSummary.map((item) => (
+                <div
+                  key={item.tracking_type}
+                  className="rounded-lg border bg-card p-4 flex flex-col gap-2"
+                >
+                  <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground">
+                    <span>{TRACKING_TYPE_EMOJI[item.tracking_type] ?? '📊'}</span>
+                    {TRACKING_TYPE_LABELS[item.tracking_type] ?? item.tracking_type}
+                  </div>
+                  <div className="text-2xl font-bold">
+                    {(item.avg_score * 100).toFixed(1)}
+                    <span className="text-base font-normal text-muted-foreground ml-1">分</span>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    共追踪 {item.total} 条
+                    {item.last_tracked_at && (
+                      <span className="ml-2">· {new Date(item.last_tracked_at).toLocaleDateString('zh-CN')}</span>
+                    )}
+                  </div>
+                  <div className="w-full bg-muted rounded-full h-2 mt-1">
+                    <div
+                      className="bg-blue-500 h-2 rounded-full transition-all"
+                      style={{ width: `${Math.min(item.avg_score * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* 模型权重展示 */}
+          {Object.keys(modelWeights).length > 0 && (
+            <div>
+              <h4 className="text-sm font-semibold mb-3 text-muted-foreground">当前模型权重分布</h4>
+              <div className="space-y-2">
+                {Object.entries(modelWeights)
+                  .sort(([, a], [, b]) => b - a)
+                  .map(([dim, weight]) => (
+                    <div key={dim} className="flex items-center gap-3">
+                      <span className="text-xs w-32 text-right text-muted-foreground shrink-0">
+                        {dim.replace(/_/g, ' ')}
+                      </span>
+                      <div className="flex-1 bg-muted rounded-full h-2">
+                        <div
+                          className="bg-green-500 h-2 rounded-full transition-all"
+                          style={{ width: `${(weight * 100).toFixed(1)}%` }}
+                        />
+                      </div>
+                      <span className="text-xs w-12 text-muted-foreground">
+                        {(weight * 100).toFixed(1)}%
+                      </span>
+                    </div>
+                  ))}
+              </div>
             </div>
           )}
         </CardContent>
