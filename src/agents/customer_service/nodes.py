@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 
-from ..llm import MODEL_DEEPSEEK, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, call_tool, call_tool_with_reflection, call_vision
 from .product_memory import get_product_memory  # kept for other potential callers
 
 logger = logging.getLogger(__name__)
@@ -632,6 +632,24 @@ async def chat(
         if emotion_instruction:
             system_prompt = f"{system_prompt}{emotion_instruction}"
 
+        # 加载客服历史决策记忆（非阻塞主流程，失败不影响回复）
+        memory_ctx = ""
+        try:
+            from src.agents.action_tracker import format_memory_context
+
+            memory_ctx = await format_memory_context(
+                pool=pool,
+                agent_name="customer_service",
+                context_type=intent_result.get("intent", "inquiry")
+                if "intent_result" in dir()
+                else "inquiry",
+            )
+        except Exception as e:
+            logger.debug(f"CS memory context load failed (non-critical): {e}")
+
+        if memory_ctx:
+            system_prompt = f"{system_prompt}\n\n{memory_ctx}"
+
         # 4. 多轮意图追踪
         conversation_context = ""
         try:
@@ -718,7 +736,34 @@ async def chat(
             },
         }
 
-        if images and len(images) > 0:
+        _needs_reflection = (
+            "intent_result" in dir()
+            and intent_result.get("intent") in ("after_sales", "complaint")
+        )
+
+        if _needs_reflection and not images:
+            def _reflect_cs_reply(initial_result_str: str) -> str:
+                return f"""请审查以下客服回复，检查：
+1. 是否先表达了共情和歉意
+2. 解决方案是否具体可执行
+3. 是否遗漏了用户关心的要点
+4. 回复语气是否得体（不过分生硬也不过分卑微）
+5. 涉及退款/换货是否符合平台政策
+
+初始回复：
+{initial_result_str}
+
+请给出修订后的版本。"""
+
+            result = await call_tool_with_reflection(
+                initial_prompt=user_message_with_context,
+                reflection_prompt_fn=_reflect_cs_reply,
+                tool=tool_schema,
+                model=MODEL_DEEPSEEK,
+                system=system_prompt,
+                trace_name="customer_service_chat_reflected",
+            )
+        elif images and len(images) > 0:
             # Use vision model for image processing
             result = await call_vision(
                 text=user_message_with_context,
@@ -744,6 +789,24 @@ async def chat(
         confidence = result.get("confidence", 0.8)
         needs_human = result.get("requires_human_review", False)
         intent = result.get("intent", "other")
+
+        # 事实核查（仅售后/投诉场景）
+        if intent in ("after_sales", "complaint") and pool:
+            try:
+                from src.agents.fact_checker import validate_agent_output
+
+                check_result = await validate_agent_output(
+                    agent_name="customer_service",
+                    output=result,
+                    pool=pool,
+                )
+                if check_result and not check_result.get("passed", True):
+                    warnings = check_result.get("warnings", [])
+                    if warnings:
+                        reply_text += "\n\n⚠️ 温馨提示：以上为AI回复，涉及售后问题建议联系人工客服确认。"
+                        needs_human = True
+            except Exception:
+                pass
 
         # 7. 异步记录日志（不阻塞响应）
         if pool:
@@ -791,6 +854,35 @@ async def chat(
                     reply=reply_text,
                     context=context,
                     pool=pool,
+                )
+            )
+
+            # 异步记录客服决策（不阻塞主流程）
+            async def _record_cs_action(
+                pool, session_id, message, reply_text, intent, sentiment
+            ):
+                try:
+                    from src.agents.action_tracker import record_action
+
+                    await record_action(
+                        pool=pool,
+                        agent_name="customer_service",
+                        action_type=f"cs_{intent}",
+                        description=f"用户:{message[:100]}... → 回复:{reply_text[:100]}...",
+                        parameters={
+                            "session_id": session_id,
+                            "intent": intent,
+                            "sentiment": sentiment,
+                            "reply_length": len(reply_text),
+                        },
+                        baseline_metrics={"intent": intent, "sentiment": sentiment},
+                    )
+                except Exception as e:
+                    logger.debug(f"CS action recording failed (non-critical): {e}")
+
+            asyncio.create_task(
+                _record_cs_action(
+                    pool, session_id, message, reply_text, intent, sentiment
                 )
             )
 
