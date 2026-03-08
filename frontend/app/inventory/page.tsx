@@ -24,8 +24,8 @@ export default function InventoryPage() {
         setError(null);
         const data = await getInventoryList(200);
         setItems(data);
-      } catch (err: any) {
-        setError(err.message || '加载库存失败');
+      } catch (err: unknown) {
+        setError((err as Error).message || '加载库存失败');
       } finally {
         setLoading(false);
       }

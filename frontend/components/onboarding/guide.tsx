@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -55,15 +55,10 @@ interface OnboardingGuideProps {
 
 export function OnboardingGuide({ onComplete }: OnboardingGuideProps) {
   const [currentStep, setCurrentStep] = useState(0);
-  const [isVisible, setIsVisible] = useState(false);
-
-  useEffect(() => {
-    // 检查是否已经完成过新手引导
-    const hasCompletedOnboarding = localStorage.getItem('ai-store-manager-onboarding-completed');
-    if (!hasCompletedOnboarding) {
-      setIsVisible(true);
-    }
-  }, []);
+  const [isVisible, setIsVisible] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return !localStorage.getItem('ai-store-manager-onboarding-completed');
+  });
 
   const handleNext = () => {
     if (currentStep < ONBOARDING_STEPS.length - 1) {

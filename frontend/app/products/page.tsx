@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/table";
 import { withErrorBoundary } from '@/components/error-boundary';
 import { getProducts, getRestockSuggestions } from '@/lib/api';
-import type { Product, ProductsResponse, RestockSuggestion } from '@/lib/api';
+import type { ProductsResponse, RestockSuggestion } from '@/lib/api';
 
 function ProductsPage() {
   const [data, setData] = useState<ProductsResponse | null>(null);

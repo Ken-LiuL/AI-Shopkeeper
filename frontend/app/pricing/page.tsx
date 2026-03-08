@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, batchUpdatePrices, type PricingSuggestion, type PricingRule, type BatchPriceUpdateRequest, type BatchPriceUpdateResult } from '@/lib/api';
-import { withErrorBoundary } from '@/components/error-boundary';
+
 
 export default function PricingPage() {
   const [suggestions, setSuggestions] = useState<PricingSuggestion[]>([]);

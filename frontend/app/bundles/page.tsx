@@ -28,8 +28,9 @@ function BundlesPage() {
   const fetchBundles = async () => {
     try {
       setError(null);
-      const data = await fetchAPI<any>('/bundles/recommendations');
-      setBundles(Array.isArray(data) ? data : data.bundles || data.recommendations || []);
+      type BundlesApiResponse = BundleRecommendation[] | { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] };
+      const data = await fetchAPI<BundlesApiResponse>('/bundles/recommendations');
+      setBundles(Array.isArray(data) ? data : (data as { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] }).bundles || (data as { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] }).recommendations || []);
     } catch (err) {
       console.error('Error fetching bundles:', err);
       setError('加载套餐数据失败，请稍后重试');

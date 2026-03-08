@@ -286,10 +286,10 @@ function AlertsPage() {
                     </TableCell>
                     <TableCell className="max-w-md">
                       <div className="text-sm text-muted-foreground">{alert.description}</div>
-                      {(alert as any).action_suggestions && (
+                      {alert.action_suggestions && (
                         <div className="mt-2 space-y-1">
                           <div className="text-xs font-medium text-blue-600">建议行动：</div>
-                          {(alert as any).action_suggestions.slice(0, 2).map((suggestion: string, idx: number) => (
+                          {alert.action_suggestions.slice(0, 2).map((suggestion: string, idx: number) => (
                             <div key={idx} className="text-xs text-gray-600 bg-blue-50 px-2 py-1 rounded">
                               • {suggestion}
                             </div>

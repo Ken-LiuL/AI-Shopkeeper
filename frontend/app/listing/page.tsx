@@ -297,11 +297,14 @@ function ListingPage() {
               <div>
                 <p className="text-sm text-muted-foreground mb-2">商品图片</p>
                 {parsedImages.length > 0 ? (
-                  <img
-                    src={parsedImages[0]}
-                    alt={parsedName}
-                    className="h-44 w-full rounded-lg border object-cover"
-                  />
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={parsedImages[0]}
+                      alt={parsedName}
+                      className="h-44 w-full rounded-lg border object-cover"
+                    />
+                  </>
                 ) : (
                   <div className="h-44 w-full rounded-lg border bg-muted flex items-center justify-center text-sm text-muted-foreground">
                     暂无图片

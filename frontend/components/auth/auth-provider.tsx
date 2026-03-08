@@ -8,26 +8,21 @@ import { OnboardingGuide } from '@/components/onboarding/guide';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [checked, setChecked] = useState(false);
-  const [authed, setAuthed] = useState(false);
+  const [authed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return !!localStorage.getItem('auth_token');
+  });
 
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      setAuthed(true);
-    } else if (pathname !== '/login') {
+    if (!authed && pathname !== '/login') {
       router.push('/login');
     }
-    setChecked(true);
-  }, [pathname, router]);
+  }, [authed, pathname, router]);
 
   // Login page: no sidebar, just render children
   if (pathname === '/login') {
     return <>{children}</>;
   }
-
-  // Not yet checked
-  if (!checked) return null;
 
   // Not authed → redirect happening, show nothing
   if (!authed) return null;

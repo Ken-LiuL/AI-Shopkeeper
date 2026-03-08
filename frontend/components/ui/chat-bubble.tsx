@@ -47,6 +47,7 @@ export function ChatBubble({
           {isUser && images.length > 0 && (
             <div className="mb-3 grid grid-cols-2 gap-2">
               {images.map((img, idx) => (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   key={idx}
                   src={img.startsWith('data:') ? img : `data:image/jpeg;base64,${img}`}

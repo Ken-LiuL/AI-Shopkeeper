@@ -30,8 +30,8 @@ export default function SyncSettingsPage() {
     try {
       const json = await getSyncStatus();
       setStatus(json);
-    } catch (e: any) {
-      setError(`网络错误: ${e.message}`);
+    } catch (e: unknown) {
+      setError(`网络错误: ${(e as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -51,7 +51,8 @@ export default function SyncSettingsPage() {
     setSubmitting(true);
     setSubmitMsg(null);
     try {
-      const json = await fetchAPI<any>('/sync/cookie', {
+      interface CookieResponse { ok?: boolean; message?: string; detail?: string; }
+      const json = await fetchAPI<CookieResponse>('/sync/cookie', {
         method: 'POST',
         body: JSON.stringify({ cookie_string: cookieInput.trim() }),
       });
@@ -62,8 +63,8 @@ export default function SyncSettingsPage() {
       } else {
         setSubmitMsg({ ok: false, msg: `❌ ${json.detail || json.message || '提交失败'}` });
       }
-    } catch (e: any) {
-      setSubmitMsg({ ok: false, msg: `❌ 网络错误: ${e.message}` });
+    } catch (e: unknown) {
+      setSubmitMsg({ ok: false, msg: `❌ 网络错误: ${(e as Error).message}` });
     } finally {
       setSubmitting(false);
     }
@@ -73,11 +74,12 @@ export default function SyncSettingsPage() {
     setTriggering(true);
     setTriggerMsg(null);
     try {
-      const json = await fetchAPI<any>('/sync/trigger', { method: 'POST' });
+      interface TriggerResponse { message?: string; }
+      const json = await fetchAPI<TriggerResponse>('/sync/trigger', { method: 'POST' });
       setTriggerMsg(json.message || '同步已触发，请稍后刷新状态');
       setTimeout(fetchStatus, 5000);
-    } catch (e: any) {
-      setTriggerMsg(`错误: ${e.message}`);
+    } catch (e: unknown) {
+      setTriggerMsg(`错误: ${(e as Error).message}`);
     } finally {
       setTriggering(false);
     }

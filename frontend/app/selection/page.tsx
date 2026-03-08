@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+
 import { withErrorBoundary } from '@/components/error-boundary';
 import { fetchAPI } from '@/lib/api';
 import {
@@ -59,11 +59,12 @@ function SelectionPage() {
       setLoading(true);
       setError(null);
 
-      const data = await fetchAPI<any>('/selection/recommendations');
+      type SelectionApiResponse = SelectionProduct[] | { products?: SelectionProduct[]; recommendations?: SelectionProduct[] };
+      const data = await fetchAPI<SelectionApiResponse>('/selection/recommendations');
 
       const productList: SelectionProduct[] = Array.isArray(data)
         ? data
-        : data.products || data.recommendations || [];
+        : (data as { products?: SelectionProduct[]; recommendations?: SelectionProduct[] }).products || (data as { products?: SelectionProduct[]; recommendations?: SelectionProduct[] }).recommendations || [];
 
       const calcSummary: SelectionSummary = {
         total_candidates: productList.length,

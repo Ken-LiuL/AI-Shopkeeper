@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getOrders, getOrderStats, type Order, type OrderStats } from '@/lib/api';
-import { withErrorBoundary } from '@/components/error-boundary';
+
 
 const statusOptions = [
   { value: 'all', label: '全部' },
@@ -39,11 +39,7 @@ export default function OrdersPage() {
   const limit = 20;
   const totalPages = Math.ceil(total / limit);
 
-  useEffect(() => {
-    loadData();
-  }, [currentPage, selectedStatus]);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
       const [ordersResponse, statsData] = await Promise.all([
@@ -60,7 +56,11 @@ export default function OrdersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [currentPage, selectedStatus]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const formatTime = (timeStr: string) => {
     return new Date(timeStr).toLocaleString('zh-CN');

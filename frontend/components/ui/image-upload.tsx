@@ -88,6 +88,7 @@ export function ImageUpload({
         <div className="flex gap-2 flex-wrap">
           {images.map((img, idx) => (
             <div key={idx} className="relative group">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={`data:image/jpeg;base64,${img}`}
                 alt={`Upload ${idx + 1}`}

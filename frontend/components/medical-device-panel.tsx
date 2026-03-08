@@ -53,7 +53,7 @@ export function MedicalDevicePanel() {
         } else {
           setError(result.message || '加载失败');
         }
-      } catch (err) {
+      } catch {
         setError('网络请求失败');
       } finally {
         setLoading(false);

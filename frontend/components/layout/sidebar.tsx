@@ -33,12 +33,10 @@ export function Sidebar() {
   const [isStoreDropdownOpen, setIsStoreDropdownOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  const [username, setUsername] = useState('');
-
-  useEffect(() => {
-    const u = localStorage.getItem('auth_username') || 'admin';
-    setUsername(u);
-  }, []);
+  const [username] = useState(() => {
+    if (typeof window === 'undefined') return 'admin';
+    return localStorage.getItem('auth_username') || 'admin';
+  });
 
   useEffect(() => {
     const checkIfMobile = () => {

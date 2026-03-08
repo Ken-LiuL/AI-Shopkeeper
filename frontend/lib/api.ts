@@ -6,18 +6,13 @@ const BASE_URL = process.env.NEXT_PUBLIC_API_URL
   ? '' // relative path — Next.js rewrite handles the proxy (avoids mixed content)
   : (process.env.NODE_ENV === 'development' ? 'https://ai-shopkeeper-kk.fly.dev' : '');
 
-interface APIResponse<T> {
-  success: boolean;
-  data: T;
-  message: string;
-}
-
 // Error mapping for user-friendly messages
-const getErrorMessage = (error: any, endpoint: string): string => {
+const getErrorMessage = (error: unknown, endpoint: string): string => {
   if (!error) return '未知错误';
+  const err = error as Error;
 
   // Network errors
-  if (error.message?.includes('Failed to fetch')) {
+  if (err.message?.includes('Failed to fetch')) {
     return '网络连接失败，请检查网络连接后重试';
   }
 
@@ -42,7 +37,7 @@ const getErrorMessage = (error: any, endpoint: string): string => {
   };
 
   // Extract status code from error
-  const statusMatch = error.message?.match(/API Error: (\d+)/);
+  const statusMatch = err.message?.match(/API Error: (\d+)/);
   const status = statusMatch ? parseInt(statusMatch[1]) : 0;
 
   // Look for specific endpoint error mapping
@@ -71,10 +66,10 @@ const getErrorMessage = (error: any, endpoint: string): string => {
       return '服务暂时不可用，请稍后重试';
     default:
       // For other cases, return a generic but helpful message
-      if (error.message?.includes('API Error')) {
+      if (err.message?.includes('API Error')) {
         return '服务暂时不可用，请稍后重试';
       }
-      return error.message || '操作失败，请稍后重试';
+      return err.message || '操作失败，请稍后重试';
   }
 };
 
@@ -313,6 +308,7 @@ export interface Alert {
   resolved_at?: string;
   // Backward compatibility
   message?: string;
+  action_suggestions?: string[];
 }
 
 export async function getAlerts(): Promise<Alert[]> {

@@ -73,8 +73,9 @@ function ChatPage() {
   const loadSessions = async () => {
     setSessionsLoading(true);
     try {
-      const data = await fetchAPI<any>('/customer-service/sessions');
-      const list: Session[] = Array.isArray(data) ? data : data.sessions || [];
+      type SessionsApiResponse = Session[] | { sessions: Session[] };
+      const data = await fetchAPI<SessionsApiResponse>('/customer-service/sessions');
+      const list: Session[] = Array.isArray(data) ? data : (data as { sessions: Session[] }).sessions || [];
       setSessions(list);
     } catch (err) {
       console.error('Error loading sessions:', err);
@@ -87,7 +88,8 @@ function ChatPage() {
   const handleNewSession = async () => {
     setCreatingSession(true);
     try {
-      const data = await fetchAPI<any>('/customer-service/sessions', { method: 'POST' });
+      interface NewSessionResponse { id?: string; session_id?: string; }
+      const data = await fetchAPI<NewSessionResponse>('/customer-service/sessions', { method: 'POST' });
       const newId = data.id || data.session_id || generateSessionId();
       setCurrentSessionId(newId);
       setMessages([{
@@ -118,9 +120,11 @@ function ChatPage() {
     setCurrentSessionId(sessionId);
     setLoading(true);
     try {
-      const data = await fetchAPI<any>(`/customer-service/sessions/${sessionId}/messages`);
-      const rawMessages = Array.isArray(data) ? data : data.messages || [];
-      const restored: Message[] = rawMessages.map((m: any) => ({
+      interface RawMessage { id?: string; role?: string; is_user?: boolean; content?: string; message?: string; text?: string; created_at?: string; sources?: Message['sources']; intent?: string; }
+      type MessagesApiResponse = RawMessage[] | { messages: RawMessage[] };
+      const data = await fetchAPI<MessagesApiResponse>(`/customer-service/sessions/${sessionId}/messages`);
+      const rawMessages = Array.isArray(data) ? data : (data as { messages: RawMessage[] }).messages || [];
+      const restored: Message[] = rawMessages.map((m: RawMessage) => ({
         id: m.id || String(Date.now() + Math.random()),
         role: m.role || (m.is_user ? 'user' : 'assistant'),
         content: m.content || m.message || m.text || '',

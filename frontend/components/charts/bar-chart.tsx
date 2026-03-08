@@ -1,7 +1,7 @@
 'use client';
 import { ResponsiveContainer, BarChart as RBarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 
-export function BarChart({ data, xKey, yKey, label }: { data: any[]; xKey: string; yKey: string; label?: string }) {
+export function BarChart({ data, xKey, yKey, label }: { data: Record<string, unknown>[]; xKey: string; yKey: string; label?: string }) {
   return (
     <ResponsiveContainer width="100%" height={300}>
       <RBarChart data={data}>
