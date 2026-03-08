@@ -815,6 +815,78 @@ async def policy_crawler_etl_task() -> None:
         logger.exception("Policy crawler ETL task failed")
 
 
+async def competitor_changes_etl_task() -> None:
+    """竞品价格变动检测 ETL。"""
+    logger.info("Starting competitor changes ETL")
+    try:
+        import asyncpg
+        from src.sync.etl_competitor_changes import run_competitor_changes_etl
+        dsn = _resolve_database_url()
+        if not dsn:
+            return
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            await run_competitor_changes_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Competitor changes ETL failed")
+
+
+async def product_associations_etl_task() -> None:
+    """关联购买矩阵 ETL。"""
+    logger.info("Starting product associations ETL")
+    try:
+        import asyncpg
+        from src.sync.etl_product_associations import run_product_associations_etl
+        dsn = _resolve_database_url()
+        if not dsn:
+            return
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            await run_product_associations_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Product associations ETL failed")
+
+
+async def seasonality_etl_task() -> None:
+    """季节性趋势标签 ETL。"""
+    logger.info("Starting seasonality ETL")
+    try:
+        import asyncpg
+        from src.sync.etl_seasonality import run_seasonality_etl
+        dsn = _resolve_database_url()
+        if not dsn:
+            return
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            await run_seasonality_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Seasonality ETL failed")
+
+
+async def auto_faq_etl_task() -> None:
+    """FAQ 自动生成 ETL。"""
+    logger.info("Starting auto FAQ ETL")
+    try:
+        import asyncpg
+        from src.sync.etl_auto_faq import run_auto_faq_etl
+        dsn = _resolve_database_url()
+        if not dsn:
+            return
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            await run_auto_faq_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Auto FAQ ETL failed")
+
+
 async def category_mapping_etl_task() -> None:
     """类目映射 ETL — 从商品表/竞品表/QNH API 构建类目映射。"""
     logger.info("Starting category mapping ETL")
@@ -1296,11 +1368,55 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         replace_existing=True,
     )
 
-    # 类目映射 ETL：每天 04:00 CST（商品同步后）
+    # 竞品价格变动：每天 09:30 CST（竞品采集 08:00 之后）
+    scheduler.add_job(
+        _make_heartbeat_task("competitor_changes_etl", competitor_changes_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("competitor_changes_etl", "30 9 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="competitor_changes_etl",
+        replace_existing=True,
+    )
+
+    # 关联购买矩阵：每天 04:00 CST（订单同步后）
+    scheduler.add_job(
+        _make_heartbeat_task("product_associations_etl", product_associations_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("product_associations_etl", "0 4 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="product_associations_etl",
+        replace_existing=True,
+    )
+
+    # 季节性趋势：每周日 05:00 CST
+    scheduler.add_job(
+        _make_heartbeat_task("seasonality_etl", seasonality_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("seasonality_etl", "0 5 * * 0"),
+            timezone=SH_TZ,
+        ),
+        id="seasonality_etl",
+        replace_existing=True,
+    )
+
+    # FAQ 自动生成：每天 10:00 CST
+    scheduler.add_job(
+        _make_heartbeat_task("auto_faq_etl", auto_faq_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("auto_faq_etl", "0 10 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="auto_faq_etl",
+        replace_existing=True,
+    )
+
+    # 类目映射 ETL：每天 04:30 CST（商品同步后）
     scheduler.add_job(
         _make_heartbeat_task("category_mapping_etl", category_mapping_etl_task),
         CronTrigger.from_crontab(
-            tasks.get("category_mapping_etl", "0 4 * * *"),
+            tasks.get("category_mapping_etl", "30 4 * * *"),
             timezone=SH_TZ,
         ),
         id="category_mapping_etl",
