@@ -154,33 +154,63 @@ async def chat(
 
 @router.post("/auto-reply", response_model=APIResponse[dict])
 async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
-    """无需 session 的快速自动回复，用于接入美团客服消息。"""
+    """无需 session 的快速自动回复，用于接入美团客服消息（30秒内响应要求）。"""
+    import asyncio
+    import time
+
+    start_ts = time.monotonic()
+    # 美团要求 30 秒内回复，预留 5 秒余量，AI 调用限时 25 秒
+    _TIMEOUT_SECONDS = 25.0
+
     try:
         from src.agents.customer_service.nodes import chat as cs_chat
         from src.db import postgres as pg_db
 
         pool = pg_db.get_pool()
-        result = await cs_chat(
-            session_id="auto-reply",
-            message=request.message,
-            pool=pool,
-            conversation_history=[],
-            images=getattr(request, "images", None),
+
+        result = await asyncio.wait_for(
+            cs_chat(
+                session_id="auto-reply",
+                message=request.message,
+                pool=pool,
+                conversation_history=[],
+                images=getattr(request, "images", None),
+            ),
+            timeout=_TIMEOUT_SECONDS,
         )
+
+        elapsed_ms = (time.monotonic() - start_ts) * 1000
+        logger.info("Auto-reply completed in %.0fms", elapsed_ms)
+
         return APIResponse(
             data={
                 "reply": result.get("reply", ""),
                 "intent": result.get("intent"),
                 "needs_human": result.get("needs_human", False),
+                "response_ms": round(elapsed_ms),
             }
         )
+    except asyncio.TimeoutError:
+        elapsed_ms = (time.monotonic() - start_ts) * 1000
+        logger.error("Auto-reply timeout after %.0fms (limit=%ss)", elapsed_ms, _TIMEOUT_SECONDS)
+        return APIResponse(
+            data={
+                "reply": "亲，稍等一下，我马上为您处理～如有紧急问题可联系人工客服 😊",
+                "intent": "timeout",
+                "needs_human": True,
+                "response_ms": round(elapsed_ms),
+            },
+            message="自动回复超时，建议转人工",
+        )
     except Exception as e:
-        logger.error("Auto-reply failed: %s", e)
+        elapsed_ms = (time.monotonic() - start_ts) * 1000
+        logger.error("Auto-reply failed after %.0fms: %s", elapsed_ms, e)
         return APIResponse(
             data={
                 "reply": "抱歉，系统暂时无法处理您的消息，请稍后再试或联系人工客服。",
                 "intent": "error",
                 "needs_human": True,
+                "response_ms": round(elapsed_ms),
             },
             message="自动回复失败，建议转人工",
         )
