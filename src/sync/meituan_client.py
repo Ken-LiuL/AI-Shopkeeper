@@ -72,7 +72,6 @@ class MeituanBrowserClient:
         if method_upper == "POST" and self.default_wm_poi_id and "wmPoiId" not in params:
             params["wmPoiId"] = self.default_wm_poi_id
 
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
         body_payload: str | None = None
 
         if method_upper == "POST":
@@ -85,19 +84,26 @@ class MeituanBrowserClient:
             )
 
         result_key = f"__mt_api_{int(time.time() * 1000)}"
-        headers_literal = json.dumps(headers)
-        body_literal = f", body: {json.dumps(body_payload)}" if body_payload is not None else ""
+        body_str_escaped = json.dumps(body_payload) if body_payload is not None else "null"
 
+        # Use XMLHttpRequest instead of fetch — h5guard hooks XHR to inject mtgsig
         js = f"""
             window.{result_key} = 'pending';
-            fetch('{url}', {{
-                method: '{method_upper}',
-                credentials: 'include',
-                headers: {headers_literal}{body_literal}
-            }})
-            .then(r => r.text())
-            .then(text => {{ window.{result_key} = text; }})
-            .catch(err => {{ window.{result_key} = JSON.stringify({{error: true, message: err.message}}); }});
+            (function() {{
+                var xhr = new XMLHttpRequest();
+                xhr.open('{method_upper}', '{url}', true);
+                xhr.withCredentials = true;
+                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                xhr.onreadystatechange = function() {{
+                    if (xhr.readyState === 4) {{
+                        window.{result_key} = xhr.responseText || JSON.stringify({{error: true, message: 'empty response', status: xhr.status}});
+                    }}
+                }};
+                xhr.onerror = function() {{
+                    window.{result_key} = JSON.stringify({{error: true, message: 'xhr error'}});
+                }};
+                xhr.send({body_str_escaped});
+            }})();
         """
 
         await self._page.evaluate(js)
