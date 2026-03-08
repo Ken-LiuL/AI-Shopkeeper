@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+import logging
+
+from fastapi import APIRouter, HTTPException, Query
 
 from src.db import postgres as pg
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/llm", response_model=APIResponse[dict])
@@ -16,6 +19,14 @@ async def llm_metrics(
     days: int = Query(7, ge=1, le=90, description="Number of days to look back"),
 ) -> APIResponse[dict]:
     """Return LLM usage statistics: total tokens, cost, breakdown by model."""
+    try:
+        return await _llm_metrics_impl(days)
+    except Exception as e:
+        logger.error("Failed to get LLM metrics: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to get LLM metrics")
+
+
+async def _llm_metrics_impl(days: int) -> APIResponse[dict]:
     pool = pg.get_pool()
 
     # Overall totals

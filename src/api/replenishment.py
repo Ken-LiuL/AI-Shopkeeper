@@ -48,42 +48,55 @@ async def urgent_replenishment_predictions() -> APIResponse[list[dict]]:
 
 @router.get("/suggestions", response_model=APIResponse[list])
 async def get_suggestions() -> APIResponse:
-    svc = ReplenishmentService()
-    items = await svc.get_replenishment_suggestions()
-    return APIResponse(
-        data=[
-            {
-                "product_id": i.product_id,
-                "product_name": i.product_name,
-                "current_stock": i.current_stock,
-                "safety_stock": i.safety_stock,
-                "suggested_qty": i.suggested_qty,
-                "cost_price": i.cost_price,
-                "estimated_cost": i.estimated_cost,
-                "supplier_link": i.supplier_link,
-            }
-            for i in items
-        ]
-    )
+    try:
+        svc = ReplenishmentService()
+        items = await svc.get_replenishment_suggestions()
+        return APIResponse(
+            data=[
+                {
+                    "product_id": i.product_id,
+                    "product_name": i.product_name,
+                    "current_stock": i.current_stock,
+                    "safety_stock": i.safety_stock,
+                    "suggested_qty": i.suggested_qty,
+                    "cost_price": i.cost_price,
+                    "estimated_cost": i.estimated_cost,
+                    "supplier_link": i.supplier_link,
+                }
+                for i in items
+            ]
+        )
+    except Exception as exc:
+        logger.exception("补货建议生成失败")
+        return APIResponse(data=[], message=f"补货建议失败: {exc}")
 
 
 @router.post("/purchase-order", response_model=APIResponse[dict])
 async def create_purchase_order(items: list[dict]) -> APIResponse:
-    svc = ReplenishmentService()
-    po = await svc.generate_purchase_order(items)
-    return APIResponse(
-        data={
-            "order_id": po.order_id,
-            "items": po.items,
-            "total_cost": po.total_cost,
-            "status": po.status,
-            "created_at": po.created_at,
-        }
-    )
+    try:
+        svc = ReplenishmentService()
+        po = await svc.generate_purchase_order(items)
+        return APIResponse(
+            data={
+                "order_id": po.order_id,
+                "items": po.items,
+                "total_cost": po.total_cost,
+                "status": po.status,
+                "created_at": po.created_at,
+            }
+        )
+    except Exception as exc:
+        logger.exception("采购单生成失败")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"采购单生成失败: {exc}")
 
 
 @router.get("/safety-stock", response_model=APIResponse[list])
 async def get_safety_stock() -> APIResponse:
-    svc = ReplenishmentService()
-    data = await svc.get_safety_stock_list()
-    return APIResponse(data=data)
+    try:
+        svc = ReplenishmentService()
+        data = await svc.get_safety_stock_list()
+        return APIResponse(data=data)
+    except Exception as exc:
+        logger.exception("安全库存查询失败")
+        return APIResponse(data=[], message=f"安全库存查询失败: {exc}")

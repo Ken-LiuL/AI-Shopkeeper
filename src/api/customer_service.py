@@ -155,24 +155,35 @@ async def chat(
 @router.post("/auto-reply", response_model=APIResponse[dict])
 async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
     """无需 session 的快速自动回复，用于接入美团客服消息。"""
-    from src.agents.customer_service.nodes import chat as cs_chat
-    from src.db import postgres as pg_db
+    try:
+        from src.agents.customer_service.nodes import chat as cs_chat
+        from src.db import postgres as pg_db
 
-    pool = pg_db.get_pool()
-    result = await cs_chat(
-        session_id="auto-reply",
-        message=request.message,
-        pool=pool,
-        conversation_history=[],
-        images=getattr(request, "images", None),
-    )
-    return APIResponse(
-        data={
-            "reply": result.get("reply", ""),
-            "intent": result.get("intent"),
-            "needs_human": result.get("needs_human", False),
-        }
-    )
+        pool = pg_db.get_pool()
+        result = await cs_chat(
+            session_id="auto-reply",
+            message=request.message,
+            pool=pool,
+            conversation_history=[],
+            images=getattr(request, "images", None),
+        )
+        return APIResponse(
+            data={
+                "reply": result.get("reply", ""),
+                "intent": result.get("intent"),
+                "needs_human": result.get("needs_human", False),
+            }
+        )
+    except Exception as e:
+        logger.error("Auto-reply failed: %s", e)
+        return APIResponse(
+            data={
+                "reply": "抱歉，系统暂时无法处理您的消息，请稍后再试或联系人工客服。",
+                "intent": "error",
+                "needs_human": True,
+            },
+            message="自动回复失败，建议转人工",
+        )
 
 
 # ── List sessions ─────────────────────────────────────────────

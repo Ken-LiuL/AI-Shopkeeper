@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from src.agents.orchestrator import Orchestrator
 from src.db import postgres as pg
@@ -75,33 +75,43 @@ async def trigger_selection(
 
 @router.get("/runs", response_model=APIResponse[list[SelectionRunSummary]])
 async def list_runs() -> APIResponse[list[SelectionRunSummary]]:
-    pool = pg.get_pool()
-    rows = await pool.fetch(
-        "SELECT run_id, status, keywords, categories, result_count, created_at FROM selection_runs ORDER BY created_at DESC LIMIT 50"
-    )
-    items = [SelectionRunSummary(**dict(r)) for r in rows]
+    try:
+        pool = pg.get_pool()
+        rows = await pool.fetch(
+            "SELECT run_id, status, keywords, categories, result_count, created_at FROM selection_runs ORDER BY created_at DESC LIMIT 50"
+        )
+        items = [SelectionRunSummary(**dict(r)) for r in rows]
 
-    # If no runs exist, add helpful message
-    if not items:
-        return APIResponse(data=[], message="暂无选品运行记录")
+        # If no runs exist, add helpful message
+        if not items:
+            return APIResponse(data=[], message="暂无选品运行记录")
 
-    return APIResponse(data=items)
+        return APIResponse(data=items)
+    except Exception as exc:
+        logger.error("Failed to list selection runs: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/runs/{run_id}", response_model=APIResponse[SelectionRunDetail])
 async def get_run(run_id: str) -> APIResponse[SelectionRunDetail]:
-    pool = pg.get_pool()
-    row = await pool.fetchrow("SELECT * FROM selection_runs WHERE run_id = $1", run_id)
-    if not row:
-        raise NotFoundError("SelectionRun", run_id)
-    data = dict(row)
-    result = data.pop("result", None) or {}
-    detail = SelectionRunDetail(
-        **{k: v for k, v in data.items() if k in SelectionRunDetail.model_fields},
-        recommendations=result.get("recommendations", []),
-        raw_state=result,
-    )
-    return APIResponse(data=detail)
+    try:
+        pool = pg.get_pool()
+        row = await pool.fetchrow("SELECT * FROM selection_runs WHERE run_id = $1", run_id)
+        if not row:
+            raise NotFoundError("SelectionRun", run_id)
+        data = dict(row)
+        result = data.pop("result", None) or {}
+        detail = SelectionRunDetail(
+            **{k: v for k, v in data.items() if k in SelectionRunDetail.model_fields},
+            recommendations=result.get("recommendations", []),
+            raw_state=result,
+        )
+        return APIResponse(data=detail)
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to get selection run %s: %s", run_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/recommendations", response_model=APIResponse[list[dict]])

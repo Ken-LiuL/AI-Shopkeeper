@@ -192,50 +192,62 @@ async def _period_report(days: int) -> dict:
 @router.get("/daily", response_model=APIResponse[dict])
 async def daily_report(date: str | None = None) -> APIResponse[dict]:
     """日报 — 支持 ?date=2026-02-12 查询指定日期的智能日报"""
-    if date:
-        from datetime import date as date_type
+    try:
+        if date:
+            from datetime import date as date_type
 
-        from src.services.daily_report import DailyReportService
+            from src.services.daily_report import DailyReportService
 
-        try:
-            d = date_type.fromisoformat(date)
-            svc = DailyReportService()
-            report = await svc.generate_daily_report(d)
-            return APIResponse(
-                data={
-                    "date": report.date,
-                    "revenue": report.revenue,
-                    "order_count": report.order_count,
-                    "avg_order_value": report.avg_order_value,
-                    "revenue_vs_yesterday": report.revenue_vs_yesterday,
-                    "revenue_vs_last_week": report.revenue_vs_last_week,
-                    "order_vs_yesterday": report.order_vs_yesterday,
-                    "order_vs_last_week": report.order_vs_last_week,
-                    "top_products": report.top_products,
-                    "slow_products": report.slow_products,
-                    "cs_total": report.cs_total,
-                    "cs_ai_ratio": report.cs_ai_ratio,
-                    "cs_human_transfer": report.cs_human_transfer,
-                    "alerts_triggered": report.alerts_triggered,
-                    "alerts_pending": report.alerts_pending,
-                    "alerts_resolved": report.alerts_resolved,
-                    "todo_items": report.todo_items,
-                    "competitor_changes": report.competitor_changes,
-                }
-            )
-        except ValueError:
-            pass
-    return APIResponse(data=await _period_report(1))
+            try:
+                d = date_type.fromisoformat(date)
+                svc = DailyReportService()
+                report = await svc.generate_daily_report(d)
+                return APIResponse(
+                    data={
+                        "date": report.date,
+                        "revenue": report.revenue,
+                        "order_count": report.order_count,
+                        "avg_order_value": report.avg_order_value,
+                        "revenue_vs_yesterday": report.revenue_vs_yesterday,
+                        "revenue_vs_last_week": report.revenue_vs_last_week,
+                        "order_vs_yesterday": report.order_vs_yesterday,
+                        "order_vs_last_week": report.order_vs_last_week,
+                        "top_products": report.top_products,
+                        "slow_products": report.slow_products,
+                        "cs_total": report.cs_total,
+                        "cs_ai_ratio": report.cs_ai_ratio,
+                        "cs_human_transfer": report.cs_human_transfer,
+                        "alerts_triggered": report.alerts_triggered,
+                        "alerts_pending": report.alerts_pending,
+                        "alerts_resolved": report.alerts_resolved,
+                        "todo_items": report.todo_items,
+                        "competitor_changes": report.competitor_changes,
+                    }
+                )
+            except ValueError:
+                pass
+        return APIResponse(data=await _period_report(1))
+    except Exception as e:
+        logger.error("Failed to generate daily report: %s", e)
+        return APIResponse(data={}, message=f"日报生成失败: {e}")
 
 
 @router.get("/weekly", response_model=APIResponse[dict])
 async def weekly_report() -> APIResponse[dict]:
-    return APIResponse(data=await _period_report(7))
+    try:
+        return APIResponse(data=await _period_report(7))
+    except Exception as e:
+        logger.error("Failed to generate weekly report: %s", e)
+        return APIResponse(data={}, message=f"周报生成失败: {e}")
 
 
 @router.get("/monthly", response_model=APIResponse[dict])
 async def monthly_report() -> APIResponse[dict]:
-    return APIResponse(data=await _period_report(30))
+    try:
+        return APIResponse(data=await _period_report(30))
+    except Exception as e:
+        logger.error("Failed to generate monthly report: %s", e)
+        return APIResponse(data={}, message=f"月报生成失败: {e}")
 
 
 @router.get("/product-performance", response_model=APIResponse[list[dict]])
@@ -243,6 +255,14 @@ async def product_performance(
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(20, ge=1, le=100),
 ) -> APIResponse[list[dict]]:
+    try:
+        return await _product_performance_impl(days, limit)
+    except Exception as e:
+        logger.error("Failed to get product performance: %s", e)
+        return APIResponse(data=[], message=f"商品表现查询失败: {e}")
+
+
+async def _product_performance_impl(days: int, limit: int) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
 
     # Try to get data from order_items first
@@ -285,6 +305,14 @@ async def product_performance(
 async def category_analysis(
     days: int = Query(30, ge=1, le=365),
 ) -> APIResponse[list[dict]]:
+    try:
+        return await _category_analysis_impl(days)
+    except Exception as e:
+        logger.error("Failed to get category analysis: %s", e)
+        return APIResponse(data=[], message=f"品类分析失败: {e}")
+
+
+async def _category_analysis_impl(days: int) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
 
     # Try to get data from order_items first
@@ -324,11 +352,16 @@ async def export_report(
     format: str = Query("csv", pattern="^(csv|json)$"),  # noqa: A002
 ) -> StreamingResponse:
     """Export report as CSV (PDF/Excel can be added later)."""
-    if report_type == "product-performance":
-        data = (await product_performance()).data  # type: ignore
-    else:
-        days = {"daily": 1, "weekly": 7, "monthly": 30}[report_type]
-        data = [await _period_report(days)]
+    try:
+        if report_type == "product-performance":
+            data = (await product_performance()).data  # type: ignore
+        else:
+            days = {"daily": 1, "weekly": 7, "monthly": 30}[report_type]
+            data = [await _period_report(days)]
+    except Exception as e:
+        logger.error("Failed to generate export data: %s", e)
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=f"导出失败: {e}")
 
     if format == "csv" and data:
         buf = io.StringIO()

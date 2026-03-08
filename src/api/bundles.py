@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 
 from src.agents.orchestrator import Orchestrator
 from src.db import postgres as pg
@@ -43,46 +43,68 @@ async def bundle_suggestions() -> APIResponse[list[dict]]:
 
 @router.get("/{bundle_id}", response_model=APIResponse[dict])
 async def get_bundle(bundle_id: str) -> APIResponse[dict]:
-    pool = pg.get_pool()
-    row = await pool.fetchrow("SELECT * FROM bundles WHERE bundle_id = $1", bundle_id)
-    if not row:
-        raise NotFoundError("Bundle", bundle_id)
-    return APIResponse(data=dict(row))
+    try:
+        pool = pg.get_pool()
+        row = await pool.fetchrow("SELECT * FROM bundles WHERE bundle_id = $1", bundle_id)
+        if not row:
+            raise NotFoundError("Bundle", bundle_id)
+        return APIResponse(data=dict(row))
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to get bundle %s: %s", bundle_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{bundle_id}/activate", response_model=APIResponse[dict])
 async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
-    pool = pg.get_pool()
-    row = await pool.fetchrow(
-        "UPDATE bundles SET status = 'active' WHERE bundle_id = $1 RETURNING *",
-        bundle_id,
-    )
-    if not row:
-        raise NotFoundError("Bundle", bundle_id)
-    return APIResponse(data=dict(row), message="Bundle activated")
+    try:
+        pool = pg.get_pool()
+        row = await pool.fetchrow(
+            "UPDATE bundles SET status = 'active' WHERE bundle_id = $1 RETURNING *",
+            bundle_id,
+        )
+        if not row:
+            raise NotFoundError("Bundle", bundle_id)
+        return APIResponse(data=dict(row), message="Bundle activated")
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to activate bundle %s: %s", bundle_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/{bundle_id}/deactivate", response_model=APIResponse[dict])
 async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
-    pool = pg.get_pool()
-    row = await pool.fetchrow(
-        "UPDATE bundles SET status = 'inactive' WHERE bundle_id = $1 RETURNING *",
-        bundle_id,
-    )
-    if not row:
-        raise NotFoundError("Bundle", bundle_id)
-    return APIResponse(data=dict(row), message="Bundle deactivated")
+    try:
+        pool = pg.get_pool()
+        row = await pool.fetchrow(
+            "UPDATE bundles SET status = 'inactive' WHERE bundle_id = $1 RETURNING *",
+            bundle_id,
+        )
+        if not row:
+            raise NotFoundError("Bundle", bundle_id)
+        return APIResponse(data=dict(row), message="Bundle deactivated")
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to deactivate bundle %s: %s", bundle_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_bundles() -> APIResponse[list[dict]]:
-    pool = pg.get_pool()
-    rows = await pool.fetch(
-        "SELECT * FROM bundles WHERE status != 'deleted' ORDER BY created_at DESC"
-    )
-    if not rows:
-        return APIResponse(data=[], message="功能待开通")
-    return APIResponse(data=[dict(r) for r in rows])
+    try:
+        pool = pg.get_pool()
+        rows = await pool.fetch(
+            "SELECT * FROM bundles WHERE status != 'deleted' ORDER BY created_at DESC"
+        )
+        if not rows:
+            return APIResponse(data=[], message="功能待开通")
+        return APIResponse(data=[dict(r) for r in rows])
+    except Exception as exc:
+        logger.error("Failed to list bundles: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _run_bundle_generate(
@@ -112,41 +134,57 @@ async def generate_bundles(
     bg: BackgroundTasks,
     orch: Orchestrator = Depends(get_orchestrator),
 ) -> TaskCreatedResponse:
-    task_id = gen_id("bnd_")
-    pool = pg.get_pool()
-    await pool.execute(
-        "INSERT INTO bundle_tasks (task_id, status, created_at) VALUES ($1, 'running', NOW())",
-        task_id,
-    )
-    bg.add_task(_run_bundle_generate, task_id, request, orch)
-    return TaskCreatedResponse(task_id=task_id, message="Bundle generation started")
+    try:
+        task_id = gen_id("bnd_")
+        pool = pg.get_pool()
+        await pool.execute(
+            "INSERT INTO bundle_tasks (task_id, status, created_at) VALUES ($1, 'running', NOW())",
+            task_id,
+        )
+        bg.add_task(_run_bundle_generate, task_id, request, orch)
+        return TaskCreatedResponse(task_id=task_id, message="Bundle generation started")
+    except Exception as exc:
+        logger.error("Failed to create bundle task: %s", exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.patch("/{bundle_id}", response_model=APIResponse[dict])
 async def update_bundle(bundle_id: str, body: BundleUpdateRequest) -> APIResponse[dict]:
-    pool = pg.get_pool()
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
-    if not updates:
-        raise NotFoundError("Bundle", bundle_id)
+    try:
+        pool = pg.get_pool()
+        updates = {k: v for k, v in body.model_dump().items() if v is not None}
+        if not updates:
+            raise NotFoundError("Bundle", bundle_id)
 
-    set_clauses = [f"{k} = ${i + 1}" for i, k in enumerate(updates)]
-    params = list(updates.values()) + [bundle_id]
-    row = await pool.fetchrow(
-        f"UPDATE bundles SET {', '.join(set_clauses)} WHERE bundle_id = ${len(params)} RETURNING *",
-        *params,
-    )
-    if not row:
-        raise NotFoundError("Bundle", bundle_id)
-    return APIResponse(data=dict(row))
+        set_clauses = [f"{k} = ${i + 1}" for i, k in enumerate(updates)]
+        params = list(updates.values()) + [bundle_id]
+        row = await pool.fetchrow(
+            f"UPDATE bundles SET {', '.join(set_clauses)} WHERE bundle_id = ${len(params)} RETURNING *",
+            *params,
+        )
+        if not row:
+            raise NotFoundError("Bundle", bundle_id)
+        return APIResponse(data=dict(row))
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to update bundle %s: %s", bundle_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/{bundle_id}", response_model=APIResponse[dict])
 async def delete_bundle(bundle_id: str) -> APIResponse[dict]:
-    pool = pg.get_pool()
-    row = await pool.fetchrow(
-        "UPDATE bundles SET status = 'deleted' WHERE bundle_id = $1 RETURNING *",
-        bundle_id,
-    )
-    if not row:
-        raise NotFoundError("Bundle", bundle_id)
-    return APIResponse(data=dict(row), message="Bundle deleted")
+    try:
+        pool = pg.get_pool()
+        row = await pool.fetchrow(
+            "UPDATE bundles SET status = 'deleted' WHERE bundle_id = $1 RETURNING *",
+            bundle_id,
+        )
+        if not row:
+            raise NotFoundError("Bundle", bundle_id)
+        return APIResponse(data=dict(row), message="Bundle deleted")
+    except NotFoundError:
+        raise
+    except Exception as exc:
+        logger.error("Failed to delete bundle %s: %s", bundle_id, exc)
+        raise HTTPException(status_code=500, detail="Internal server error")
