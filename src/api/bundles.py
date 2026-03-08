@@ -90,8 +90,8 @@ async def _run_bundle_generate(
 ) -> None:
     try:
         kwargs = {k: v for k, v in request.model_dump().items() if v is not None}
-        result = await orch.run_bundle(**kwargs)
         pool = pg.get_pool()
+        result = await orch.run_bundle(db_pool=pool, **kwargs)
         await pool.execute(
             "UPDATE bundle_tasks SET status = 'completed', result = $1::jsonb, finished_at = NOW() WHERE task_id = $2",
             json.dumps(result, default=str),
