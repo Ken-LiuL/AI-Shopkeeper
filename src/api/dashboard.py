@@ -122,6 +122,135 @@ async def _get_latest_metrics(pool) -> dict:
     return {}
 
 
+async def _table_exists(pool, table_name: str) -> bool:
+    try:
+        exists = await pool.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )
+            """,
+            table_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+async def _column_exists(pool, table_name: str, column_name: str) -> bool:
+    try:
+        exists = await pool.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND table_name = $1
+                  AND column_name = $2
+            )
+            """,
+            table_name,
+            column_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+async def _get_today_order_metrics(pool) -> tuple[int, float]:
+    if not await _table_exists(pool, "qnh_orders_raw"):
+        return 0, 0.0
+
+    try:
+        has_total = await _column_exists(pool, "qnh_orders_raw", "total")
+        total_expr = "COALESCE(SUM(total), 0)" if has_total else "0"
+
+        date_col = None
+        for candidate in ("order_date", "created_at", "order_time", "pay_time", "synced_at"):
+            if await _column_exists(pool, "qnh_orders_raw", candidate):
+                date_col = candidate
+                break
+
+        where_clause = f"{date_col}::date = CURRENT_DATE" if date_col else "TRUE"
+        row = await pool.fetchrow(
+            f"""
+            SELECT COUNT(*) AS cnt, {total_expr} AS revenue
+            FROM qnh_orders_raw
+            WHERE {where_clause}
+            """
+        )
+        return int((row and row["cnt"]) or 0), float((row and row["revenue"]) or 0)
+    except Exception:
+        return 0, 0.0
+
+
+async def _get_inventory_alert_count(pool) -> int:
+    if not await _table_exists(pool, "qnh_inventory"):
+        return 0
+    try:
+        count = await pool.fetchval(
+            "SELECT COUNT(*) FROM qnh_inventory WHERE COALESCE(stock, 0) < 10"
+        )
+        return int(count or 0)
+    except Exception:
+        return 0
+
+
+async def _get_avg_rating(pool) -> float:
+    if not await _table_exists(pool, "qnh_reviews_raw"):
+        return 0.0
+    try:
+        date_col = None
+        for candidate in ("review_date", "created_at", "synced_at"):
+            if await _column_exists(pool, "qnh_reviews_raw", candidate):
+                date_col = candidate
+                break
+        where_clause = f"WHERE {date_col}::date = CURRENT_DATE" if date_col else ""
+        avg_rating = await pool.fetchval(
+            f"SELECT AVG(rating) FROM qnh_reviews_raw {where_clause}"
+        )
+        return round(float(avg_rating or 0), 2)
+    except Exception:
+        return 0.0
+
+
+async def _get_recent_sync_state(pool, limit: int = 5) -> list[dict]:
+    if not await _table_exists(pool, "sync_state"):
+        return []
+    try:
+        rows = await pool.fetch(
+            """
+            SELECT
+                syncer_name,
+                COALESCE(last_sync_status, 'unknown') AS last_sync_status,
+                COALESCE(last_incremental_sync, last_full_sync, updated_at) AS last_sync_time,
+                COALESCE(records_synced, 0) AS records_synced,
+                COALESCE(last_sync_duration_ms, 0) AS duration_ms
+            FROM sync_state
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT $1
+            """,
+            limit,
+        )
+        result = []
+        for row in rows:
+            last_time = row["last_sync_time"]
+            result.append(
+                {
+                    "syncer_name": row["syncer_name"] or "unknown",
+                    "last_sync_status": row["last_sync_status"] or "unknown",
+                    "last_sync_time": last_time.isoformat() if last_time else None,
+                    "records_synced": int(row["records_synced"] or 0),
+                    "duration_ms": int(row["duration_ms"] or 0),
+                }
+            )
+        return result
+    except Exception:
+        return []
+
+
 async def _generate_action_items(
     pool,
     *,
@@ -371,119 +500,34 @@ async def _generate_action_items(
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
     pool = pg.get_pool()
-    total_products = (
-        await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+    total_products = 0
+    with contextlib.suppress(Exception):
+        total_products = (
+            await pool.fetchval("SELECT COUNT(*) FROM qnh_products WHERE COALESCE(status, 'active') = 'active'")
+            or 0
+        )
+    if total_products == 0:
+        with contextlib.suppress(Exception):
+            total_products = (
+                await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
+            )
+
+    today_orders, today_gmv = await _get_today_order_metrics(pool)
+    avg_order_value = (today_gmv / today_orders) if today_orders > 0 else 0.0
+    avg_rating = await _get_avg_rating(pool)
+    pending_alerts = await _get_inventory_alert_count(pool)
+    recent_sync_state = await _get_recent_sync_state(pool, limit=5)
+
+    pending_tasks = len(
+        [item for item in recent_sync_state if item.get("last_sync_status") == "running"]
     )
 
-    today_orders = 0
-    today_gmv = 0.0
-    avg_order_value = 0.0
-    total_customers = 0
-    conversion_rate = 0.0
-
-    # ── Priority 0: store_daily_metrics (meituan scraper) ──
+    action_items = []
     with contextlib.suppress(Exception):
-        dm = await pool.fetchrow(
-            """SELECT deal_amount, transaction_volume, avg_order_value, total_customers,
-                      conversion_rate, exposure_uv
-               FROM store_daily_metrics
-               WHERE store_id = $1 AND metric_date = CURRENT_DATE""",
-            DEFAULT_STORE_ID,
-        )
-        if dm and dm["transaction_volume"] and dm["transaction_volume"] > 0:
-            today_orders = dm["transaction_volume"]
-            today_gmv = float(dm["deal_amount"] or 0)
-            avg_order_value = float(dm["avg_order_value"] or 0)
-            total_customers = dm["total_customers"] or 0
-            exposure = dm["exposure_uv"] or 0
-            if exposure > 0 and today_orders > 0:
-                conversion_rate = round(today_orders / exposure * 100, 2)
-
-    # ── Priority 1: real orders from meituan syncer ──
-    if today_orders == 0:
-        with contextlib.suppress(Exception):
-            row = await pool.fetchrow(
-                """SELECT COUNT(*) as cnt, COALESCE(SUM(customer_paid), 0) as gmv
-                   FROM orders
-                   WHERE order_date = CURRENT_DATE AND customer_paid IS NOT NULL"""
-            )
-            if row and row["cnt"] > 0:
-                today_orders = int(row["cnt"])
-                today_gmv = float(row["gmv"])
-                avg_order_value = today_gmv / today_orders if today_orders > 0 else 0
-
-    # ── Priority 2 (fallback): Read from qnh_dataset_records (store_rank aggregated) ──
-    store_records = await _get_dataset_records(pool, "store_rank")
-    if today_orders == 0 and store_records:
-        for rec in store_records:
-            today_orders += int(_parse_data_value(rec.get("eff_ord_cnt")))
-            today_gmv += _parse_data_value(rec.get("sale_amt_gmv"))
-            total_customers += int(_parse_data_value(rec.get("user_cnt")))
-        if today_orders > 0 and today_gmv > 0:
-            avg_order_value = today_gmv / today_orders
-
-    # ── Fallback: old raw metrics table ──
-    if today_orders == 0:
-        with contextlib.suppress(Exception):
-            today_orders = (
-                await pool.fetchval(
-                    "SELECT COUNT(*) FROM orders WHERE order_time::date = CURRENT_DATE"
-                )
-                or 0
-            )
-        metrics = await _get_latest_metrics(pool)
-        if metrics:
-            if today_orders == 0:
-                today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
-            today_gmv = _extract_metric(metrics, "sale_amt_gmv")
-            if today_gmv == 0:
-                today_gmv = _extract_metric(metrics, "actual_pay_amt")
-            total_customers = int(_extract_metric(metrics, "user_cnt"))
-            avg_order_value = _extract_metric(metrics, "unit_price")
-            if avg_order_value == 0 and today_orders > 0 and today_gmv > 0:
-                avg_order_value = today_gmv / today_orders
-            expose_cnt = _extract_metric(metrics, "expose_cnt")
-            if expose_cnt > 0 and today_orders > 0:
-                conversion_rate = round(today_orders / expose_cnt * 100, 2)
-
-    # Alert count from alerts table (真实数据)
-    pending_alerts = 0
-    with contextlib.suppress(Exception):
-        pending_alerts = (
-            await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'") or 0
-        )
-
-    pending_tasks = 0
-    with contextlib.suppress(Exception):
-        task_counts = await pool.fetchrow(
-            """
-            SELECT
-                COALESCE((SELECT COUNT(*) FROM selection_runs WHERE status = 'running'), 0) AS selection_runs,
-                COALESCE((SELECT COUNT(*) FROM bundle_tasks WHERE status = 'running'), 0) AS bundle_tasks,
-                COALESCE((SELECT COUNT(*) FROM listings WHERE status = 'processing'), 0) AS listings
-            """
-        )
-        if task_counts:
-            pending_tasks = (
-                int(task_counts["selection_runs"])
-                + int(task_counts["bundle_tasks"])
-                + int(task_counts["listings"])
-            )
-
-    # Generate action items
-    # Timeout action_items generation to prevent overview from hanging
-    try:
         action_items = await asyncio.wait_for(
-            _generate_action_items(
-                pool,
-                total_products=total_products,
-                store_records=store_records,
-            ),
+            _generate_action_items(pool, total_products=total_products),
             timeout=10.0,
         )
-    except TimeoutError:
-        logger.warning("action_items generation timed out")
-        action_items = []
 
     from decimal import Decimal
 
@@ -492,11 +536,13 @@ async def overview() -> APIResponse[DashboardOverview]:
             total_products=total_products,
             today_orders=today_orders,
             today_gmv=Decimal(str(round(today_gmv, 2))),
+            avg_rating=avg_rating,
             avg_order_value=Decimal(str(round(avg_order_value, 2))),
-            total_customers=total_customers,
-            conversion_rate=conversion_rate,
+            total_customers=0,
+            conversion_rate=0.0,
             pending_alerts=pending_alerts,
             pending_tasks=pending_tasks,
+            recent_sync_state=recent_sync_state,
             action_items=action_items,
         )
     )

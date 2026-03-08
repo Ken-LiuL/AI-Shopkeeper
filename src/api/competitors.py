@@ -444,6 +444,37 @@ async def get_price_comparison(
         )
 
 
+@router.get("/price-changes", response_model=APIResponse[list[dict]])
+async def get_price_changes(
+    limit: int = Query(50, ge=1, le=500, description="返回数量限制"),
+) -> APIResponse[list[dict]]:
+    """竞品价格变动（从 competitor_price_changes 表查询）。"""
+    try:
+        pool = pg.get_pool()
+        rows = await pool.fetch("SELECT * FROM competitor_price_changes LIMIT $1", limit)
+        data = []
+        for raw_row in rows:
+            row = dict(raw_row)
+            changed_at = row.get("changed_at") or row.get("created_at") or row.get("updated_at")
+            data.append(
+                {
+                    "product_id": str(row.get("product_id") or ""),
+                    "product_name": str(row.get("product_name") or row.get("name") or "未命名商品"),
+                    "competitor_name": str(
+                        row.get("competitor_name") or row.get("competitor_store") or "未知竞品"
+                    ),
+                    "old_price": float(row.get("old_price") or row.get("previous_price") or 0),
+                    "new_price": float(row.get("new_price") or row.get("current_price") or 0),
+                    "change_pct": float(row.get("change_pct") or 0),
+                    "changed_at": changed_at.isoformat() if changed_at else None,
+                }
+            )
+
+        return APIResponse(data=data)
+    except Exception:
+        return APIResponse(data=[])
+
+
 @router.get("/analysis/{product_id}", response_model=APIResponse[ProductCompetitorAnalysis])
 async def get_product_competitor_analysis(
     product_id: str,

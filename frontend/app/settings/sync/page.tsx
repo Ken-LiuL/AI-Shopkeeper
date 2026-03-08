@@ -1,23 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchAPI } from '@/lib/api';
-
-interface SyncStatus {
-  healthy: boolean;
-  cookie: {
-    configured: boolean;
-    merchant_id?: string;
-    last_verified_at?: string;
-    last_sync_at?: string;
-    last_sync_status?: string;
-    last_sync_error?: string;
-    records_synced_total?: number;
-    cookie_updated_at?: string;
-  };
-  data_counts: Record<string, { count: number; last_sync: string | null }>;
-  checked_at: string;
-}
+import { fetchAPI, getSyncStatus, type SyncStatusResponse } from '@/lib/api';
 
 const SOURCE_LABELS: Record<string, string> = {
   products: '商品数据',
@@ -29,7 +13,7 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 export default function SyncSettingsPage() {
-  const [status, setStatus] = useState<SyncStatus | null>(null);
+  const [status, setStatus] = useState<SyncStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,14 +28,8 @@ export default function SyncSettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const json = await fetchAPI<any>('/sync/status');
-      if (json?.data) {
-        setStatus(json.data);
-      } else if (json) {
-        setStatus(json as SyncStatus);
-      } else {
-        setError('获取状态失败');
-      }
+      const json = await getSyncStatus();
+      setStatus(json);
     } catch (e: any) {
       setError(`网络错误: ${e.message}`);
     } finally {
@@ -207,6 +185,38 @@ export default function SyncSettingsPage() {
                     )}
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs text-gray-500 mb-2">各 Syncer 最近运行状态</div>
+              <div className="space-y-2">
+                {(status.syncers || []).length > 0 ? (
+                  status.syncers.map((syncer) => (
+                    <div key={syncer.syncer_name} className="grid grid-cols-4 gap-2 bg-gray-50 rounded-lg p-3 text-xs">
+                      <div>
+                        <div className="text-gray-500">名称</div>
+                        <div className="font-medium text-gray-900">{syncer.syncer_name}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">状态</div>
+                        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusBadge(syncer.last_sync_status)}`}>
+                          {syncer.last_sync_status === 'success' ? '成功' : syncer.last_sync_status === 'failed' ? '失败' : syncer.last_sync_status}
+                        </span>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">最近运行</div>
+                        <div className="font-medium text-gray-800">{formatTime(syncer.last_sync_time)}</div>
+                      </div>
+                      <div>
+                        <div className="text-gray-500">同步记录数</div>
+                        <div className="font-medium text-gray-800">{syncer.records_synced}</div>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-xs text-gray-400 bg-gray-50 rounded-lg p-3">暂无 sync_state 记录</div>
+                )}
               </div>
             </div>
           </>

@@ -127,11 +127,13 @@ export interface DashboardOverview {
   total_products: number;
   today_orders: number;
   today_gmv: string;
+  avg_rating: number;
   avg_order_value: string;
   total_customers: number;
   conversion_rate: number;
   pending_alerts: number;
   pending_tasks: number;
+  recent_sync_state?: SyncerStatus[];
 }
 
 export async function getDashboardOverview(): Promise<DashboardOverview> {
@@ -206,12 +208,67 @@ export interface PriceComparison {
   price_diff_pct: number | string;
 }
 
+export interface CompetitorPriceChange {
+  product_id: string;
+  product_name: string;
+  competitor_name: string;
+  old_price: number;
+  new_price: number;
+  change_pct: number;
+  changed_at: string | null;
+}
+
 export async function getCompetitorOverview(): Promise<CompetitorOverview> {
   return fetchAPI<CompetitorOverview>('/competitors/overview');
 }
 
 export async function getPriceComparison(limit: number = 20): Promise<PriceComparison[]> {
   return fetchAPI<PriceComparison[]>(`/competitors/price-comparison?limit=${limit}`);
+}
+
+export async function getCompetitorPriceChanges(limit: number = 50): Promise<CompetitorPriceChange[]> {
+  return fetchAPI<CompetitorPriceChange[]>(`/competitors/price-changes?limit=${limit}`);
+}
+
+export interface InventoryListItem {
+  product_id: string;
+  name: string;
+  stock: number;
+  status: 'normal' | 'low_stock' | 'out_of_stock';
+  source: string;
+}
+
+export async function getInventoryList(limit: number = 200): Promise<InventoryListItem[]> {
+  return fetchAPI<InventoryListItem[]>(`/inventory/list?limit=${limit}&low_stock_first=true`);
+}
+
+export interface SyncerStatus {
+  syncer_name: string;
+  last_sync_status: string;
+  last_sync_time: string | null;
+  records_synced: number;
+  duration_ms: number;
+}
+
+export interface SyncStatusResponse {
+  healthy: boolean;
+  cookie: {
+    configured: boolean;
+    merchant_id?: string;
+    last_verified_at?: string;
+    last_sync_at?: string;
+    last_sync_status?: string;
+    last_sync_error?: string;
+    records_synced_total?: number;
+    cookie_updated_at?: string;
+  };
+  data_counts: Record<string, { count: number; last_sync: string | null }>;
+  syncers: SyncerStatus[];
+  checked_at: string;
+}
+
+export async function getSyncStatus(): Promise<SyncStatusResponse> {
+  return fetchAPI<SyncStatusResponse>('/sync/status');
 }
 
 // Reports API

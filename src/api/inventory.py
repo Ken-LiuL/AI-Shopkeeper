@@ -31,6 +31,99 @@ class RestockSuggestion(BaseModel):
     safety_stock_days: int
 
 
+class InventoryListItem(BaseModel):
+    product_id: str
+    name: str
+    stock: int
+    status: str  # normal | low_stock | out_of_stock
+    source: str  # qnh_inventory | qnh_products
+
+
+async def _table_exists(pool, table_name: str) -> bool:
+    try:
+        exists = await pool.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )
+            """,
+            table_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+def _to_inventory_item(row: dict, source: str) -> InventoryListItem:
+    stock = int(row.get("stock") or 0)
+    if stock == 0:
+        status = "out_of_stock"
+    elif stock < 10:
+        status = "low_stock"
+    else:
+        status = "normal"
+    return InventoryListItem(
+        product_id=str(row.get("product_id") or row.get("sku_id") or ""),
+        name=str(row.get("name") or row.get("product_name") or "未命名商品"),
+        stock=stock,
+        status=status,
+        source=source,
+    )
+
+
+async def _fetch_inventory_list(limit: int = 200, low_stock_first: bool = True) -> list[InventoryListItem]:
+    pool = pg.get_pool()
+    rows: list[dict] = []
+
+    if await _table_exists(pool, "qnh_inventory"):
+        try:
+            rows = [
+                dict(row)
+                for row in await pool.fetch(
+                    """
+                    SELECT *
+                    FROM qnh_inventory
+                    ORDER BY COALESCE(stock, 0) ASC
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            ]
+        except Exception:
+            rows = []
+        if rows:
+            items = [_to_inventory_item(row, "qnh_inventory") for row in rows]
+            if low_stock_first:
+                items.sort(key=lambda x: (x.stock, x.name))
+            return items
+
+    if await _table_exists(pool, "qnh_products"):
+        try:
+            rows = [
+                dict(row)
+                for row in await pool.fetch(
+                    """
+                    SELECT *
+                    FROM qnh_products
+                    ORDER BY COALESCE(stock, 0) ASC
+                    LIMIT $1
+                    """,
+                    limit,
+                )
+            ]
+        except Exception:
+            rows = []
+    if not rows:
+        return []
+
+    items = [_to_inventory_item(row, "qnh_products") for row in rows]
+    if low_stock_first:
+        items.sort(key=lambda x: (x.stock, x.name))
+    return items
+
+
 async def _get_current_inventory(limit: int = 50):
     """从 products 表获取当前库存数据（优化性能）"""
     pool = pg.get_pool()
@@ -653,3 +746,43 @@ async def get_inventory_status() -> APIResponse[dict]:
     except Exception as e:
         logger.error("Failed to get inventory status: %s", e)
         return APIResponse(success=False, message=f"获取库存状态失败: {str(e)}", data={})
+
+
+@router.get("/list", response_model=APIResponse[list[InventoryListItem]])
+async def get_inventory_list(
+    limit: int = Query(200, ge=1, le=1000, description="返回库存商品数量"),
+    low_stock_first: bool = Query(True, description="是否按低库存优先排序"),
+) -> APIResponse[list[InventoryListItem]]:
+    """库存列表（优先 qnh_inventory，无则回退 qnh_products）。"""
+    try:
+        items = await _fetch_inventory_list(limit=limit, low_stock_first=low_stock_first)
+        return APIResponse(data=items)
+    except Exception as e:
+        logger.error("Failed to fetch inventory list: %s", e)
+        return APIResponse(success=False, message=f"获取库存列表失败: {str(e)}", data=[])
+
+
+@router.get("/low-stock", response_model=APIResponse[list[InventoryListItem]])
+async def get_low_stock_inventory(
+    limit: int = Query(200, ge=1, le=1000, description="返回低库存商品数量"),
+) -> APIResponse[list[InventoryListItem]]:
+    """低库存预警列表（stock < 10）。"""
+    try:
+        items = await _fetch_inventory_list(limit=limit, low_stock_first=True)
+        return APIResponse(data=[item for item in items if item.stock < 10])
+    except Exception as e:
+        logger.error("Failed to fetch low-stock inventory: %s", e)
+        return APIResponse(success=False, message=f"获取低库存列表失败: {str(e)}", data=[])
+
+
+@router.get("/out-of-stock", response_model=APIResponse[list[InventoryListItem]])
+async def get_out_of_stock_inventory(
+    limit: int = Query(200, ge=1, le=1000, description="返回断货商品数量"),
+) -> APIResponse[list[InventoryListItem]]:
+    """断货列表（stock = 0）。"""
+    try:
+        items = await _fetch_inventory_list(limit=limit, low_stock_first=True)
+        return APIResponse(data=[item for item in items if item.stock == 0])
+    except Exception as e:
+        logger.error("Failed to fetch out-of-stock inventory: %s", e)
+        return APIResponse(success=False, message=f"获取断货列表失败: {str(e)}", data=[])

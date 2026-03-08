@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { StatsCard } from '@/components/ui/stats-card';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { withErrorBoundary } from '@/components/error-boundary';
 import { Tooltip as OnboardingTooltip } from '@/components/onboarding/guide';
@@ -9,41 +10,6 @@ import { getDashboardOverview, getSalesTrend, getAlerts, getDailyInsights } from
 import type { DashboardOverview, SalesTrendData, Alert, DailyInsight } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-
-function StatCard({ title, value, icon, trend, tooltip }: {
-  title: string;
-  value: number | string;
-  icon: string;
-  trend?: string;
-  tooltip?: string;
-}) {
-  return (
-    <Card>
-      <CardContent className="p-6">
-        <div className="flex items-center justify-between">
-          <div>
-            {tooltip ? (
-              <OnboardingTooltip text={tooltip}>
-                <p className="text-sm font-medium text-muted-foreground border-b border-dotted border-gray-400 cursor-help">
-                  {title}
-                </p>
-              </OnboardingTooltip>
-            ) : (
-              <p className="text-sm font-medium text-muted-foreground">{title}</p>
-            )}
-            <p className="text-2xl font-bold">{value}</p>
-            {trend && (
-              <p className="text-xs text-green-600 mt-1">
-                {trend}
-              </p>
-            )}
-          </div>
-          <div className="text-3xl opacity-80">{icon}</div>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
 
 function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
@@ -120,28 +86,28 @@ function DashboardPage() {
 
   const stats = [
     {
-      title: '今日 GMV',
+      title: '今日订单',
+      value: overview?.today_orders ? Number(overview.today_orders).toLocaleString() : '0',
+      icon: '📋',
+      tooltip: '今日新增订单数量（来源 qnh_orders_raw）'
+    },
+    {
+      title: '今日营收',
       value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '-',
       icon: '💰',
-      tooltip: 'GMV = 商品交易总额，包括已付款和未付款订单的总价值'
+      tooltip: '今日营收（来源 qnh_orders_raw.total 汇总）'
     },
     {
-      title: '今日订单',
-      value: overview?.today_orders ? Number(overview.today_orders).toLocaleString() : '-',
-      icon: '📋',
-      tooltip: '今日新增订单数量，包括待付款、已付款、配送中等所有状态'
+      title: '评价评分',
+      value: Number(overview?.avg_rating || 0).toFixed(2),
+      icon: '⭐',
+      tooltip: '今日平均评分（来源 qnh_reviews_raw）'
     },
     {
-      title: '客单价',
-      value: overview?.avg_order_value ? `¥${Number(overview.avg_order_value).toFixed(2)}` : '-',
-      icon: '🛒',
-      tooltip: '平均客单价 = 总GMV / 订单数，反映单次购买金额水平'
-    },
-    {
-      title: '客户总数',
-      value: overview?.total_customers ? Number(overview.total_customers).toLocaleString() : '-',
-      icon: '👥',
-      tooltip: '累计注册用户数，包括有过购买行为的所有客户'
+      title: '库存预警数',
+      value: Number(overview?.pending_alerts || 0).toLocaleString(),
+      icon: '📦',
+      tooltip: '库存低于 10 的商品数（来源 qnh_inventory）'
     },
   ];
 
@@ -163,13 +129,11 @@ function DashboardPage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((stat) => (
-          <StatCard
-            key={stat.title}
-            title={stat.title}
-            value={stat.value}
-            icon={stat.icon}
-            tooltip={stat.tooltip}
-          />
+          <OnboardingTooltip key={stat.title} text={stat.tooltip || ''}>
+            <div>
+              <StatsCard title={stat.title} value={stat.value} icon={stat.icon} />
+            </div>
+          </OnboardingTooltip>
         ))}
       </div>
 

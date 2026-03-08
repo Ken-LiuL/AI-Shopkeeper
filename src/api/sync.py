@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from src.db import postgres as pg
 
 from .schemas import APIResponse
+from .sync_status import get_syncer_status_list
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
 logger = logging.getLogger(__name__)
@@ -152,18 +153,8 @@ async def sync_status() -> APIResponse[dict[str, Any]]:
     """查看整体同步状态：最后同步时间、是否正常、数据量。"""
     pool = await _get_pool()
 
-    # 获取 sync_state 表数据
-    syncer_rows: list[dict] = []
-    try:
-        rows = await pool.fetch(
-            """SELECT syncer_name, last_full_sync, last_incremental_sync,
-                      last_sync_status, last_sync_error, records_synced,
-                      last_sync_duration_ms, updated_at
-               FROM sync_state ORDER BY syncer_name"""
-        )
-        syncer_rows = [dict(r) for r in rows]
-    except Exception:
-        pass  # 表可能不存在
+    # 获取 sync_state 表数据（标准化字段）
+    syncer_rows = await get_syncer_status_list(pool)
 
     # 获取商家 Cookie 状态
     cookie_status: dict[str, Any] = {"configured": False}

@@ -12,12 +12,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { getCompetitorOverview, getPriceComparison } from '@/lib/api';
-import type { CompetitorOverview, PriceComparison } from '@/lib/api';
+import { getCompetitorOverview, getPriceComparison, getCompetitorPriceChanges } from '@/lib/api';
+import type { CompetitorOverview, PriceComparison, CompetitorPriceChange } from '@/lib/api';
 
 export default function CompetitorsPage() {
   const [overview, setOverview] = useState<CompetitorOverview | null>(null);
   const [priceComparison, setPriceComparison] = useState<PriceComparison[]>([]);
+  const [priceChanges, setPriceChanges] = useState<CompetitorPriceChange[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -25,12 +26,14 @@ export default function CompetitorsPage() {
     const fetchData = async () => {
       try {
         setError(null);
-        const [overviewData, priceData] = await Promise.all([
+        const [overviewData, priceData, changesData] = await Promise.all([
           getCompetitorOverview(),
           getPriceComparison(20),
+          getCompetitorPriceChanges(30),
         ]);
         setOverview(overviewData);
         setPriceComparison(priceData);
+        setPriceChanges(changesData);
       } catch (error) {
         console.error('Error fetching competitor data:', error);
         setError('加载竞品数据失败，请稍后重试');
@@ -238,6 +241,47 @@ export default function CompetitorsPage() {
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               暂无价格对比数据
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>📉</span>
+            竞品价格变动
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {priceChanges.length > 0 ? (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>商品</TableHead>
+                  <TableHead>竞品</TableHead>
+                  <TableHead className="text-right">原价</TableHead>
+                  <TableHead className="text-right">现价</TableHead>
+                  <TableHead className="text-right">变动</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {priceChanges.map((item, index) => (
+                  <TableRow key={`${item.product_id}-${index}`}>
+                    <TableCell className="font-medium">{item.product_name}</TableCell>
+                    <TableCell>{item.competitor_name}</TableCell>
+                    <TableCell className="text-right">¥{Number(item.old_price).toFixed(2)}</TableCell>
+                    <TableCell className="text-right">¥{Number(item.new_price).toFixed(2)}</TableCell>
+                    <TableCell className={`text-right font-medium ${Number(item.change_pct) >= 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      {Number(item.change_pct) >= 0 ? '+' : ''}{Number(item.change_pct).toFixed(2)}%
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <div className="text-center py-8 text-muted-foreground">
+              暂无竞品价格变动数据
             </div>
           )}
         </CardContent>
