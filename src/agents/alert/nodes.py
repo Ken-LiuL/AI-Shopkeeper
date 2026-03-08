@@ -980,16 +980,32 @@ async def action_node(state: AlertState) -> dict:
 
     for cause_result in root_causes_list:
         product_id = cause_result.get("product_id", "")
+        anomaly_type = cause_result.get("anomaly_type", "")
         primary_cause = cause_result.get("primary_cause", "未知")
 
         # 从数据库查询真实商品数据
         product_details = await _fetch_product_details(pool, product_id)
         competitor_avg_price = await _fetch_competitor_avg_price(pool, product_id)
+        product_name = product_details.get("name", product_id)
+
+        memory_ctx = ""
+        if pool:
+            try:
+                from src.agents.action_tracker import format_memory_context
+
+                memory_ctx = await format_memory_context(
+                    pool=pool,
+                    agent_type="alert",
+                    action_type=anomaly_type or "unknown",
+                    product_name=product_name,
+                )
+            except Exception as e:
+                logger.warning("Failed to load alert memory context for %s: %s", product_id, e)
 
         try:
             prompt = action_prompt(
-                product_name=product_details.get("name", product_id),
-                anomaly_type=cause_result.get("anomaly_type", ""),
+                product_name=product_name,
+                anomaly_type=anomaly_type,
                 severity=cause_result.get("severity", "warning"),
                 primary_cause=primary_cause,
                 current_price=float(product_details.get("retail_price") or 0),
@@ -998,8 +1014,49 @@ async def action_node(state: AlertState) -> dict:
                 avg_daily_sales=float(product_details.get("avg_daily_sales") or 0),
                 competitor_avg_price=competitor_avg_price,
             )
+            if memory_ctx:
+                prompt = f"{prompt}\n{memory_ctx}"
             result = await call_tool(prompt, ACTIONS_TOOL, model=MODEL_SONNET)
+
+            # === 事实核查 ===
+            try:
+                from src.agents.fact_checker import validate_agent_output
+
+                validation = await validate_agent_output(pool, "alert", result)
+                if not validation["valid"]:
+                    result["fact_check_warnings"] = validation["warnings"]
+                    result["fact_check_passed"] = False
+                    logger.warning(f"Alert action failed fact check: {validation['warnings']}")
+                elif validation["warnings"]:
+                    result["fact_check_warnings"] = validation["warnings"]
+                    result["fact_check_passed"] = True
+            except Exception:
+                pass
+
             existing_actions.append(result)
+
+            if pool:
+                try:
+                    from src.agents.action_tracker import record_action
+
+                    await record_action(
+                        pool=pool,
+                        agent_type="alert",
+                        action_type=anomaly_type or "unknown",
+                        product_id=product_id or None,
+                        product_name=product_name,
+                        decision=result if isinstance(result, dict) else {"result": result},
+                        confidence=float(cause_result.get("confidence", 0.8) or 0.8),
+                        context_summary=f"{anomaly_type}: {primary_cause}",
+                        baseline_metrics={
+                            "sales_7d": round(float(product_details.get("avg_daily_sales") or 0) * 7, 2),
+                            "price": float(product_details.get("retail_price") or 0),
+                            "stock": int(product_details.get("stock") or 0),
+                            "competitor_avg_price": competitor_avg_price,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("Failed to record alert action for %s: %s", product_id, e)
         except Exception as e:
             logger.error(f"Action generation failed for {product_id}: {e}")
             errors.append(f"action_{product_id}: {e}")

@@ -63,7 +63,12 @@ conversion_factor = min(conversion_rate / 0.1, 1.0)
 6. 给出2-3条市场洞察（需有数据支撑）
 
 # 输出
-使用 output_market_analysis 工具输出结果"""
+使用 output_market_analysis 工具输出结果
+如输出包含推荐项，每项需包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """
 
 
 def competitor_analysis_prompt(
@@ -131,6 +136,11 @@ def competitor_analysis_prompt(
 
 # 输出
 使用 output_competitor_analysis 工具输出结果。
+如输出包含推荐项，每项需包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入"
 
 ⚠️ 数据质量提示：分析结果中如包含"演示数据"标识的竞品信息，建议：
 1. 仅作为参考，不作为决策依据
@@ -189,7 +199,12 @@ def inventory_analysis_prompt(
 4. 给出处置建议（促销/套餐搭配/清仓/下架）
 
 # 输出
-使用 output_inventory_analysis 工具输出结果"""
+使用 output_inventory_analysis 工具输出结果
+如输出包含推荐项，每项需包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """
 
 
 def seasonal_factors_prompt(
@@ -260,7 +275,12 @@ def seasonal_factors_prompt(
 6. 输出具体备货建议（品类+建议备货量倍数）
 
 # 输出
-使用 output_seasonal_factors 工具输出结果"""
+使用 output_seasonal_factors 工具输出结果
+如输出包含推荐项，每项需包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """
 
 
 def gap_identification_prompt(
@@ -327,7 +347,12 @@ def gap_identification_prompt(
 6. 标注所需资质等级
 
 # 输出
-使用 output_gap_opportunities 工具输出结果"""
+使用 output_gap_opportunities 工具输出结果
+每个推荐必须包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """
 
 
 def supplier_evaluation_prompt(
@@ -424,7 +449,12 @@ def supplier_evaluation_prompt(
 5. 毛利率<25% → 不建议采购（标注原因）
 
 # 输出
-使用 output_supplier_evaluation 工具输出结果"""
+使用 output_supplier_evaluation 工具输出结果
+如输出包含推荐项，每项需包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """
 
 
 def scorer_prompt(
@@ -526,6 +556,11 @@ final_score = Σ(维度分 × 权重)
 - 推荐理由（1-2句话，数据驱动）
 - 风险提示（如有）
 - 建议首批采购量
+- reasoning_chain:
+  - step1: "查询销售数据 → 该品类月均销量120件"
+  - step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+  - step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+  - conclusion: "综合评分8.2/10，建议引入"
 
 # 输出
 使用 output_recommendations 工具输出结果"""
@@ -564,4 +599,9 @@ def scorer_reflection_prompt(initial_result: str) -> str:
 reflection_notes字段填写: "已检查：评分公式正确/数据一致/风险已标注" 或 "已修正：xxx问题"
 
 # 输出
-使用 output_recommendations 工具输出修正后的结果"""
+使用 output_recommendations 工具输出修正后的结果
+每个推荐必须包含 reasoning_chain:
+- step1: "查询销售数据 → 该品类月均销量120件"
+- step2: "查询竞品 → 3家竞品均有此商品，均价¥XX"
+- step3: "查询季节性 → 当前为旺季（冬季），需求预计增长30%"
+- conclusion: "综合评分8.2/10，建议引入" """

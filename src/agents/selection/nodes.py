@@ -612,6 +612,7 @@ async def supplier_evaluation_node(state: SelectionState) -> dict:
 async def scorer_node(state: SelectionState) -> dict:
     """Scorer Sub-Agent: 6维度评分 + 自我反思（使用 Opus）"""
     try:
+        pool = state.get("db_pool")
         inventory_summary = json.dumps(
             state.get("inventory_analysis", {}).get("inventory_summary", {}),
             ensure_ascii=False,
@@ -634,6 +635,32 @@ async def scorer_node(state: SelectionState) -> dict:
             tool=RECOMMENDATIONS_TOOL,
             model=MODEL_OPUS,
         )
+
+        if pool and isinstance(result, dict):
+            try:
+                from src.agents.action_tracker import record_action
+
+                recommendations = result.get("recommendations", []) or []
+                for rec in recommendations[:10]:
+                    keyword = str(rec.get("keyword") or "").strip()
+                    await record_action(
+                        pool=pool,
+                        agent_type="selection",
+                        action_type="selection_recommendation",
+                        product_id=None,
+                        product_name=keyword or None,
+                        decision=rec if isinstance(rec, dict) else {"recommendation": rec},
+                        confidence=float(rec.get("final_score", 0) or 0),
+                        context_summary=str(rec.get("recommendation_reason") or "")[:300],
+                        baseline_metrics={
+                            "final_score": rec.get("final_score"),
+                            "expected_margin": rec.get("expected_margin"),
+                            "suggested_price": rec.get("suggested_price"),
+                        },
+                    )
+            except Exception as e:
+                logger.warning("Failed to record selection actions: %s", e)
+
         return {"recommendations": result}
     except Exception as e:
         logger.error(f"Scorer failed: {e}")

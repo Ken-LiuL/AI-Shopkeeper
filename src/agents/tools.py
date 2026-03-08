@@ -346,6 +346,15 @@ RECOMMENDATIONS_TOOL = {
                         "suggested_quantity": {"type": "integer"},
                         "suggested_price": {"type": "number"},
                         "expected_margin": {"type": "number"},
+                        "reasoning_chain": {
+                            "type": "object",
+                            "properties": {
+                                "step1": {"type": "string"},
+                                "step2": {"type": "string"},
+                                "step3": {"type": "string"},
+                                "conclusion": {"type": "string"},
+                            },
+                        },
                     },
                     "required": [
                         "rank",
@@ -593,6 +602,11 @@ ACTIONS_TOOL = {
                             },
                         },
                         "expected_outcome": {"type": "string"},
+                        "data_sources": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "evidence": {"type": "string"},
                         "estimated_impact": {
                             "type": "object",
                             "properties": {
@@ -717,6 +731,17 @@ BUNDLE_PRICING_TOOL = {
                 },
             },
             "pricing_rationale": {"type": "string"},
+            "cost_breakdown": {
+                "type": "object",
+                "properties": {
+                    "item1_cost": {"type": "number"},
+                    "item2_cost": {"type": "number"},
+                    "total_cost": {"type": "number"},
+                },
+                "additionalProperties": {"type": "number"},
+            },
+            "pricing_logic": {"type": "string"},
+            "margin_analysis": {"type": "string"},
             "approved": {"type": "boolean"},
             "rejection_reason": {"type": "string"},
         },

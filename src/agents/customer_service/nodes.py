@@ -15,6 +15,23 @@ from .product_memory import get_product_memory  # kept for other potential calle
 
 logger = logging.getLogger(__name__)
 
+ANGRY_KEYWORDS = [
+    "投诉",
+    "差评",
+    "骗子",
+    "垃圾",
+    "退款",
+    "举报",
+    "消协",
+    "工商",
+    "再也不买",
+    "太差了",
+    "什么玩意",
+    "坑人",
+    "欺诈",
+]
+URGENT_KEYWORDS = ["急", "马上", "立刻", "赶紧", "等不了", "催"]
+
 
 async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
     """完整检索管线：向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富。
@@ -607,6 +624,32 @@ async def chat(
             )
             use_optimized = False
             logger.warning("Using fallback prompts")
+
+        # 3.5 规则情感检测（不调用 LLM）
+        sentiment = "neutral"
+        anger_count = sum(1 for kw in ANGRY_KEYWORDS if kw in message)
+        urgent_count = sum(1 for kw in URGENT_KEYWORDS if kw in message)
+        if anger_count >= 2:
+            sentiment = "angry"
+        elif anger_count >= 1 or urgent_count >= 2:
+            sentiment = "frustrated"
+        elif urgent_count >= 1:
+            sentiment = "urgent"
+
+        if sentiment == "angry":
+            emotion_instruction = (
+                "\n\n用户情绪激动，请特别注意：先共情安抚，再解决问题。"
+                "避免机械回复。必要时主动提供补偿方案或转人工。"
+            )
+        elif sentiment == "frustrated":
+            emotion_instruction = "\n\n注意：用户有些不耐烦，请简洁高效回复，快速给出解决方案。"
+        elif sentiment == "urgent":
+            emotion_instruction = "\n\n注意：用户比较着急，请优先给出最快的解决路径。"
+        else:
+            emotion_instruction = ""
+
+        if emotion_instruction:
+            system_prompt = f"{system_prompt}{emotion_instruction}"
 
         # 4. 多轮意图追踪
         conversation_context = ""

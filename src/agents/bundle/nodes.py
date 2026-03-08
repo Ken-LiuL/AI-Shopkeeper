@@ -301,6 +301,7 @@ async def pricing_node(state: BundleState) -> dict:
     proposals = state.get("bundle_proposals", {})
     bundles = proposals.get("bundles", [])
     rules = state.get("association_rules", {}).get("rules", [])
+    pool = state.get("db_pool")
 
     pricing_results: list[dict[str, Any]] = []
     errors = list(state.get("errors", []))
@@ -395,7 +396,44 @@ async def pricing_node(state: BundleState) -> dict:
             if not approved and not result.get("rejection_reason"):
                 result["rejection_reason"] = "套餐毛利不足或套餐价未覆盖成本"
 
+            # === 事实核查 ===
+            try:
+                from src.agents.fact_checker import validate_agent_output
+
+                validation = await validate_agent_output(pool, "bundle", result)
+                if not validation["valid"]:
+                    result["fact_check_warnings"] = validation["warnings"]
+                    result["fact_check_passed"] = False
+                    logger.warning(f"Bundle pricing failed fact check: {validation['warnings']}")
+                elif validation["warnings"]:
+                    result["fact_check_warnings"] = validation["warnings"]
+                    result["fact_check_passed"] = True
+            except Exception:
+                pass
+
             pricing_results.append(result)
+
+            if pool:
+                try:
+                    from src.agents.action_tracker import record_action
+
+                    await record_action(
+                        pool=pool,
+                        agent_type="bundle",
+                        action_type="bundle_pricing",
+                        product_id=bundle_id or None,
+                        product_name=str(bundle.get("bundle_name") or bundle_id or ""),
+                        decision=result if isinstance(result, dict) else {"result": result},
+                        confidence=float(bundle.get("confidence_score", 0.7) or 0.7),
+                        context_summary=str(bundle.get("target_scenario") or "")[:300],
+                        baseline_metrics={
+                            "retail_total": round(retail_total, 2),
+                            "cost_total": round(cost_total, 2),
+                            "lift_value": lift_value,
+                        },
+                    )
+                except Exception as e:
+                    logger.warning("Failed to record bundle action for %s: %s", bundle_id, e)
         except Exception as e:
             logger.error(f"Pricing failed for bundle {bundle_id}: {e}")
             errors.append(f"pricing_{bundle_id}: {e}")

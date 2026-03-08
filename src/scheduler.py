@@ -887,6 +887,26 @@ async def auto_faq_etl_task() -> None:
         logger.exception("Auto FAQ ETL failed")
 
 
+async def effect_evaluation_etl_task() -> None:
+    """Agent 决策效果评估 ETL。"""
+    logger.info("Starting effect evaluation ETL")
+    try:
+        import asyncpg
+        from src.sync.etl_effect_evaluation import run_effect_evaluation_etl
+
+        dsn = _resolve_database_url()
+        if not dsn:
+            logger.warning("DATABASE_URL unavailable — skip effect evaluation ETL")
+            return
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            await run_effect_evaluation_etl(pool)
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Effect evaluation ETL failed")
+
+
 async def category_mapping_etl_task() -> None:
     """类目映射 ETL — 从商品表/竞品表/QNH API 构建类目映射。"""
     logger.info("Starting category mapping ETL")
@@ -1444,6 +1464,17 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
             timezone=SH_TZ,
         ),
         id="auto_faq_etl",
+        replace_existing=True,
+    )
+
+    # 决策效果评估：每天 21:00 CST
+    scheduler.add_job(
+        _make_heartbeat_task("effect_evaluation_etl", effect_evaluation_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("effect_evaluation_etl", "0 21 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="effect_evaluation_etl",
         replace_existing=True,
     )
 

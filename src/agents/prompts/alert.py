@@ -250,4 +250,9 @@ def action_prompt(
    - 季节品（口罩/体温计）：旺季前提前15天备货
 
 # 输出
-使用 output_actions 工具输出结果"""
+使用 output_actions 工具输出结果
+
+输出要求补充：
+7. 每条建议必须标注数据来源：
+   - data_sources: ["qnh_products.retail_price", "competitor_products.price", ...]
+   - evidence: "基于竞品均价¥25.9（3家店），当前价¥32.0，价差23.5%" """

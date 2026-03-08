@@ -412,6 +412,32 @@ async def compliance_node(state: ListingState) -> dict:
             product_category=category,
         )
         result = await call_tool(prompt, COMPLIANCE_CHECK_TOOL, model=MODEL_SONNET)
+        result_dict = result if isinstance(result, dict) else {"result": result}
+
+        if pool:
+            try:
+                from src.agents.action_tracker import record_action
+
+                parsed_data = parsed.get("parsed_data", {}) if isinstance(parsed, dict) else {}
+                matched = state.get("matched_standard") or {}
+                issue_count = len(result_dict.get("issues", [])) if isinstance(result_dict, dict) else 0
+                await record_action(
+                    pool=pool,
+                    agent_type="listing",
+                    action_type="listing_compliance",
+                    product_id=matched.get("matched_id") or None,
+                    product_name=parsed.get("cleaned_title") or parsed_data.get("title"),
+                    decision=result_dict,
+                    confidence=1.0 if result_dict.get("passed") else 0.6,
+                    context_summary=f"category={category}, issues={issue_count}",
+                    baseline_metrics={
+                        "match_confidence": state.get("match_confidence"),
+                        "market_avg_price": state.get("market_avg_price"),
+                    },
+                )
+            except Exception as e:
+                logger.warning("Failed to record listing compliance action: %s", e)
+
         return {
             "compliance_check": result,
             "policy_documents_context": policy_docs,
