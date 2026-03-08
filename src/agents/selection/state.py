@@ -29,6 +29,20 @@ class SelectionState(TypedDict, total=False):
     raw_upcoming_events: str
     raw_weather_forecast: str
     raw_trending_events: str
+    db_pool: Any
+    refund_risk_data: str
+    hotsale_context: str
+    sales_history_context: str
+    customer_rank_context: str
+    channel_context: str
+
+    # 新增结构化数据（来自 DB 查询）
+    sales_history_data: list[dict[str, Any]]
+    customer_ranking_data: list[dict[str, Any]]
+    competitor_products_data: list[dict[str, Any]]
+    seasonality_data: list[dict[str, Any]]
+    products_full_data: list[dict[str, Any]]
+    margin_context: str
 
     # Phase 1 各 Sub-Agent 的分析结果
     market_analysis: dict[str, Any]
