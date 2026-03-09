@@ -49,7 +49,7 @@ class CustomerSyncer(BaseSyncer):
                     start_date=since.strftime("%Y-%m-%d") if since else None,
                     page=page,
                     page_size=50,
-                    extra=extra,
+                    extra_param=extra,
                 )
                 data = resp.get("data", {})
                 items = data.get("list", data.get("rows", data.get("records", [])))

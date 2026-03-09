@@ -52,7 +52,9 @@ class PromotionSyncer(BaseSyncer):
                     page=page,
                     page_size=50,
                 )
-                data = resp.get("data", {})
+                if not resp:
+                    break
+                data = resp.get("data") or {}
                 items = data.get("list", data.get("rows", data.get("records", [])))
 
                 if not items:
