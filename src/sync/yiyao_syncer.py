@@ -1,10 +1,10 @@
-"""YiyaoFullSyncer — 美团买药全量数据同步（自动翻页）。
+"""YiyaoFullSyncer — 美团买药全量数据同步（CDP 拦截模式）。
 
-使用 Xvfb + 非 headless Chrome 绕过 h5guard，自动抓取：
-  - 商品列表（全量）
-  - 订单历史（过去 N 天，自动翻页）
-  - 评价列表（过去 N 天）
-  - 销售统计（按日汇总）
+策略：
+  * 导航到 yiyao.meituan.com SPA 各页面
+  * 用 CDP 拦截页面自身发出的 API 响应（绕过 h5guard mtgsig）
+  * 翻页通过 JS 模拟点击"下一页"按钮 + 继续拦截
+  * 抓取: 商品、订单、评价、销售统计、退款、门店信息
 """
 
 from __future__ import annotations
@@ -13,16 +13,89 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# API 路径
-API_PRODUCTS = "/reuse/health/product/retail/r/searchListPageV2"
-API_ORDERS = "/waimai/order/list"      # 将在初始化时自动探测
-API_REVIEWS = "/reuse/health/evaluate/r/pageQueryEvaluate"
-API_STATS = "/reuse/health/data/r/businessDataStat"
+# 常量
+WM_POI_ID = "30850916"
+REGION_ID = "1000420100"
+REGION_VERSION = "1763630401"
+ACCT_ID = "264097650"
+
+# yiyao SPA 页面路径
+PAGE_PRODUCTS = (
+    f"/page/product/list?wmPoiId={WM_POI_ID}"
+    f"&region_id={REGION_ID}&region_version={REGION_VERSION}"
+)
+PAGE_ORDERS = (
+    f"/page/order/list?wmPoiId={WM_POI_ID}"
+    f"&region_id={REGION_ID}&region_version={REGION_VERSION}"
+)
+PAGE_REVIEWS = (
+    f"/page/evaluate/list?wmPoiId={WM_POI_ID}"
+    f"&region_id={REGION_ID}&region_version={REGION_VERSION}"
+)
+PAGE_DATA = (
+    f"/page/data/business?wmPoiId={WM_POI_ID}"
+    f"&region_id={REGION_ID}&region_version={REGION_VERSION}"
+)
+PAGE_HOME = (
+    f"/main/frame?wmPoiId={WM_POI_ID}"
+    f"&region_id={REGION_ID}&region_version={REGION_VERSION}"
+)
+
+# CDP 拦截 URL 匹配模式
+PATTERNS_PRODUCTS = ["searchSpListByCond", "indexPageModel", "searchListPage"]
+PATTERNS_ORDERS = ["order/list/interval", "order/list/count", "orderList"]
+PATTERNS_REVIEWS = ["comment/r/list", "pageQueryEvaluate", "evaluate/r/"]
+PATTERNS_STATS = ["businessOverview", "businessDataStat", "indexOverview"]
+PATTERNS_REFUNDS = ["refundOrderCount", "refund/list", "refundOrder"]
+PATTERNS_POI = ["poiInfo/get", "poi/info"]
+PATTERNS_MENU = ["poi/menu/list", "menu/list"]
+
+# 翻页按钮 JS 选择器（美团 SPA 常见的分页组件）
+JS_CLICK_NEXT = """
+(function() {
+    // 尝试多种"下一页"按钮选择器
+    var selectors = [
+        '.ant-pagination-next:not(.ant-pagination-disabled)',
+        '.next-btn:not(.disabled)',
+        '.pagination .next:not(.disabled)',
+        '[class*="next"]:not([class*="disabled"])',
+        'button[aria-label="next"]',
+        '.el-pagination .btn-next:not(:disabled)',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+        var btn = document.querySelector(selectors[i]);
+        if (btn) {
+            btn.click();
+            return true;
+        }
+    }
+    return false;
+})()
+"""
+
+# 检查是否有下一页
+JS_HAS_NEXT = """
+(function() {
+    var selectors = [
+        '.ant-pagination-next:not(.ant-pagination-disabled)',
+        '.next-btn:not(.disabled)',
+        '.pagination .next:not(.disabled)',
+        '[class*="next"]:not([class*="disabled"])',
+        'button[aria-label="next"]',
+        '.el-pagination .btn-next:not(:disabled)',
+    ];
+    for (var i = 0; i < selectors.length; i++) {
+        var btn = document.querySelector(selectors[i]);
+        if (btn) return true;
+    }
+    return false;
+})()
+"""
 
 
 @dataclass
@@ -34,8 +107,81 @@ class SyncResult:
     pages: int = 0
 
 
+def _parse_intercepted_json(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """从 CDP 拦截的响应中提取 JSON 数据。
+
+    Returns: 成功解析的 JSON 响应列表 [{url, data}]
+    """
+    results = []
+    for item in captured:
+        body = item.get("body", "")
+        if not body:
+            continue
+        try:
+            data = json.loads(body)
+            results.append({"url": item.get("url", ""), "data": data})
+        except json.JSONDecodeError:
+            logger.debug("非 JSON 响应: %s → %s", item.get("url", "")[:60], body[:100])
+    return results
+
+
+def _extract_list_from_response(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """从 API 响应中提取列表数据，兼容多种嵌套格式。"""
+    if not isinstance(data, dict):
+        return []
+
+    # 检查 code
+    code = data.get("code")
+    if code is not None and code != 0:
+        return []
+
+    # 尝试常见的数据路径
+    payload = data.get("data") or data
+
+    if isinstance(payload, list):
+        return payload
+
+    if isinstance(payload, dict):
+        # 常见列表字段名
+        for key in (
+            "list", "items", "records", "rows",
+            "productList", "orderList", "orders",
+            "commentList", "evaluateList", "reviewList",
+            "spuList", "skuList", "goodsList",
+            "wmPoiMenuList", "menuList",
+        ):
+            val = payload.get(key)
+            if isinstance(val, list) and val:
+                return val
+
+        # 嵌套 data.data
+        inner = payload.get("data")
+        if isinstance(inner, dict):
+            return _extract_list_from_response({"data": inner})
+        if isinstance(inner, list):
+            return inner
+
+    return []
+
+
+def _extract_total_from_response(data: dict[str, Any]) -> int:
+    """从 API 响应中提取 total count。"""
+    if not isinstance(data, dict):
+        return 0
+    payload = data.get("data") or data
+    if isinstance(payload, dict):
+        for key in ("total", "totalCount", "totalNum", "count"):
+            val = payload.get(key)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+    return 0
+
+
 class YiyaoFullSyncer:
-    """全量同步器，每次运行自动翻页拉取所有数据。"""
+    """全量同步器，通过 CDP 拦截 yiyao SPA 页面的 API 响应获取数据。"""
 
     def __init__(self, client: Any, pool: Any, wm_poi_id: str, days_back: int = 90) -> None:
         self.client = client
@@ -79,346 +225,260 @@ class YiyaoFullSyncer:
     # ── 商品 ──────────────────────────────────────────────────────────────
 
     async def sync_products(self) -> SyncResult:
-        """全量拉取商品列表，自动翻页。"""
-        page_num = 1
-        page_size = 50
-        total = 0
-        pages = 0
+        """导航到商品列表页，CDP 拦截商品数据，自动翻页。"""
         all_items: list[dict] = []
+        pages = 0
 
-        # 先导航到商品管理页，让 h5guard 初始化正确的上下文
-        await self.client.navigate_to("/merch/product/list")
-        await asyncio.sleep(5)  # 等待 h5guard.js 初始化
+        # 第一页：导航到商品列表页，自动触发 API
+        captured = await self.client.intercept_navigate(
+            PAGE_PRODUCTS,
+            PATTERNS_PRODUCTS,
+            timeout=30.0,
+            wait_after_load=8.0,
+        )
 
-        while True:
-            resp = await self.client.execute_api(
-                API_PRODUCTS,
-                method="POST",
-                body_params={
-                    "wmPoiId": self.wm_poi_id,
-                    "pageNum": page_num,
-                    "pageSize": page_size,
-                    "needTag": 0,
-                    "state": 0,
-                    "saleStatus": 0,
-                    "limitSale": 0,
-                    "needCombinationSpu": -1,
-                    "noStockAutoClear": -1,
-                    "problemType": 1,
-                    "noSingleDeliveryType": 0,
-                },
+        parsed = _parse_intercepted_json(captured)
+        for resp in parsed:
+            items = _extract_list_from_response(resp["data"])
+            if items:
+                all_items.extend(items)
+                pages += 1
+                logger.info("商品第1页: 获取 %d 条", len(items))
+
+        # 翻页
+        max_pages = 50  # 安全上限
+        while pages < max_pages:
+            has_next = await self.client.evaluate_js(JS_HAS_NEXT)
+            if not has_next:
+                break
+
+            page_captured = await self.client.click_and_intercept(
+                JS_CLICK_NEXT,
+                PATTERNS_PRODUCTS,
+                timeout=20.0,
+                wait_after_click=3.0,
             )
 
-            if not isinstance(resp, dict):
-                logger.warning("商品 API 返回非 JSON，跳过此页: %s", str(resp)[:100])
+            page_parsed = _parse_intercepted_json(page_captured)
+            page_items: list[dict] = []
+            for resp in page_parsed:
+                items = _extract_list_from_response(resp["data"])
+                page_items.extend(items)
+
+            if not page_items:
+                logger.info("商品翻页结束: 第 %d 页无数据", pages + 1)
                 break
 
-            code = resp.get("code", -1)
-            if code not in (0, None):
-                logger.error("商品 API 错误: code=%s msg=%s", code, resp.get("msg") or resp.get("message"))
-                break
-
-            data = resp.get("data") or {}
-            items = data.get("productList") or data.get("list") or []
-            total_count = int(data.get("totalCount") or data.get("total") or 0)
-
-            if not items:
-                break
-
-            all_items.extend(items)
-            total += len(items)
+            all_items.extend(page_items)
             pages += 1
-            logger.info("商品 page=%d, 本页=%d, 累计=%d/%d", page_num, len(items), total, total_count)
-
-            if total >= total_count or len(items) < page_size:
-                break
-            page_num += 1
-            await asyncio.sleep(0.5)  # 礼貌性延迟
+            logger.info("商品第%d页: 获取 %d 条，累计 %d", pages, len(page_items), len(all_items))
+            await asyncio.sleep(1.0)
 
         if all_items:
             await self._save_products(all_items)
 
-        return SyncResult(syncer="products", success=True, records=total, pages=pages)
+        return SyncResult(syncer="products", success=True, records=len(all_items), pages=pages)
 
     # ── 订单 ──────────────────────────────────────────────────────────────
 
     async def sync_orders(self) -> SyncResult:
-        """拉取过去 days_back 天的订单，自动翻页。"""
-        end_date = date.today()
-        start_date = end_date - timedelta(days=self.days_back)
-
-        # 导航到订单页，让 h5guard 初始化
-        await self.client.navigate_to("/order/list")
-
-        page_num = 1
-        page_size = 50
-        total = 0
-        pages = 0
+        """导航到订单列表页，CDP 拦截订单数据，自动翻页。"""
         all_orders: list[dict] = []
+        pages = 0
 
-        # 尝试多个可能的订单 API 路径
-        order_apis = [
-            "/waimai/order/list",
-            "/order/list/page/history",
-            "/reuse/health/order/r/pageQueryOrder",
-        ]
-        working_api = None
+        # 第一页：导航到订单页
+        captured = await self.client.intercept_navigate(
+            PAGE_ORDERS,
+            PATTERNS_ORDERS,
+            timeout=30.0,
+            wait_after_load=8.0,
+        )
 
-        for api in order_apis:
-            try:
-                test_resp = await self.client.execute_api(
-                    api,
-                    method="POST",
-                    body_params={
-                        "wmPoiId": self.wm_poi_id,
-                        "pageNum": 1,
-                        "pageSize": 1,
-                        "startTime": start_date.strftime("%Y-%m-%d"),
-                        "endTime": end_date.strftime("%Y-%m-%d"),
-                    },
-                )
-                if isinstance(test_resp, dict) and test_resp.get("code") in (0, None):
-                    working_api = api
-                    logger.info("订单 API 探测成功: %s", api)
-                    break
-            except Exception:
-                continue
+        parsed = _parse_intercepted_json(captured)
+        for resp in parsed:
+            items = _extract_list_from_response(resp["data"])
+            if items:
+                all_orders.extend(items)
+                pages += 1
+                logger.info("订单第1页: 获取 %d 条", len(items))
 
-        if not working_api:
-            return SyncResult(syncer="orders", success=False, records=0, error="未找到可用的订单 API")
+        # 翻页
+        max_pages = 100
+        while pages < max_pages:
+            has_next = await self.client.evaluate_js(JS_HAS_NEXT)
+            if not has_next:
+                break
 
-        while True:
-            resp = await self.client.execute_api(
-                working_api,
-                method="POST",
-                body_params={
-                    "wmPoiId": self.wm_poi_id,
-                    "pageNum": page_num,
-                    "pageSize": page_size,
-                    "startTime": start_date.strftime("%Y-%m-%d"),
-                    "endTime": end_date.strftime("%Y-%m-%d"),
-                    "status": "",  # 全部状态
-                },
+            page_captured = await self.client.click_and_intercept(
+                JS_CLICK_NEXT,
+                PATTERNS_ORDERS,
+                timeout=20.0,
+                wait_after_click=3.0,
             )
 
-            if not isinstance(resp, dict):
-                logger.warning("订单 API 返回非 JSON: %s", str(resp)[:100])
+            page_parsed = _parse_intercepted_json(page_captured)
+            page_items: list[dict] = []
+            for resp in page_parsed:
+                items = _extract_list_from_response(resp["data"])
+                page_items.extend(items)
+
+            if not page_items:
+                logger.info("订单翻页结束: 第 %d 页无数据", pages + 1)
                 break
 
-            code = resp.get("code", -1)
-            if code not in (0, None):
-                logger.error("订单 API 错误: code=%s", code)
-                break
-
-            data = resp.get("data") or {}
-            orders = (
-                data.get("list")
-                or data.get("orders")
-                or data.get("orderList")
-                or data.get("items")
-                or []
-            )
-            total_count = int(data.get("total") or data.get("totalCount") or 0)
-
-            if not orders:
-                break
-
-            all_orders.extend(orders)
-            total += len(orders)
+            all_orders.extend(page_items)
             pages += 1
-            logger.info("订单 page=%d, 本页=%d, 累计=%d/%d", page_num, len(orders), total, total_count)
-
-            if total >= total_count or len(orders) < page_size:
-                break
-            page_num += 1
-            await asyncio.sleep(0.8)
+            logger.info("订单第%d页: 获取 %d 条，累计 %d", pages, len(page_items), len(all_orders))
+            await asyncio.sleep(1.0)
 
         if all_orders:
             await self._save_raw(all_orders, "qnh_orders")
 
-        return SyncResult(syncer="orders", success=True, records=total, pages=pages)
+        return SyncResult(syncer="orders", success=True, records=len(all_orders), pages=pages)
 
     # ── 评价 ──────────────────────────────────────────────────────────────
 
     async def sync_reviews(self) -> SyncResult:
-        """拉取评价列表。"""
-        end_date = date.today()
-        start_date = end_date - timedelta(days=30)
-
-        await self.client.navigate_to("/merch/evaluate/list")
-
-        page_num = 1
-        page_size = 20
-        total = 0
-        pages = 0
+        """导航到评价列表页，CDP 拦截评价数据，自动翻页。"""
         all_reviews: list[dict] = []
+        pages = 0
 
-        while True:
-            resp = await self.client.execute_api(
-                API_REVIEWS,
-                method="POST",
-                body_params={
-                    "wmPoiId": self.wm_poi_id,
-                    "pageNum": page_num,
-                    "pageSize": page_size,
-                    "startTime": start_date.strftime("%Y-%m-%d"),
-                    "endTime": end_date.strftime("%Y-%m-%d"),
-                    "replyStatus": "",  # 全部
-                    "starLevel": "",    # 全部评分
-                },
+        captured = await self.client.intercept_navigate(
+            PAGE_REVIEWS,
+            PATTERNS_REVIEWS,
+            timeout=30.0,
+            wait_after_load=8.0,
+        )
+
+        parsed = _parse_intercepted_json(captured)
+        for resp in parsed:
+            items = _extract_list_from_response(resp["data"])
+            if items:
+                all_reviews.extend(items)
+                pages += 1
+                logger.info("评价第1页: 获取 %d 条", len(items))
+
+        # 翻页
+        max_pages = 50
+        while pages < max_pages:
+            has_next = await self.client.evaluate_js(JS_HAS_NEXT)
+            if not has_next:
+                break
+
+            page_captured = await self.client.click_and_intercept(
+                JS_CLICK_NEXT,
+                PATTERNS_REVIEWS,
+                timeout=20.0,
+                wait_after_click=3.0,
             )
 
-            if not isinstance(resp, dict):
+            page_parsed = _parse_intercepted_json(page_captured)
+            page_items: list[dict] = []
+            for resp in page_parsed:
+                items = _extract_list_from_response(resp["data"])
+                page_items.extend(items)
+
+            if not page_items:
                 break
 
-            code = resp.get("code", -1)
-            if code not in (0, None):
-                logger.warning("评价 API 错误: code=%s", code)
-                break
-
-            data = resp.get("data") or {}
-            reviews = (
-                data.get("list")
-                or data.get("evaluateList")
-                or data.get("commentList")
-                or data.get("items")
-                or []
-            )
-            total_count = int(data.get("total") or data.get("totalCount") or 0)
-
-            if not reviews:
-                break
-
-            all_reviews.extend(reviews)
-            total += len(reviews)
+            all_reviews.extend(page_items)
             pages += 1
-            logger.info("评价 page=%d, 本页=%d, 累计=%d", page_num, len(reviews), total)
-
-            if total >= total_count or len(reviews) < page_size:
-                break
-            page_num += 1
-            await asyncio.sleep(0.5)
+            logger.info("评价第%d页: 获取 %d 条，累计 %d", pages, len(page_items), len(all_reviews))
+            await asyncio.sleep(1.0)
 
         if all_reviews:
             await self._save_raw(all_reviews, "qnh_reviews")
 
-        return SyncResult(syncer="reviews", success=True, records=total, pages=pages)
+        return SyncResult(syncer="reviews", success=True, records=len(all_reviews), pages=pages)
 
     # ── 销售统计 ──────────────────────────────────────────────────────────
 
     async def sync_stats(self) -> SyncResult:
-        """拉取过去 days_back 天的每日销售统计。"""
-        end_date = date.today()
-        start_date = end_date - timedelta(days=self.days_back)
-
-        await self.client.navigate_to("/data/business")
-
-        resp = await self.client.execute_api(
-            API_STATS,
-            method="POST",
-            body_params={
-                "wmPoiId": self.wm_poi_id,
-                "startTime": start_date.strftime("%Y-%m-%d"),
-                "endTime": end_date.strftime("%Y-%m-%d"),
-                "timeType": "day",  # 按天汇总
-            },
+        """导航到数据中心页，CDP 拦截业务概览和统计数据。"""
+        captured = await self.client.intercept_navigate(
+            PAGE_DATA,
+            PATTERNS_STATS,
+            timeout=30.0,
+            wait_after_load=10.0,
         )
 
-        if not isinstance(resp, dict) or resp.get("code") not in (0, None):
-            return SyncResult(
-                syncer="metrics",
-                success=False,
-                records=0,
-                error=f"统计 API 错误: {str(resp)[:100]}",
-            )
+        parsed = _parse_intercepted_json(captured)
+        all_stats: list[dict] = []
 
-        data = resp.get("data") or {}
-        stat_list = data.get("list") or data.get("statList") or data.get("items") or []
+        for resp in parsed:
+            data = resp.get("data", {})
+            # businessOverview 通常返回单个对象或列表
+            items = _extract_list_from_response(data)
+            if items:
+                all_stats.extend(items)
+            elif isinstance(data.get("data"), dict):
+                # 单个概览对象，包装为列表
+                all_stats.append(data["data"])
 
-        if stat_list:
-            await self._save_raw(stat_list, "qnh_store_metrics")
+        if not all_stats and parsed:
+            # 如果解析列表失败，把整个 data 部分存起来
+            for resp in parsed:
+                raw_data = resp.get("data", {}).get("data") or resp.get("data", {})
+                if isinstance(raw_data, dict) and raw_data:
+                    all_stats.append(raw_data)
 
-        return SyncResult(syncer="metrics", success=True, records=len(stat_list), pages=1)
+        if all_stats:
+            await self._save_raw(all_stats, "qnh_store_metrics")
+
+        return SyncResult(
+            syncer="metrics",
+            success=True,
+            records=len(all_stats),
+            pages=1 if all_stats else 0,
+        )
 
     # ── 退款 ──────────────────────────────────────────────────────────────
 
     async def sync_refunds(self) -> SyncResult:
-        """拉取退款数据；若退款 API 不可用则从订单数据回退提取。"""
+        """从首页/订单页 CDP 拦截退款统计数据；也回退从订单中提取。"""
         if not self.pool:
             return SyncResult(syncer="refunds", success=False, records=0, error="DB pool unavailable")
 
         await self._ensure_refunds_table()
 
-        end_date = date.today()
-        start_date = end_date - timedelta(days=self.days_back)
-        await self.client.navigate_to("/order/list")
-
-        refund_apis = [
-            "/reuse/health/order/r/pageQueryRefund",
-            "/waimai/refund/list",
-            "/order/refund/page",
-        ]
-
-        working_api = None
-        for api in refund_apis:
-            try:
-                test_resp = await self.client.execute_api(
-                    api,
-                    method="POST",
-                    body_params={
-                        "wmPoiId": self.wm_poi_id,
-                        "pageNum": 1,
-                        "pageSize": 1,
-                        "startTime": start_date.strftime("%Y-%m-%d"),
-                        "endTime": end_date.strftime("%Y-%m-%d"),
-                    },
-                )
-                if isinstance(test_resp, dict) and test_resp.get("code") in (0, None):
-                    working_api = api
-                    logger.info("退款 API 探测成功: %s", api)
-                    break
-            except Exception:
-                continue
-
         refund_items: list[dict[str, Any]] = []
         pages = 0
 
-        if working_api:
-            page_num = 1
-            page_size = 50
-            while True:
-                resp = await self.client.execute_api(
-                    working_api,
-                    method="POST",
-                    body_params={
-                        "wmPoiId": self.wm_poi_id,
-                        "pageNum": page_num,
-                        "pageSize": page_size,
-                        "startTime": start_date.strftime("%Y-%m-%d"),
-                        "endTime": end_date.strftime("%Y-%m-%d"),
-                    },
-                )
-                if not isinstance(resp, dict) or resp.get("code") not in (0, None):
-                    break
-                data = resp.get("data") or {}
-                rows = (
-                    data.get("list")
-                    or data.get("refundList")
-                    or data.get("items")
-                    or data.get("records")
-                    or []
-                )
-                if not rows:
-                    break
-                refund_items.extend(rows)
+        # 方式1: 导航到首页，拦截退款相关响应
+        captured = await self.client.intercept_navigate(
+            PAGE_HOME,
+            PATTERNS_REFUNDS,
+            timeout=25.0,
+            wait_after_load=8.0,
+        )
+
+        parsed = _parse_intercepted_json(captured)
+        for resp in parsed:
+            data = resp.get("data", {})
+            items = _extract_list_from_response(data)
+            if items:
+                refund_items.extend(items)
                 pages += 1
-                total_count = int(data.get("total") or data.get("totalCount") or 0)
-                if (total_count and len(refund_items) >= total_count) or len(rows) < page_size:
-                    break
-                page_num += 1
-                await asyncio.sleep(0.5)
-        else:
-            logger.warning("退款 API 全部不可用，回退为订单退款状态提取")
+
+        # 方式2: 导航到订单页拦截退款
+        if not refund_items:
+            captured2 = await self.client.intercept_navigate(
+                PAGE_ORDERS,
+                PATTERNS_REFUNDS,
+                timeout=25.0,
+                wait_after_load=8.0,
+            )
+            parsed2 = _parse_intercepted_json(captured2)
+            for resp in parsed2:
+                data = resp.get("data", {})
+                items = _extract_list_from_response(data)
+                if items:
+                    refund_items.extend(items)
+                    pages += 1
+
+        # 方式3: 从已存储的订单数据回退提取
+        if not refund_items:
+            logger.warning("退款 CDP 拦截无数据，回退为订单退款状态提取")
             refund_items = await self._extract_refunds_from_orders_raw()
             pages = 1 if refund_items else 0
 
@@ -564,6 +624,8 @@ class YiyaoFullSyncer:
         """从 qnh_orders_raw 聚合每天每商品销量和销售额。"""
         if not self.pool:
             return SyncResult(syncer="sales_history", success=False, records=0, error="DB pool unavailable")
+
+        rows_to_upsert: list[tuple[Any, ...]] = []
 
         async with self.pool.acquire() as conn:
             await conn.execute(
@@ -862,7 +924,7 @@ class YiyaoFullSyncer:
             inserted = 0
             for item in items:
                 raw_json = json.dumps(item, ensure_ascii=False, sort_keys=True, default=str)
-                content_hash = hashlib.md5(raw_json.encode()).hexdigest()
+                content_hash = hashlib.md5(raw_json.encode()).hexdigest()  # noqa: S324
                 try:
                     await conn.execute(
                         f"""
@@ -920,8 +982,12 @@ class YiyaoFullSyncer:
                     str(item.get("refund_reason") or item.get("reason") or item.get("refundReason") or ""),
                     self._to_float(item.get("refund_amount") or item.get("refundAmount") or item.get("amount")),
                     str(item.get("refund_status") or item.get("status") or item.get("refundStatus") or ""),
-                    self._parse_datetime(item.get("refund_time") or item.get("refundTime") or item.get("applyTime")),
-                    self._parse_datetime(item.get("resolved_time") or item.get("resolvedTime") or item.get("finishTime")),
+                    self._parse_datetime(
+                        item.get("refund_time") or item.get("refundTime") or item.get("applyTime")
+                    ),
+                    self._parse_datetime(
+                        item.get("resolved_time") or item.get("resolvedTime") or item.get("finishTime")
+                    ),
                     json.dumps(item, ensure_ascii=False, default=str),
                 )
             )
@@ -980,11 +1046,22 @@ class YiyaoFullSyncer:
                         "refund_id": refund_id,
                         "order_id": order_id,
                         "sku_id": str(item.get("skuId") or item.get("spuId") or ""),
-                        "sku_name": str(item.get("name") or item.get("skuName") or item.get("productName") or ""),
-                        "refund_reason": str(raw.get("refundReason") or raw.get("cancelReason") or "status=refunded"),
-                        "refund_amount": raw.get("refundAmount") or raw.get("paidAmount") or raw.get("totalAmount") or 0,
+                        "sku_name": str(
+                            item.get("name") or item.get("skuName") or item.get("productName") or ""
+                        ),
+                        "refund_reason": str(
+                            raw.get("refundReason") or raw.get("cancelReason") or "status=refunded"
+                        ),
+                        "refund_amount": (
+                            raw.get("refundAmount")
+                            or raw.get("paidAmount")
+                            or raw.get("totalAmount")
+                            or 0
+                        ),
                         "refund_status": str(raw.get("refundStatus") or "completed"),
-                        "refund_time": raw.get("refundTime") or raw.get("updateTime") or raw.get("orderTime"),
+                        "refund_time": (
+                            raw.get("refundTime") or raw.get("updateTime") or raw.get("orderTime")
+                        ),
                         "resolved_time": raw.get("resolvedTime") or raw.get("updateTime"),
                         "source": "orders_fallback",
                     }
