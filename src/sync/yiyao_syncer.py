@@ -58,18 +58,21 @@ PATTERNS_MENU = ["poi/menu/list", "menu/list"]
 # 翻页按钮 JS 选择器（美团 SPA 常见的分页组件）
 JS_CLICK_NEXT = """
 (function() {
-    // 尝试多种"下一页"按钮选择器
+    // 美团 roo-pagination + 常见框架分页按钮
     var selectors = [
+        '.roo-pagination li:not(.disabled) > a[aria-label="Next"]',
+        '.roo-pagination li:not(.disabled) > a[aria-label="next"]',
         '.ant-pagination-next:not(.ant-pagination-disabled)',
         '.next-btn:not(.disabled)',
         '.pagination .next:not(.disabled)',
-        '[class*="next"]:not([class*="disabled"])',
+        'a[aria-label="Next"]',
+        'a[aria-label="next"]',
         'button[aria-label="next"]',
         '.el-pagination .btn-next:not(:disabled)',
     ];
     for (var i = 0; i < selectors.length; i++) {
         var btn = document.querySelector(selectors[i]);
-        if (btn) {
+        if (btn && !btn.closest('.disabled')) {
             btn.click();
             return true;
         }
@@ -82,16 +85,19 @@ JS_CLICK_NEXT = """
 JS_HAS_NEXT = """
 (function() {
     var selectors = [
+        '.roo-pagination li:not(.disabled) > a[aria-label="Next"]',
+        '.roo-pagination li:not(.disabled) > a[aria-label="next"]',
         '.ant-pagination-next:not(.ant-pagination-disabled)',
         '.next-btn:not(.disabled)',
         '.pagination .next:not(.disabled)',
-        '[class*="next"]:not([class*="disabled"])',
+        'a[aria-label="Next"]',
+        'a[aria-label="next"]',
         'button[aria-label="next"]',
         '.el-pagination .btn-next:not(:disabled)',
     ];
     for (var i = 0; i < selectors.length; i++) {
         var btn = document.querySelector(selectors[i]);
-        if (btn) return true;
+        if (btn && !btn.closest('.disabled')) return true;
     }
     return false;
 })()
@@ -246,10 +252,11 @@ class YiyaoFullSyncer:
                 logger.info("商品第1页: 获取 %d 条", len(items))
 
         # 翻页
-        max_pages = 50  # 安全上限
+        max_pages = 100  # 每页 20 条, 最多 2000 条 (74w 全翻完不现实)
         while pages < max_pages:
             has_next = await self.client.evaluate_js(JS_HAS_NEXT)
             if not has_next:
+                logger.info("商品翻页结束: 无下一页按钮 (共 %d 页)", pages)
                 break
 
             page_captured = await self.client.click_and_intercept(
@@ -272,7 +279,7 @@ class YiyaoFullSyncer:
             all_items.extend(page_items)
             pages += 1
             logger.info("商品第%d页: 获取 %d 条，累计 %d", pages, len(page_items), len(all_items))
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(1.5)  # 稍慢翻页避免触发频控
 
         if all_items:
             await self._save_products(all_items)
@@ -827,7 +834,7 @@ class YiyaoFullSyncer:
         """商品数据结构化写入 qnh_products。"""
         if not self.pool or not items:
             return
-        now = datetime.now(UTC)
+        now = datetime.now()  # naive UTC (qnh_products.synced_at is timestamp without tz)
         rows = []
         for item in items:
             spu_id = str(item.get("id") or item.get("spuId") or "")
@@ -835,8 +842,11 @@ class YiyaoFullSyncer:
                 continue
             sku_id = str(item.get("skuId") or "")
 
-            # 解析状态
-            sale_status = item.get("saleStatus") or item.get("status")
+            # 解析状态 — yiyao: isSale/enabledStatus/status; qnh: saleStatus
+            sale_status = (
+                item.get("isSale") or item.get("enabledStatus")
+                or item.get("saleStatus") or item.get("status")
+            )
             if sale_status == 1 or sale_status == "on":
                 status = "on"
             elif sale_status == 0 or sale_status == "off":
@@ -844,17 +854,49 @@ class YiyaoFullSyncer:
             else:
                 status = str(sale_status) if sale_status is not None else "unknown"
 
+            # price: yiyao=currentPrice, qnh=price/retailPrice
+            price_raw = (
+                item.get("currentPrice") or item.get("price")
+                or item.get("retailPrice") or 0
+            )
+
+            # spec: yiyao=specification, qnh=spec/skuSpec
+            spec = str(
+                item.get("specification") or item.get("spec")
+                or item.get("skuSpec") or ""
+            )
+
+            # image: yiyao=pictureList[0], qnh=imageUrl/pic
+            pic_list = item.get("pictureList")
+            image_url = ""
+            if isinstance(pic_list, list) and pic_list:
+                image_url = str(pic_list[0])
+            else:
+                image_url = str(item.get("imageUrl") or item.get("pic") or "")
+
+            # barcode: yiyao=upcCode, qnh=barcode/upc
+            barcode = str(
+                item.get("upcCode") or item.get("barcode")
+                or item.get("upc") or ""
+            )
+
+            # category: yiyao=categoryNamePath, qnh=categoryName/category
+            category = str(
+                item.get("categoryNamePath") or item.get("categoryName")
+                or item.get("category") or ""
+            )
+
             rows.append((
                 spu_id,
                 sku_id,
                 str(item.get("name") or item.get("spuName") or ""),
                 str(item.get("brandName") or item.get("brand") or ""),
-                str(item.get("spec") or item.get("skuSpec") or ""),
-                float(item.get("price") or item.get("retailPrice") or 0),
+                spec,
+                float(price_raw),
                 int(item.get("stock") or item.get("stockNum") or item.get("stockQuantity") or 0),
-                str(item.get("categoryName") or item.get("category") or ""),
-                str(item.get("imageUrl") or item.get("pic") or ""),
-                str(item.get("barcode") or item.get("upc") or ""),
+                category,
+                image_url,
+                barcode,
                 status,
                 json.dumps(item, ensure_ascii=False, default=str),
                 now,
