@@ -9,10 +9,19 @@ import { AIAssistantFAB } from '@/components/ai-assistant-fab';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authed] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return !!localStorage.getItem('auth_token');
-  });
+  const [authed, setAuthed] = useState(false);
+
+  useEffect(() => {
+    const syncAuth = () => {
+      if (typeof window === 'undefined') return;
+      setAuthed(!!localStorage.getItem('auth_token'));
+    };
+
+    syncAuth();
+    window.addEventListener('storage', syncAuth);
+
+    return () => window.removeEventListener('storage', syncAuth);
+  }, [pathname]);
 
   useEffect(() => {
     if (!authed && pathname !== '/login') {

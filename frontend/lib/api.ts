@@ -11,6 +11,9 @@ const getErrorMessage = (error: unknown, endpoint: string): string => {
   const err = error as Error;
 
   // Network errors
+  if (err.name === 'AbortError' || err.message?.includes('aborted')) {
+    return '请求超时，请检查网络或稍后重试';
+  }
   if (err.message?.includes('Failed to fetch')) {
     return '网络连接失败，请检查网络连接后重试';
   }
@@ -72,7 +75,12 @@ const getErrorMessage = (error: unknown, endpoint: string): string => {
   }
 };
 
+const DEFAULT_API_TIMEOUT_MS = 15000;
+
 export async function fetchAPI<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), DEFAULT_API_TIMEOUT_MS);
+
   try {
     const token = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
     const authHeaders: Record<string, string> = token ? { 'Authorization': `Bearer ${token}` } : {};
@@ -84,6 +92,7 @@ export async function fetchAPI<T>(endpoint: string, options?: RequestInit): Prom
         ...options?.headers,
       },
       ...options,
+      signal: options?.signal ?? controller.signal,
     });
 
     if (response.status === 401) {
@@ -113,6 +122,8 @@ export async function fetchAPI<T>(endpoint: string, options?: RequestInit): Prom
     // Transform error to user-friendly message
     const userMessage = getErrorMessage(error, endpoint);
     throw new Error(userMessage);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
