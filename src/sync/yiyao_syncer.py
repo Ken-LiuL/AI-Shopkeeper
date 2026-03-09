@@ -530,20 +530,20 @@ class YiyaoFullSyncer:
                 """
             )
 
-            latest_synced_at = await conn.fetchval(
-                "SELECT synced_at FROM qnh_store_metrics_raw ORDER BY created_at DESC LIMIT 1"
+            latest_created_at = await conn.fetchval(
+                "SELECT created_at FROM qnh_store_metrics_raw ORDER BY created_at DESC LIMIT 1"
             )
-            if not latest_synced_at:
+            if not latest_created_at:
                 return SyncResult(syncer="daily_metrics", success=True, records=0, pages=0)
 
             rows = await conn.fetch(
                 """
                 SELECT raw_data
                 FROM qnh_store_metrics_raw
-                WHERE synced_at = $1
+                WHERE created_at >= $1 - INTERVAL '1 minute'
                 ORDER BY id ASC
                 """,
-                latest_synced_at,
+                latest_created_at,
             )
             if not rows:
                 return SyncResult(syncer="daily_metrics", success=True, records=0, pages=0)
