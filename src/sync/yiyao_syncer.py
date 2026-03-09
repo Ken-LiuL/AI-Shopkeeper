@@ -589,16 +589,15 @@ class YiyaoFullSyncer:
                 await conn.executemany(
                     """
                     INSERT INTO qnh_daily_metrics
-                        (date, order_count, gmv, actual_revenue, avg_order_value, refund_count, refund_rate, new_customers, synced_at)
-                    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
-                    ON CONFLICT (date) DO UPDATE SET
-                        order_count = EXCLUDED.order_count,
-                        gmv = EXCLUDED.gmv,
-                        actual_revenue = EXCLUDED.actual_revenue,
+                        (metric_date, valid_order_count, valid_order_amount, net_profit, avg_order_value, stockout_refund_rate, customer_count, synced_at)
+                    VALUES ($1,$2,$3,$4,$5,$6,$7,NOW())
+                    ON CONFLICT (metric_date, channel, store_id) DO UPDATE SET
+                        valid_order_count = EXCLUDED.valid_order_count,
+                        valid_order_amount = EXCLUDED.valid_order_amount,
+                        net_profit = EXCLUDED.net_profit,
                         avg_order_value = EXCLUDED.avg_order_value,
-                        refund_count = EXCLUDED.refund_count,
-                        refund_rate = EXCLUDED.refund_rate,
-                        new_customers = EXCLUDED.new_customers,
+                        stockout_refund_rate = EXCLUDED.stockout_refund_rate,
+                        customer_count = EXCLUDED.customer_count,
                         synced_at = NOW()
                     """,
                     metric_rows,
