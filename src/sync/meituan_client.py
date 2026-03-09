@@ -56,6 +56,41 @@ class MeituanBrowserClient:
         self._intercepted: dict[str, dict] = {}
         self._network_enabled = False
 
+    @staticmethod
+    def _categorize_interface(url: str, url_patterns: list[str]) -> str:
+        for pattern in url_patterns:
+            if pattern in url:
+                return pattern
+        return "unmatched"
+
+    @staticmethod
+    def _log_raw_response_summary(
+        *,
+        stage: str,
+        url: str,
+        interface: str,
+        body_text: str,
+    ) -> None:
+        preview = (body_text or "")[:200].replace("\n", " ")
+        code: Any = None
+        msg: Any = None
+        try:
+            payload = json.loads(body_text) if body_text else {}
+            if isinstance(payload, dict):
+                code = payload.get("code")
+                msg = payload.get("msg") or payload.get("message")
+        except Exception:
+            pass
+        logger.info(
+            "CDP原始响应摘要[%s/%s]: code=%s msg=%s body[0:200]=%s url=%s",
+            stage,
+            interface,
+            code,
+            msg,
+            preview,
+            url[:120],
+        )
+
     async def ensure_ready(self) -> None:
         async with self._init_lock:
             if self._initialized and self._page:
@@ -167,8 +202,15 @@ class MeituanBrowserClient:
                         cdp_net.get_response_body(event.request_id)
                     )
                     body_text = body_result[0] if body_result[0] else ""
-                    captured.append({"url": url, "body": body_text})
+                    interface = self._categorize_interface(url, url_patterns)
+                    captured.append({"url": url, "body": body_text, "interface": interface})
                     logger.info("CDP 拦截: %s (%d bytes)", url[:80], len(body_text))
+                    self._log_raw_response_summary(
+                        stage="navigate",
+                        url=url,
+                        interface=interface,
+                        body_text=body_text,
+                    )
                 except Exception as e:
                     logger.warning("CDP get_response_body 失败: %s %s", url[:60], e)
 
@@ -247,8 +289,15 @@ class MeituanBrowserClient:
                         cdp_net.get_response_body(event.request_id)
                     )
                     body_text = body_result[0] if body_result[0] else ""
-                    captured.append({"url": url, "body": body_text})
+                    interface = self._categorize_interface(url, url_patterns)
+                    captured.append({"url": url, "body": body_text, "interface": interface})
                     logger.info("CDP 翻页拦截: %s (%d bytes)", url[:80], len(body_text))
+                    self._log_raw_response_summary(
+                        stage="paginate",
+                        url=url,
+                        interface=interface,
+                        body_text=body_text,
+                    )
                 except Exception as e:
                     logger.warning("CDP get_response_body 失败: %s %s", url[:60], e)
 

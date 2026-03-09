@@ -116,7 +116,7 @@ class SyncResult:
 def _parse_intercepted_json(captured: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """从 CDP 拦截的响应中提取 JSON 数据。
 
-    Returns: 成功解析的 JSON 响应列表 [{url, data}]
+    Returns: 成功解析的 JSON 响应列表 [{url, data, interface}]
     """
     results = []
     for item in captured:
@@ -125,7 +125,14 @@ def _parse_intercepted_json(captured: list[dict[str, Any]]) -> list[dict[str, An
             continue
         try:
             data = json.loads(body)
-            results.append({"url": item.get("url", ""), "data": data})
+            results.append(
+                {
+                    "url": item.get("url", ""),
+                    "data": data,
+                    "interface": item.get("interface", "unknown"),
+                    "raw_preview": body[:200],
+                }
+            )
         except json.JSONDecodeError:
             logger.debug("非 JSON 响应: %s → %s", item.get("url", "")[:60], body[:100])
     return results
@@ -186,6 +193,46 @@ def _extract_total_from_response(data: dict[str, Any]) -> int:
     return 0
 
 
+def _log_response_summary(api_name: str, parsed: list[dict[str, Any]]) -> None:
+    for resp in parsed:
+        data = resp.get("data")
+        if not isinstance(data, dict):
+            continue
+        code = data.get("code")
+        msg = data.get("msg") or data.get("message")
+        logger.info(
+            "接口摘要[%s/%s]: code=%s msg=%s body[0:200]=%s url=%s",
+            api_name,
+            resp.get("interface", "unknown"),
+            code,
+            msg,
+            str(resp.get("raw_preview", "")).replace("\n", " "),
+            str(resp.get("url", ""))[:120],
+        )
+
+
+def _classify_zero_result(parsed: list[dict[str, Any]]) -> str:
+    if not parsed:
+        return "auth/risk"
+
+    risk_keywords = ("风控", "风险", "登录", "未登录", "auth", "token", "forbidden", "denied")
+    saw_business_response = False
+
+    for resp in parsed:
+        data = resp.get("data")
+        if not isinstance(data, dict):
+            continue
+        saw_business_response = True
+        code = data.get("code")
+        msg = str(data.get("msg") or data.get("message") or "").lower()
+        if code not in (None, 0):
+            return "auth/risk"
+        if any(k in msg for k in risk_keywords):
+            return "auth/risk"
+
+    return "empty-data" if saw_business_response else "auth/risk"
+
+
 class YiyaoFullSyncer:
     """全量同步器，通过 CDP 拦截 yiyao SPA 页面的 API 响应获取数据。"""
 
@@ -244,6 +291,7 @@ class YiyaoFullSyncer:
         )
 
         parsed = _parse_intercepted_json(captured)
+        _log_response_summary("products", parsed)
         for resp in parsed:
             items = _extract_list_from_response(resp["data"])
             if items:
@@ -267,6 +315,7 @@ class YiyaoFullSyncer:
             )
 
             page_parsed = _parse_intercepted_json(page_captured)
+            _log_response_summary("products", page_parsed)
             page_items: list[dict] = []
             for resp in page_parsed:
                 items = _extract_list_from_response(resp["data"])
@@ -283,6 +332,9 @@ class YiyaoFullSyncer:
 
         if all_items:
             await self._save_products(all_items)
+        else:
+            zero_reason = _classify_zero_result(parsed)
+            logger.warning("products 0条结果，判定=%s", zero_reason)
 
         return SyncResult(syncer="products", success=True, records=len(all_items), pages=pages)
 
@@ -302,6 +354,7 @@ class YiyaoFullSyncer:
         )
 
         parsed = _parse_intercepted_json(captured)
+        _log_response_summary("orders", parsed)
         for resp in parsed:
             items = _extract_list_from_response(resp["data"])
             if items:
@@ -324,6 +377,7 @@ class YiyaoFullSyncer:
             )
 
             page_parsed = _parse_intercepted_json(page_captured)
+            _log_response_summary("orders", page_parsed)
             page_items: list[dict] = []
             for resp in page_parsed:
                 items = _extract_list_from_response(resp["data"])
@@ -340,6 +394,9 @@ class YiyaoFullSyncer:
 
         if all_orders:
             await self._save_raw(all_orders, "qnh_orders")
+        else:
+            zero_reason = _classify_zero_result(parsed)
+            logger.warning("orders 0条结果，判定=%s", zero_reason)
 
         return SyncResult(syncer="orders", success=True, records=len(all_orders), pages=pages)
 
@@ -358,6 +415,7 @@ class YiyaoFullSyncer:
         )
 
         parsed = _parse_intercepted_json(captured)
+        _log_response_summary("reviews", parsed)
         for resp in parsed:
             items = _extract_list_from_response(resp["data"])
             if items:
@@ -380,6 +438,7 @@ class YiyaoFullSyncer:
             )
 
             page_parsed = _parse_intercepted_json(page_captured)
+            _log_response_summary("reviews", page_parsed)
             page_items: list[dict] = []
             for resp in page_parsed:
                 items = _extract_list_from_response(resp["data"])
@@ -395,6 +454,9 @@ class YiyaoFullSyncer:
 
         if all_reviews:
             await self._save_raw(all_reviews, "qnh_reviews")
+        else:
+            zero_reason = _classify_zero_result(parsed)
+            logger.warning("reviews 0条结果，判定=%s", zero_reason)
 
         return SyncResult(syncer="reviews", success=True, records=len(all_reviews), pages=pages)
 
@@ -410,6 +472,7 @@ class YiyaoFullSyncer:
         )
 
         parsed = _parse_intercepted_json(captured)
+        _log_response_summary("metrics", parsed)
         all_stats: list[dict] = []
 
         for resp in parsed:
@@ -431,6 +494,9 @@ class YiyaoFullSyncer:
 
         if all_stats:
             await self._save_raw(all_stats, "qnh_store_metrics")
+        else:
+            zero_reason = _classify_zero_result(parsed)
+            logger.warning("metrics 0条结果，判定=%s", zero_reason)
 
         return SyncResult(
             syncer="metrics",
