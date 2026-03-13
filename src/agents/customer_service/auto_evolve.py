@@ -25,7 +25,12 @@ class CustomerServiceAutoEvolution:
         os.makedirs(self.data_dir, exist_ok=True)
 
     async def after_reply_hook(
-        self, session_id: str, user_msg: str, reply: str, context: dict | None = None
+        self,
+        session_id: str,
+        user_msg: str,
+        reply: str,
+        context: dict | None = None,
+        skip_scoring: bool = False,
     ) -> None:
         """
         每次回复后的异步处理钩子
@@ -39,7 +44,13 @@ class CustomerServiceAutoEvolution:
         try:
             # 异步执行评分和进化逻辑（不阻塞主响应）
             asyncio.create_task(
-                self._process_reply_evolution(session_id, user_msg, reply, context or {})
+                self._process_reply_evolution(
+                    session_id,
+                    user_msg,
+                    reply,
+                    context or {},
+                    skip_scoring=skip_scoring,
+                )
             )
             logger.debug(f"Evolution task created for session {session_id}")
 
@@ -47,7 +58,12 @@ class CustomerServiceAutoEvolution:
             logger.error(f"Failed to create evolution task: {e}")
 
     async def _process_reply_evolution(
-        self, session_id: str, user_msg: str, reply: str, context: dict
+        self,
+        session_id: str,
+        user_msg: str,
+        reply: str,
+        context: dict,
+        skip_scoring: bool = False,
     ) -> None:
         """处理回复的自动进化逻辑"""
         try:
@@ -55,8 +71,11 @@ class CustomerServiceAutoEvolution:
                 logger.warning("No database pool available for evolution")
                 return
 
-            # 1. 自动评分
-            score_result = await self._auto_score_reply(session_id, user_msg, reply, context)
+            if skip_scoring:
+                # 评分已由 evaluator 完成，直接从 DB 读取最新评分
+                score_result = await self._get_latest_score(session_id)
+            else:
+                score_result = await self._auto_score_reply(session_id, user_msg, reply, context)
 
             if not score_result:
                 return
@@ -80,6 +99,26 @@ class CustomerServiceAutoEvolution:
 
         except Exception as e:
             logger.error(f"Failed to process reply evolution: {e}")
+
+    async def _get_latest_score(self, session_id: str) -> dict | None:
+        """从数据库读取最新的评分结果（避免重复 LLM 调用）"""
+        try:
+            row = await self.pool.fetchrow(
+                """
+                SELECT accuracy, professionalism, tone, resolution, compliance, overall, feedback
+                FROM cs_reply_scores
+                WHERE session_id = $1
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                session_id,
+            )
+            if row:
+                return dict(row)
+            return None
+        except Exception as e:
+            logger.warning(f"Failed to get latest score: {e}")
+            return None
 
     async def _auto_score_reply(
         self, session_id: str, user_msg: str, reply: str, context: dict
@@ -558,7 +597,12 @@ def get_evolution_manager(pool=None) -> CustomerServiceAutoEvolution:
 
 
 async def after_reply_hook(
-    session_id: str, user_msg: str, reply: str, context: dict | None = None, pool=None
+    session_id: str,
+    user_msg: str,
+    reply: str,
+    context: dict | None = None,
+    pool=None,
+    skip_scoring: bool = False,
 ) -> None:
     """
     全局after_reply_hook函数，供nodes.py调用
@@ -572,6 +616,12 @@ async def after_reply_hook(
     """
     try:
         manager = get_evolution_manager(pool)
-        await manager.after_reply_hook(session_id, user_msg, reply, context)
+        await manager.after_reply_hook(
+            session_id,
+            user_msg,
+            reply,
+            context,
+            skip_scoring=skip_scoring,
+        )
     except Exception as e:
         logger.error(f"Global after_reply_hook failed: {e}")

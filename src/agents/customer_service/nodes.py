@@ -11,7 +11,7 @@ import contextlib
 import json
 import logging
 
-from ..llm import MODEL_DEEPSEEK, call_tool, call_tool_with_reflection, call_vision
+from ..llm import MODEL_SONNET, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ async def _summarize_conversation(messages: list[dict]) -> str:
                     "required": ["summary"],
                 },
             },
-            model=MODEL_DEEPSEEK,
+            model=MODEL_SONNET,
             system="你是一个对话摘要助手，请简洁提炼对话要点。",
             trace_name="conversation_summary",
         )
@@ -673,10 +673,15 @@ async def chat(
         knowledge_base = _knowledge_base_cache or []
 
         # 1.5 对话摘要：超过6轮（12条）时压缩早期历史
+        # 但如果 API 层已经注入了摘要（system message），则跳过
         effective_history = conversation_history or []
         conversation_summary = ""
+        has_api_summary = any(
+            m.get("role") == "system" and "早期对话摘要" in (m.get("content") or "")
+            for m in effective_history
+        )
         history_to_summarize: list[dict] = []
-        if effective_history and len(effective_history) > 12:
+        if not has_api_summary and effective_history and len(effective_history) > 12:
             history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
             effective_history = effective_history[-6:]
         conversation_history = effective_history
@@ -924,10 +929,6 @@ async def chat(
         # 5.5 把 FAQ / 售后政策 / 评价情感 / 订单上下文 / 客户画像 / 对话摘要作为补充上下文注入给 LLM
         extra_sections = []
 
-        # 对话摘要（最优先注入，避免遗失上文）
-        if conversation_summary:
-            extra_sections.append(f"【早期对话摘要（之前轮次要点）】\n{conversation_summary}")
-
         # 客户画像（让 AI 识别 VIP 并差异化服务）
         if customer_profile_str:
             extra_sections.append(customer_profile_str)
@@ -1010,34 +1011,7 @@ async def chat(
             },
         }
 
-        _needs_reflection = (
-            "intent_result" in dir()
-            and intent_result.get("intent") in ("after_sales", "complaint")
-        )
-
-        if _needs_reflection and not images:
-            def _reflect_cs_reply(initial_result_str: str) -> str:
-                return f"""请审查以下客服回复，检查：
-1. 是否先表达了共情和歉意
-2. 解决方案是否具体可执行
-3. 是否遗漏了用户关心的要点
-4. 回复语气是否得体（不过分生硬也不过分卑微）
-5. 涉及退款/换货是否符合平台政策
-
-初始回复：
-{initial_result_str}
-
-请给出修订后的版本。"""
-
-            result = await call_tool_with_reflection(
-                initial_prompt=user_message_with_context,
-                reflection_prompt_fn=_reflect_cs_reply,
-                tool=tool_schema,
-                model=MODEL_DEEPSEEK,
-                system=system_prompt,
-                trace_name="customer_service_chat_reflected",
-            )
-        elif images and len(images) > 0:
+        if images and len(images) > 0:
             # Use vision model for image processing
             result = await call_vision(
                 text=user_message_with_context,
@@ -1053,7 +1027,7 @@ async def chat(
             result = await call_tool(
                 prompt=user_message_with_context,
                 tool=tool_schema,
-                model=MODEL_DEEPSEEK,
+                model=MODEL_SONNET,
                 system=system_prompt,
                 trace_name="customer_service_chat",
             )
@@ -1069,24 +1043,6 @@ async def chat(
         if isinstance(suggested_action, dict) and suggested_action.get("type") == "transfer_human":
             needs_human = True
 
-        # 事实核查（仅售后/投诉场景）
-        if intent in ("after_sales", "complaint") and pool:
-            try:
-                from src.agents.fact_checker import validate_agent_output
-
-                check_result = await validate_agent_output(
-                    agent_name="customer_service",
-                    output=result,
-                    pool=pool,
-                )
-                if check_result and not check_result.get("passed", True):
-                    warnings = check_result.get("warnings", [])
-                    if warnings:
-                        reply_text += "\n\n⚠️ 温馨提示：以上为AI回复，涉及售后问题建议联系人工客服确认。"
-                        needs_human = True
-            except Exception:
-                pass
-
         # 7. 异步记录日志（不阻塞响应）
         if pool:
             asyncio.create_task(
@@ -1101,22 +1057,8 @@ async def chat(
                 )
             )
 
-            # 8. 异步评分（不阻塞响应）
-            from .evaluator import evaluate_and_store
-
-            asyncio.create_task(
-                evaluate_and_store(
-                    pool=pool,
-                    session_id=session_id,
-                    user_message=message,
-                    ai_reply=reply_text,
-                    conversation_history=conversation_history,
-                    product_results=product_results,
-                )
-            )
-
-            # 9. 自动进化Hook（不阻塞响应）
             from .auto_evolve import after_reply_hook
+            from .evaluator import evaluate_and_store
 
             context = {
                 "conversation_history": conversation_history,
@@ -1126,15 +1068,27 @@ async def chat(
                 "needs_human": needs_human,
             }
 
-            asyncio.create_task(
-                after_reply_hook(
+            # 8. 异步评分+进化（合并为一个任务，避免重复评分）
+            async def _evaluate_and_evolve():
+                """先评分存储，再触发进化（共享评分结果，不重复调用 LLM）"""
+                await evaluate_and_store(
+                    pool=pool,
+                    session_id=session_id,
+                    user_message=message,
+                    ai_reply=reply_text,
+                    conversation_history=conversation_history,
+                    product_results=product_results,
+                )
+                await after_reply_hook(
                     session_id=session_id,
                     user_msg=message,
                     reply=reply_text,
                     context=context,
                     pool=pool,
+                    skip_scoring=True,
                 )
-            )
+
+            asyncio.create_task(_evaluate_and_evolve())
 
             # 异步记录客服决策（不阻塞主流程）
             async def _record_cs_action(
