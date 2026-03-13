@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { withErrorBoundary } from '@/components/error-boundary';
 import { fetchAPI } from '@/lib/api';
 
@@ -25,6 +26,16 @@ interface RecentSession {
   message_count?: number;
   created_at?: string;
   updated_at?: string;
+}
+
+interface TestMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+  intent?: string;
+  needsHuman?: boolean;
+  confidence?: number;
 }
 
 // ── Stat Card ─────────────────────────────────────────────────
@@ -66,6 +77,10 @@ function CustomerServicePage() {
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [testSessions, setTestSessions] = useState<{id: string; name: string; messages: TestMessage[]}[]>([]);
+  const [activeTestSession, setActiveTestSession] = useState<string | null>(null);
+  const [testInput, setTestInput] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
 
   const loadStats = async () => {
     try {
@@ -106,6 +121,106 @@ function CustomerServicePage() {
     setRefreshing(false);
   };
 
+  const createTestSession = async () => {
+    const sessionName = `测试客户 ${testSessions.length + 1}`;
+    try {
+      const data = await fetchAPI<{session_id: string; created_at: string}>('/customer-service/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ customer_id: `test_${Date.now()}` }),
+      });
+      const newSession = {
+        id: data.session_id,
+        name: sessionName,
+        messages: [] as TestMessage[],
+      };
+      setTestSessions(prev => [...prev, newSession]);
+      setActiveTestSession(data.session_id);
+    } catch {
+      const localId = `test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const newSession = {
+        id: localId,
+        name: sessionName,
+        messages: [] as TestMessage[],
+      };
+      setTestSessions(prev => [...prev, newSession]);
+      setActiveTestSession(localId);
+    }
+  };
+
+  const sendTestMessage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!testInput.trim() || testLoading || !activeTestSession) return;
+
+    const userMsg: TestMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: testInput.trim(),
+      timestamp: new Date(),
+    };
+
+    setTestSessions(prev => prev.map(s =>
+      s.id === activeTestSession ? { ...s, messages: [...s.messages, userMsg] } : s
+    ));
+    setTestInput('');
+    setTestLoading(true);
+
+    try {
+      const response = await fetchAPI<{
+        session_id: string;
+        reply: string;
+        intent?: string;
+        needs_human?: boolean;
+      }>('/customer-service/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: activeTestSession,
+          message: userMsg.content,
+        }),
+      });
+
+      const aiMsg: TestMessage = {
+        id: `ai-${Date.now()}`,
+        role: 'assistant',
+        content: response.reply,
+        timestamp: new Date(),
+        intent: response.intent,
+        needsHuman: response.needs_human,
+      };
+
+      setTestSessions(prev => prev.map(s =>
+        s.id === activeTestSession ? { ...s, messages: [...s.messages, aiMsg] } : s
+      ));
+    } catch {
+      const errMsg: TestMessage = {
+        id: `err-${Date.now()}`,
+        role: 'assistant',
+        content: '⚠️ 请求失败，请检查后端服务是否运行。',
+        timestamp: new Date(),
+      };
+      setTestSessions(prev => prev.map(s =>
+        s.id === activeTestSession ? { ...s, messages: [...s.messages, errMsg] } : s
+      ));
+    } finally {
+      setTestLoading(false);
+    }
+  };
+
+  const handleTestFeedback = async (sessionId: string, messageId: string, rating: 'good' | 'bad') => {
+    try {
+      await fetchAPI('/customer-service/feedback', {
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: sessionId,
+          message_id: messageId,
+          rating: rating === 'good' ? 5 : 1,
+          comment: `测试反馈: ${rating}`,
+        }),
+      });
+    } catch {
+      console.error('Feedback submission failed');
+    }
+  };
+
   useEffect(() => {
     loadStats();
     loadSessions();
@@ -124,6 +239,8 @@ function CustomerServicePage() {
       return '—';
     }
   };
+
+  const currentTestSession = testSessions.find((session) => session.id === activeTestSession);
 
   return (
     <div className="space-y-6">
@@ -275,7 +392,7 @@ function CustomerServicePage() {
           <CardContent className="space-y-2 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">AI 引擎</span>
-              <Badge variant="secondary" className="text-xs">DeepSeek / Flash</Badge>
+              <Badge variant="secondary" className="text-xs">Sonnet / Flash</Badge>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">平台对接</span>
@@ -291,6 +408,163 @@ function CustomerServicePage() {
             </div>
           </CardContent>
         </Card>
+      </section>
+
+      {/* ── 模拟对话测试 ── */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold">🧪 模拟对话测试</h2>
+          <Button variant="outline" size="sm" onClick={createTestSession} className="gap-1">
+            ➕ 新建测试客户
+          </Button>
+        </div>
+
+        {testSessions.length === 0 ? (
+          <Card>
+            <CardContent className="py-10 text-center">
+              <div className="text-3xl mb-3">🧪</div>
+              <div className="text-sm text-muted-foreground mb-4">
+                模拟买家与 AI 客服对话，测试回复质量
+              </div>
+              <Button variant="outline" onClick={createTestSession}>
+                ➕ 创建第一个测试客户
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4" style={{ minHeight: '400px' }}>
+            <div className="lg:col-span-1 space-y-2">
+              {testSessions.map((session) => (
+                <button
+                  key={session.id}
+                  onClick={() => setActiveTestSession(session.id)}
+                  className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
+                    activeTestSession === session.id
+                      ? 'bg-blue-50 border border-blue-200 text-blue-700'
+                      : 'bg-gray-50 border border-gray-100 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="font-medium">👤 {session.name}</div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {session.messages.length > 0
+                      ? `${session.messages[session.messages.length - 1].content.slice(0, 30)}...`
+                      : '新会话'}
+                  </div>
+                  <div className="text-xs text-gray-400 mt-0.5">
+                    {session.messages.filter(m => m.role === 'user').length} 条消息
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <Card className="lg:col-span-3 flex flex-col">
+              <CardHeader className="border-b py-3">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <span>💬</span>
+                    {currentTestSession?.name || '选择测试客户'}
+                  </CardTitle>
+                  <Badge variant="secondary" className="text-xs">
+                    AI 客服模式
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="flex-1 flex flex-col p-0" style={{ maxHeight: '400px' }}>
+                <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {activeTestSession && currentTestSession?.messages.length === 0 && (
+                    <div className="text-center text-sm text-muted-foreground py-8">
+                      <div className="text-2xl mb-2">💬</div>
+                      扮演买家发送消息，测试 AI 客服的回复质量
+                      <div className="flex flex-wrap justify-center gap-2 mt-4">
+                        {['血压计推荐一个', '我买的体温计坏了要退货', '订单多久能送到', '你们有没有血糖试纸'].map(q => (
+                          <button
+                            key={q}
+                            onClick={() => setTestInput(q)}
+                            className="text-xs px-3 py-1.5 rounded-full border border-gray-200 hover:bg-blue-50 hover:border-blue-200 transition-colors"
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTestSession && currentTestSession?.messages.map((msg) => {
+                    const isAI = msg.role === 'assistant';
+                    return (
+                      <div key={msg.id} className={`flex ${isAI ? 'justify-start' : 'justify-end'}`}>
+                        <div className="max-w-[80%]">
+                          <div className={`rounded-lg px-3 py-2 text-sm ${
+                            isAI ? 'bg-gray-100' : 'bg-blue-500 text-white'
+                          }`}>
+                            {msg.content}
+                          </div>
+                          {isAI && (
+                            <div className="flex items-center gap-1.5 mt-1 px-1">
+                              {msg.intent && (
+                                <Badge variant="outline" className="text-[10px] h-4 px-1">
+                                  {msg.intent}
+                                </Badge>
+                              )}
+                              {msg.needsHuman && (
+                                <Badge variant="destructive" className="text-[10px] h-4 px-1">
+                                  需转人工
+                                </Badge>
+                              )}
+                              <div className="flex gap-0.5 ml-1">
+                                <button
+                                  onClick={() => handleTestFeedback(currentTestSession!.id, msg.id, 'good')}
+                                  className="text-xs text-gray-400 hover:text-green-500 transition-colors"
+                                  title="好评"
+                                >👍</button>
+                                <button
+                                  onClick={() => handleTestFeedback(currentTestSession!.id, msg.id, 'bad')}
+                                  className="text-xs text-gray-400 hover:text-red-500 transition-colors"
+                                  title="差评"
+                                >👎</button>
+                              </div>
+                              <span className="text-[10px] text-gray-400">
+                                {msg.timestamp.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {testLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-gray-100 rounded-lg px-3 py-2">
+                        <div className="flex items-center gap-2">
+                          <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-gray-400" />
+                          <span className="text-xs text-muted-foreground">AI 客服回复中...</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {activeTestSession && (
+                  <div className="border-t p-3">
+                    <form onSubmit={sendTestMessage} className="flex gap-2">
+                      <Input
+                        value={testInput}
+                        onChange={(e) => setTestInput(e.target.value)}
+                        placeholder="扮演买家输入消息..."
+                        disabled={testLoading}
+                        className="flex-1 text-sm"
+                      />
+                      <Button type="submit" size="sm" disabled={!testInput.trim() || testLoading}>
+                        发送
+                      </Button>
+                    </form>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        )}
       </section>
 
       {/* ── 最近对话列表 ── */}
