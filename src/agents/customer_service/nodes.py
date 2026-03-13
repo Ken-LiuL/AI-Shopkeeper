@@ -1206,6 +1206,7 @@ async def chat(
         else:
             error_code = "llm_unknown_error"
 
+        error_detail = err_text[:240]
         logger.error(f"Chat function failed [{error_code}]: {e}")
         return {
             "session_id": session_id,
@@ -1214,6 +1215,7 @@ async def chat(
             "sources": [],
             "needs_human": True,  # 出错时转人工
             "error_code": error_code,
+            "error_detail": error_detail,
         }
 
 

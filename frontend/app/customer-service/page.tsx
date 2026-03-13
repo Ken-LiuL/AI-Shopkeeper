@@ -37,6 +37,7 @@ interface TestMessage {
   needsHuman?: boolean;
   confidence?: number;
   errorCode?: string;
+  errorDetail?: string;
 }
 
 // ── Stat Card ─────────────────────────────────────────────────
@@ -172,6 +173,7 @@ function CustomerServicePage() {
         intent?: string;
         needs_human?: boolean;
         error_code?: string;
+        error_detail?: string;
       }>('/customer-service/chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -188,6 +190,7 @@ function CustomerServicePage() {
         intent: response.intent,
         needsHuman: response.needs_human,
         errorCode: response.error_code,
+        errorDetail: response.error_detail,
       };
 
       setTestSessions(prev => prev.map(s =>
@@ -515,7 +518,11 @@ function CustomerServicePage() {
                                 </Badge>
                               )}
                               {msg.errorCode && (
-                                <Badge variant="outline" className="text-[10px] h-4 px-1 border-red-200 text-red-600">
+                                <Badge
+                                  variant="outline"
+                                  className="text-[10px] h-4 px-1 border-red-200 text-red-600"
+                                  title={msg.errorDetail || msg.errorCode}
+                                >
                                   错误: {msg.errorCode}
                                 </Badge>
                               )}

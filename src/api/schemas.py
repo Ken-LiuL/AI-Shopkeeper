@@ -83,6 +83,7 @@ class ChatResponse(BaseModel):
     sources: list[dict[str, Any]] = Field(default_factory=list)
     needs_human: bool = False
     error_code: str | None = None
+    error_detail: str | None = None
 
 
 class SessionListItem(BaseModel):
