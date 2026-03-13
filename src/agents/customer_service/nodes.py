@@ -637,6 +637,65 @@ _knowledge_base_cache: list[dict] | None = None
 _cache_loaded = False
 
 
+def _filter_relevant_knowledge(
+    knowledge_base: list[dict], message: str, intent: str, max_items: int = 15
+) -> list[dict]:
+    """按相关性筛选知识库条目，避免全量注入 prompt。"""
+    if not knowledge_base:
+        return []
+
+    message_lower = message.lower()
+    scored_items: list[tuple[float, dict]] = []
+
+    intent_category_map = {
+        "product_inquiry": ["商品", "产品", "功能", "规格"],
+        "usage_question": ["使用", "用法", "注意事项"],
+        "recommendation": ["推荐", "适用", "人群"],
+        "comparison": ["对比", "区别", "差异"],
+        "logistics": ["物流", "配送", "快递", "发货"],
+        "after_sales": ["售后", "退货", "换货", "退款", "质量"],
+        "complaint": ["投诉", "售后", "处理"],
+        "medical_advice": ["医疗", "健康", "安全"],
+        "greeting": [],
+    }
+
+    intent_keywords = intent_category_map.get(intent, [])
+
+    for item in knowledge_base:
+        score = 0.0
+        question = (item.get("question") or "").lower()
+        answer = (item.get("answer") or "").lower()
+        category = (item.get("category") or "").lower()
+        keywords = item.get("keywords") or []
+        item_text = f"{question} {answer} {category}"
+
+        for word in message_lower.split():
+            if len(word) >= 2 and word in item_text:
+                score += 2.0
+
+        if message_lower in question or question in message_lower:
+            score += 5.0
+
+        for kw in keywords:
+            if isinstance(kw, str) and kw.lower() in message_lower:
+                score += 3.0
+
+        for ik in intent_keywords:
+            if ik in category or ik in item_text:
+                score += 1.0
+
+        priority = item.get("priority", 0) or 0
+        score += priority * 0.5
+
+        scored_items.append((score, item))
+
+    scored_items.sort(key=lambda x: -x[0])
+    result = [item for _, item in scored_items[:max_items]]
+
+    logger.info(f"[CS] Knowledge filtered: {len(knowledge_base)} -> {len(result)} items")
+    return result
+
+
 async def chat(
     session_id: str,
     message: str,
@@ -828,6 +887,12 @@ async def chat(
                         "\n\n注意：用户有些不耐烦，请简洁高效回复，快速给出解决方案。"
                     )
 
+        relevant_knowledge = knowledge_base
+        if knowledge_base and len(knowledge_base) > 20:
+            relevant_knowledge = _filter_relevant_knowledge(
+                knowledge_base, message, intent_result.get("intent", "")
+            )
+
         if pool and not product_results:
             # Fallback：降级到纯向量检索
             product_results = await search_products_with_embedding(message, pool)
@@ -850,7 +915,7 @@ async def chat(
             )
 
             system_prompt = build_optimized_system_prompt(
-                knowledge_base=knowledge_base,
+                knowledge_base=relevant_knowledge,
                 after_sales_scripts=AFTER_SALES_SCRIPTS,
                 customer_profile_str=customer_profile_str if customer_profile_str else None,
             )
@@ -865,7 +930,7 @@ async def chat(
             )
 
             system_prompt = build_system_prompt(
-                knowledge_base=knowledge_base, after_sales_scripts=AFTER_SALES_SCRIPTS
+                knowledge_base=relevant_knowledge, after_sales_scripts=AFTER_SALES_SCRIPTS
             )
             use_optimized = False
             logger.warning("Using fallback prompts")

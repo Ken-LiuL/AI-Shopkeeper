@@ -7,6 +7,7 @@ from collections import OrderedDict
 from datetime import UTC
 
 from fastapi import APIRouter, Query
+from fastapi.responses import StreamingResponse
 
 from src.db import redis as redis_db
 from src.services.session_manager import SessionManager
@@ -190,13 +191,24 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
         from src.db import postgres as pg_db
 
         pool = pg_db.get_pool()
+        history: list[dict] = []
+        if request.session_id and request.session_id != "auto-reply":
+            sm = _get_session_manager()
+            if sm is not None:
+                try:
+                    if await sm.session_exists(request.session_id):
+                        history = await sm.get_history(request.session_id, limit=10)
+                except Exception:
+                    pass
+            else:
+                history = _mem_ensure(request.session_id)[-10:]
 
         result = await asyncio.wait_for(
             cs_chat(
-                session_id="auto-reply",
+                session_id=request.session_id or "auto-reply",
                 message=request.message,
                 pool=pool,
-                conversation_history=[],
+                conversation_history=history,
                 images=getattr(request, "images", None),
             ),
             timeout=_timeout_seconds,
@@ -237,6 +249,73 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
             },
             message="自动回复失败，建议转人工",
         )
+
+
+@router.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """流式客服回复（SSE），提供更快的首字响应体验。"""
+    import json as _json
+
+    from src.agents.customer_service.nodes import chat as cs_chat
+    from src.db import postgres as pg_db
+
+    sm = _get_session_manager()
+    pool = pg_db.get_pool()
+
+    if sm is not None and await sm.session_exists(request.session_id):
+        if not await sm.acquire_lock(request.session_id, timeout=30):
+            async def _busy():
+                yield f"data: {_json.dumps({'type': 'error', 'message': 'Session is busy'})}\n\n"
+
+            return StreamingResponse(_busy(), media_type="text/event-stream")
+        use_redis = True
+        history = await sm.get_history(request.session_id, limit=20)
+        session_summary = await sm.get_summary(request.session_id)
+        await sm.add_message(request.session_id, "user", request.message)
+    else:
+        use_redis = False
+        history = _mem_ensure(request.session_id)[-20:]
+        session_summary = _mem_summaries.get(request.session_id, "")
+        _mem_add(request.session_id, "user", request.message)
+
+    if session_summary:
+        history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
+
+    async def _stream():
+        try:
+            result = await cs_chat(
+                session_id=request.session_id,
+                message=request.message,
+                pool=pool,
+                conversation_history=history,
+                images=request.images,
+            )
+
+            reply = result.get("reply", "")
+            chunk_size = 10
+            for i in range(0, len(reply), chunk_size):
+                chunk = reply[i:i + chunk_size]
+                yield (
+                    f"data: {_json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+                )
+
+            if use_redis:
+                await sm.add_message(request.session_id, "assistant", reply)
+            else:
+                _mem_add(request.session_id, "assistant", reply)
+
+            yield (
+                "data: "
+                f"{_json.dumps({'type': 'done', 'reply': reply, 'intent': result.get('intent'), 'needs_human': result.get('needs_human', False)}, ensure_ascii=False)}\n\n"
+            )
+        except Exception as e:
+            logger.error("Stream chat failed: %s", e)
+            yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        finally:
+            if use_redis:
+                await sm.release_lock(request.session_id)
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 # ── List sessions ─────────────────────────────────────────────
