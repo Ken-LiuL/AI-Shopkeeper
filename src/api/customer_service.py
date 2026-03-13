@@ -152,6 +152,7 @@ async def chat(
         intent = result.get("intent")
         sources = result.get("sources", [])
         needs_human = result.get("needs_human", False)
+        error_code = result.get("error_code")
 
         # Store assistant message
         if use_redis:
@@ -166,6 +167,7 @@ async def chat(
                 intent=intent,
                 sources=sources,
                 needs_human=needs_human,  # 添加新字段
+                error_code=error_code,
             )
         )
     finally:

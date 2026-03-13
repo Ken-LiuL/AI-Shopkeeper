@@ -1088,24 +1088,14 @@ async def chat(
                 trace_name="customer_service_vision_chat",
             )
         else:
-            # Use regular text model (primary: Sonnet, fallback: DeepSeek)
-            try:
-                result = await call_tool(
-                    prompt=user_message_with_context,
-                    tool=tool_schema,
-                    model=MODEL_SONNET,
-                    system=system_prompt,
-                    trace_name="customer_service_chat",
-                )
-            except Exception as e:
-                logger.warning(f"[CS] Sonnet call failed, fallback to DeepSeek: {e}")
-                result = await call_tool(
-                    prompt=user_message_with_context,
-                    tool=tool_schema,
-                    model=MODEL_DEEPSEEK,
-                    system=system_prompt,
-                    trace_name="customer_service_chat_fallback_deepseek",
-                )
+            # Use regular text model (Sonnet only)
+            result = await call_tool(
+                prompt=user_message_with_context,
+                tool=tool_schema,
+                model=MODEL_SONNET,
+                system=system_prompt,
+                trace_name="customer_service_chat",
+            )
 
         # 6. 提取结果
         reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
@@ -1205,13 +1195,25 @@ async def chat(
         }
 
     except Exception as e:
-        logger.error(f"Chat function failed: {e}")
+        err_text = str(e)
+        err_lower = err_text.lower()
+        if "timeout" in err_lower:
+            error_code = "llm_timeout"
+        elif "rate" in err_lower or "429" in err_lower:
+            error_code = "llm_rate_limit"
+        elif "auth" in err_lower or "key" in err_lower or "401" in err_lower:
+            error_code = "llm_auth_error"
+        else:
+            error_code = "llm_unknown_error"
+
+        logger.error(f"Chat function failed [{error_code}]: {e}")
         return {
             "session_id": session_id,
-            "reply": "亲，系统繁忙，请稍后重试或联系人工客服🙏",
+            "reply": f"亲，系统繁忙，请稍后重试或联系人工客服🙏（错误码: {error_code}）",
             "intent": "other",
             "sources": [],
             "needs_human": True,  # 出错时转人工
+            "error_code": error_code,
         }
 
 

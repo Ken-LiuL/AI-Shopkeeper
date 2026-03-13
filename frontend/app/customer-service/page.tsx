@@ -36,6 +36,7 @@ interface TestMessage {
   intent?: string;
   needsHuman?: boolean;
   confidence?: number;
+  errorCode?: string;
 }
 
 // ── Stat Card ─────────────────────────────────────────────────
@@ -170,6 +171,7 @@ function CustomerServicePage() {
         reply: string;
         intent?: string;
         needs_human?: boolean;
+        error_code?: string;
       }>('/customer-service/chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -185,6 +187,7 @@ function CustomerServicePage() {
         timestamp: new Date(),
         intent: response.intent,
         needsHuman: response.needs_human,
+        errorCode: response.error_code,
       };
 
       setTestSessions(prev => prev.map(s =>
@@ -212,7 +215,7 @@ function CustomerServicePage() {
         body: JSON.stringify({
           session_id: sessionId,
           message_id: messageId,
-          rating: rating === 'good' ? 5 : 1,
+          rating,
           comment: `测试反馈: ${rating}`,
         }),
       });
@@ -509,6 +512,11 @@ function CustomerServicePage() {
                               {msg.needsHuman && (
                                 <Badge variant="destructive" className="text-[10px] h-4 px-1">
                                   需转人工
+                                </Badge>
+                              )}
+                              {msg.errorCode && (
+                                <Badge variant="outline" className="text-[10px] h-4 px-1 border-red-200 text-red-600">
+                                  错误: {msg.errorCode}
                                 </Badge>
                               )}
                               <div className="flex gap-0.5 ml-1">
