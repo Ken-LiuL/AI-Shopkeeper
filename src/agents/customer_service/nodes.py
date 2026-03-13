@@ -11,7 +11,7 @@ import contextlib
 import json
 import logging
 
-from ..llm import MODEL_SONNET, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ async def _summarize_conversation(messages: list[dict]) -> str:
                     "required": ["summary"],
                 },
             },
-            model=MODEL_SONNET,
+            model=MODEL_DEEPSEEK,
             system="你是一个对话摘要助手，请简洁提炼对话要点。",
             trace_name="conversation_summary",
         )
@@ -1088,14 +1088,24 @@ async def chat(
                 trace_name="customer_service_vision_chat",
             )
         else:
-            # Use regular text model
-            result = await call_tool(
-                prompt=user_message_with_context,
-                tool=tool_schema,
-                model=MODEL_SONNET,
-                system=system_prompt,
-                trace_name="customer_service_chat",
-            )
+            # Use regular text model (primary: Sonnet, fallback: DeepSeek)
+            try:
+                result = await call_tool(
+                    prompt=user_message_with_context,
+                    tool=tool_schema,
+                    model=MODEL_SONNET,
+                    system=system_prompt,
+                    trace_name="customer_service_chat",
+                )
+            except Exception as e:
+                logger.warning(f"[CS] Sonnet call failed, fallback to DeepSeek: {e}")
+                result = await call_tool(
+                    prompt=user_message_with_context,
+                    tool=tool_schema,
+                    model=MODEL_DEEPSEEK,
+                    system=system_prompt,
+                    trace_name="customer_service_chat_fallback_deepseek",
+                )
 
         # 6. 提取结果
         reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
