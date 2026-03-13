@@ -7,6 +7,7 @@ CustomerService Agent 新版实现 - 完整检索管线
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 
@@ -145,13 +146,15 @@ async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
             reranked = merged_dicts[:5]
 
         # ── Step 5: GraphRAG 子图丰富 ────────────────────────────────
-        enriched: list[dict] = []
-        for product in reranked:
+        async def _enrich_product(product: dict) -> dict:
             enriched_product = dict(product)
             try:
                 product_id = enriched_product.get("id")
                 if product_id:
-                    graph_ctx = await neo4j_skill.get_product_graph(product_id)
+                    graph_ctx, deep_ctx = await asyncio.gather(
+                        neo4j_skill.get_product_graph(product_id),
+                        neo4j_skill.get_deep_context(product_id),
+                    )
                     if graph_ctx:
                         enriched_product["suitable_for"] = graph_ctx.suitable_for or []
                         enriched_product["contraindicated_for"] = [
@@ -165,7 +168,6 @@ async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
                             for r in (graph_ctx.related_products or [])
                         ]
                         enriched_product["scenarios"] = graph_ctx.scenarios or []
-                    deep_ctx = await neo4j_skill.get_deep_context(product_id)
                     if deep_ctx:
                         competitors = deep_ctx.get("competitors") or []
                         seasons = deep_ctx.get("seasons") or []
@@ -182,7 +184,11 @@ async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
                 logger.warning(
                     f"[CS] GraphRAG enrichment failed for {enriched_product.get('id')} (graceful): {e}"
                 )
-            enriched.append(enriched_product)
+            return enriched_product
+
+        enriched = await asyncio.gather(
+            *(_enrich_product(product) for product in reranked)
+        )
 
         logger.info(f"[CS] Pipeline complete: {len(enriched)} enriched products")
         return enriched
@@ -526,6 +532,106 @@ async def _log_conversation(
         logger.warning(f"Failed to log conversation: {e}")
 
 
+async def _load_business_context(pool) -> dict:
+    """并发加载业务数据上下文。"""
+    if not pool:
+        return {}
+
+    async def _load_orders_and_customers() -> dict:
+        with contextlib.suppress(Exception):
+            dm = await pool.fetchrow("""
+                SELECT COALESCE(SUM(transaction_volume),0)::int AS orders,
+                       COALESCE(SUM(deal_amount),0) AS gmv,
+                       CASE WHEN SUM(transaction_volume)>0 THEN SUM(deal_amount)/SUM(transaction_volume) ELSE 0 END AS avg_ov,
+                       COALESCE(SUM(total_customers),0)::int AS customers,
+                       COALESCE(SUM(new_customers),0)::int AS new_cust
+                FROM qnh_daily_metrics
+                WHERE metric_date >= CURRENT_DATE - INTERVAL '1 day'
+            """)
+            if dm and dm["orders"] > 0:
+                return {
+                    "orders": {
+                        "count": dm["orders"],
+                        "gmv": round(float(dm["gmv"]), 2),
+                        "avg_order_value": round(float(dm["avg_ov"]), 2),
+                    },
+                    "customers": {
+                        "total": dm["customers"],
+                        "new": dm["new_cust"],
+                        "old": dm["customers"] - dm["new_cust"],
+                    },
+                }
+        return {}
+
+    async def _load_exposure() -> dict:
+        with contextlib.suppress(Exception):
+            exposure = await pool.fetchrow("""
+                SELECT COALESCE(AVG(exposure_uv),0)::int AS uv,
+                       COALESCE(AVG(exposure_pv),0)::int AS pv
+                FROM qnh_daily_metrics
+                WHERE metric_date >= CURRENT_DATE - INTERVAL '1 day'
+            """)
+            if exposure:
+                return {"exposure": {"uv": exposure["uv"], "pv": exposure["pv"]}}
+        return {}
+
+    async def _load_inventory() -> dict:
+        with contextlib.suppress(Exception):
+            inv = await pool.fetchrow("""
+                SELECT COUNT(*) FILTER (WHERE status='active') AS total,
+                       COUNT(*) FILTER (WHERE status='active' AND stock<5) AS low_stock,
+                       COUNT(*) FILTER (WHERE status='active' AND stock=0) AS oos
+                FROM qnh_products
+            """)
+            if inv:
+                return {
+                    "inventory": {
+                        "total": inv["total"],
+                        "low_stock": inv["low_stock"],
+                        "out_of_stock": inv["oos"],
+                    }
+                }
+        return {}
+
+    async def _load_top_products() -> dict:
+        with contextlib.suppress(Exception):
+            tops = await pool.fetch("""
+                SELECT name, monthly_sales, retail_price
+                FROM qnh_products
+                WHERE status='active' AND monthly_sales>0
+                ORDER BY monthly_sales DESC
+                LIMIT 5
+            """)
+            if tops:
+                return {
+                    "top_products": [
+                        {
+                            "name": r["name"],
+                            "sales": r["monthly_sales"],
+                            "price": float(r["retail_price"] or 0),
+                        }
+                        for r in tops
+                    ]
+                }
+        return {}
+
+    try:
+        parts = await asyncio.gather(
+            _load_orders_and_customers(),
+            _load_inventory(),
+            _load_top_products(),
+            _load_exposure(),
+        )
+        business_context: dict = {}
+        for part in parts:
+            business_context.update(part)
+        logger.info(f"Business context loaded: {list(business_context.keys())}")
+        return business_context
+    except Exception as e:
+        logger.warning(f"Failed to load business context: {e}")
+        return {}
+
+
 # 全局知识库缓存
 _knowledge_base_cache: list[dict] | None = None
 _cache_loaded = False
@@ -569,98 +675,165 @@ async def chat(
         # 1.5 对话摘要：超过6轮（12条）时压缩早期历史
         effective_history = conversation_history or []
         conversation_summary = ""
+        history_to_summarize: list[dict] = []
         if effective_history and len(effective_history) > 12:
             history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
-            conversation_summary = await _summarize_conversation(history_to_summarize)
             effective_history = effective_history[-6:]
-            logger.info("[CS] Long conversation compressed: kept 6 msgs + summary")
         conversation_history = effective_history
 
         faq_context = []
-        if pool:
-            # FAQ 快速匹配：命中后仅作为上下文参考，不直接返回给用户
-            faq_context = await _search_auto_faq_context(message, pool)
-
-        # 2. 搜索相关商品（完整管线：Hybrid Search → Reranker → GraphRAG）
         product_results = []
-        if pool:
-            product_results = await _full_pipeline_search(message, pool)
-            if not product_results:
-                # Fallback：降级到纯向量检索
-                product_results = await search_products_with_embedding(message, pool)
-
-        # 2.5 获取实时经营数据（用于回答业务问题）
         business_context = {}
-        if pool:
-            try:
-                import contextlib
-                # 订单/经营数据
-                with contextlib.suppress(Exception):
-                    dm = await pool.fetchrow("""
-                        SELECT COALESCE(SUM(transaction_volume),0)::int AS orders,
-                               COALESCE(SUM(deal_amount),0) AS gmv,
-                               CASE WHEN SUM(transaction_volume)>0 THEN SUM(deal_amount)/SUM(transaction_volume) ELSE 0 END AS avg_ov,
-                               COALESCE(SUM(total_customers),0)::int AS customers,
-                               COALESCE(SUM(new_customers),0)::int AS new_cust,
-                               COALESCE(AVG(exposure_uv),0)::int AS uv,
-                               COALESCE(AVG(exposure_pv),0)::int AS pv
-                        FROM qnh_daily_metrics
-                        WHERE metric_date >= CURRENT_DATE - INTERVAL '1 day'
-                    """)
-                    if dm and dm["orders"] > 0:
-                        business_context["orders"] = {"count": dm["orders"], "gmv": round(float(dm["gmv"]),2), "avg_order_value": round(float(dm["avg_ov"]),2)}
-                        business_context["customers"] = {"total": dm["customers"], "new": dm["new_cust"], "old": dm["customers"]-dm["new_cust"]}
-                        business_context["exposure"] = {"uv": dm["uv"], "pv": dm["pv"]}
-
-                # 库存状况
-                with contextlib.suppress(Exception):
-                    inv = await pool.fetchrow("""
-                        SELECT COUNT(*) FILTER (WHERE status='active') AS total,
-                               COUNT(*) FILTER (WHERE status='active' AND stock<5) AS low_stock,
-                               COUNT(*) FILTER (WHERE status='active' AND stock=0) AS oos
-                        FROM qnh_products
-                    """)
-                    if inv:
-                        business_context["inventory"] = {"total": inv["total"], "low_stock": inv["low_stock"], "out_of_stock": inv["oos"]}
-
-                # 热销商品
-                with contextlib.suppress(Exception):
-                    tops = await pool.fetch("SELECT name, monthly_sales, retail_price FROM qnh_products WHERE status='active' AND monthly_sales>0 ORDER BY monthly_sales DESC LIMIT 5")
-                    if tops:
-                        business_context["top_products"] = [{"name": r["name"], "sales": r["monthly_sales"], "price": float(r["retail_price"] or 0)} for r in tops]
-
-                logger.info(f"Business context loaded: {list(business_context.keys())}")
-            except Exception as e:
-                logger.warning(f"Failed to load business context: {e}")
-
-        # 2.7 订单上下文 + 客户画像
         order_context_str = ""
         customer_profile_str = ""
+        intent_result = {}
+        sentiment = "neutral"
+        emotion_instruction = ""
+
+        summary_task = None
+        faq_task = None
+        product_task = None
+        business_task = None
+        order_task = None
+        profile_task = None
+        intent_task = None
+        build_profile_context_str = None
+
+        if history_to_summarize:
+            summary_task = asyncio.create_task(
+                _summarize_conversation(history_to_summarize)
+            )
+
         if pool:
+            faq_task = asyncio.create_task(_search_auto_faq_context(message, pool))
+
+            async def _run_product_pipeline() -> list[dict]:
+                try:
+                    return await asyncio.wait_for(
+                        _full_pipeline_search(message, pool),
+                        timeout=10.0,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("[CS] Pipeline timeout, falling back")
+                    return []
+
+            product_task = asyncio.create_task(_run_product_pipeline())
+            business_task = asyncio.create_task(_load_business_context(pool))
+
             try:
                 from .order_context import build_order_context_str, has_order_mention
+
                 if has_order_mention(message):
-                    order_context_str = await build_order_context_str(
-                        pool=pool,
-                        message=message,
+                    order_task = asyncio.create_task(
+                        build_order_context_str(
+                            pool=pool,
+                            message=message,
+                        )
                     )
             except Exception as e:
                 logger.debug(f"[CS] Order context load failed (non-critical): {e}")
 
             try:
-                from .customer_profile import build_profile_context_str, get_customer_profile
-                _profile = await get_customer_profile(pool, session_id=session_id)
-                customer_profile_str = build_profile_context_str(_profile)
+                from .customer_profile import (
+                    build_profile_context_str,
+                    get_customer_profile,
+                )
+
+                profile_task = asyncio.create_task(
+                    get_customer_profile(pool, session_id=session_id)
+                )
             except Exception as e:
                 logger.debug(f"[CS] Customer profile load failed (non-critical): {e}")
+
+        try:
+            from src.agents.customer_service.tracker import ConversationTracker
+
+            _tracker = ConversationTracker()
+            intent_task = asyncio.create_task(_tracker.classify_intent_llm(message))
+        except Exception:
+            intent_task = None
+
+        first_batch_tasks = [
+            task
+            for task in [
+                summary_task,
+                faq_task,
+                product_task,
+                business_task,
+                order_task,
+                profile_task,
+                intent_task,
+            ]
+            if task is not None
+        ]
+        if first_batch_tasks:
+            await asyncio.gather(*first_batch_tasks, return_exceptions=True)
+
+        def _consume_task_result(task, default=None):
+            if not task:
+                return default
+            if task.cancelled():
+                return default
+            try:
+                result = task.result()
+                if isinstance(result, BaseException):
+                    return default
+                return result
+            except Exception:
+                return default
+
+        if summary_task:
+            summary_result = _consume_task_result(summary_task, "")
+            if summary_result:
+                conversation_summary = summary_result
+                logger.info("[CS] Long conversation compressed: kept 6 msgs + summary")
+
+        if faq_task:
+            faq_context = _consume_task_result(faq_task, [])
+
+        if product_task:
+            product_results = _consume_task_result(product_task, [])
+
+        if business_task:
+            business_context = _consume_task_result(business_task, {})
+
+        if order_task:
+            order_context_str = _consume_task_result(order_task, "")
+
+        if profile_task:
+            profile_result = _consume_task_result(profile_task)
+            if profile_result is not None and build_profile_context_str:
+                try:
+                    customer_profile_str = build_profile_context_str(profile_result)
+                except Exception as e:
+                    logger.debug(f"[CS] Customer profile formatting failed (non-critical): {e}")
+
+        if intent_task:
+            intent_task_result = _consume_task_result(intent_task, {})
+            if intent_task_result:
+                intent_result = intent_task_result
+                sentiment = intent_result.get("sentiment", "neutral")
+                if sentiment == "angry":
+                    emotion_instruction = (
+                        "\n\n⚠️ 用户情绪激动，请特别注意：先共情安抚，再解决问题。"
+                        "避免机械回复。必要时主动提供补偿方案或转人工。"
+                    )
+                elif sentiment == "frustrated":
+                    emotion_instruction = (
+                        "\n\n注意：用户有些不耐烦，请简洁高效回复，快速给出解决方案。"
+                    )
+
+        if pool and not product_results:
+            # Fallback：降级到纯向量检索
+            product_results = await search_products_with_embedding(message, pool)
 
         # 2.6 新增补充上下文：售后政策 + 商品评价情感
         policy_context = []
         review_sentiment_context = []
         if pool:
-            policy_context = await _load_policy_documents_context(pool)
-            review_sentiment_context = await _load_review_sentiment_context(
-                pool, product_results
+            policy_context, review_sentiment_context = await asyncio.gather(
+                _load_policy_documents_context(pool),
+                _load_review_sentiment_context(pool, product_results),
             )
 
         # 3. 构建优化版系统提示词
@@ -693,26 +866,6 @@ async def chat(
             logger.warning("Using fallback prompts")
 
         # 3.5 LLM 意图+情感检测（替代关键词规则）
-        sentiment = "neutral"
-        emotion_instruction = ""
-        intent_result = {}
-        try:
-            from src.agents.customer_service.tracker import ConversationTracker
-
-            _tracker = ConversationTracker()
-            intent_result = await _tracker.classify_intent_llm(message)
-            sentiment = intent_result.get("sentiment", "neutral")
-
-            if sentiment == "angry":
-                emotion_instruction = (
-                    "\n\n⚠️ 用户情绪激动，请特别注意：先共情安抚，再解决问题。"
-                    "避免机械回复。必要时主动提供补偿方案或转人工。"
-                )
-            elif sentiment == "frustrated":
-                emotion_instruction = "\n\n注意：用户有些不耐烦，请简洁高效回复，快速给出解决方案。"
-        except Exception:
-            pass
-
         if emotion_instruction:
             system_prompt = f"{system_prompt}{emotion_instruction}"
 

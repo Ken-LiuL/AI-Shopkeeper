@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Redis key prefixes
 _SESSION_META = "cs:session:meta:"  # hash: customer_id, created_at, updated_at
 _SESSION_MSGS = "cs:session:msgs:"  # list of JSON messages
+_SESSION_SUMMARY = "cs:session:summary:"  # string: rolling summary
 _SESSION_LOCK = "cs:session:lock:"  # distributed lock
 _SESSION_INDEX = "cs:sessions"  # sorted set: session_id scored by updated_at
 _CUSTOMER_INDEX = "cs:customer:"  # sorted set per customer_id
@@ -84,6 +85,51 @@ class SessionManager:
         ts = datetime.now(UTC).timestamp()
         await self._r.zadd(_SESSION_INDEX, {session_id: ts})
 
+        # Rolling summary: refresh every 10 messages.
+        msg_count = int(await self._r.hget(meta_key, "message_count") or 0)
+        if msg_count > 0 and msg_count % 10 == 0:
+            await self._update_rolling_summary(session_id)
+
+    async def _update_rolling_summary(self, session_id: str) -> None:
+        """Generate and store a rolling summary for earlier messages."""
+        try:
+            msg_key = f"{_SESSION_MSGS}{session_id}"
+            raw_messages = await self._r.lrange(msg_key, 0, -7)
+            if not raw_messages:
+                return
+
+            messages = [json.loads(message) for message in raw_messages]
+
+            try:
+                from src.agents.customer_service.nodes import _summarize_conversation
+
+                summary = await _summarize_conversation(messages)
+            except Exception as exc:
+                logger.warning("Failed to import/use LLM summarizer, fallback to text: %s", exc)
+                lines = []
+                for message in messages[-10:]:
+                    role = "用户" if message.get("role") == "user" else "客服"
+                    content = (message.get("content") or "")[:100]
+                    lines.append(f"{role}：{content}")
+                summary = "\n".join(lines)
+
+            if summary:
+                summary_key = f"{_SESSION_SUMMARY}{session_id}"
+                existing = await self._r.get(summary_key)
+                if existing:
+                    summary = f"{existing}\n{summary}"
+                if len(summary) > 2000:
+                    summary = summary[-2000:]
+                await self._r.set(summary_key, summary, ex=SESSION_TTL)
+                logger.info("Updated rolling summary for session %s", session_id)
+        except Exception as exc:
+            logger.warning("Failed to update rolling summary: %s", exc)
+
+    async def get_summary(self, session_id: str) -> str:
+        """Return the stored session summary."""
+        summary_key = f"{_SESSION_SUMMARY}{session_id}"
+        return (await self._r.get(summary_key)) or ""
+
     # ── Locking ───────────────────────────────────────────────
 
     async def acquire_lock(self, session_id: str, timeout: int = 30) -> bool:
@@ -142,6 +188,7 @@ class SessionManager:
         pipe = self._r.pipeline()
         pipe.delete(meta_key)
         pipe.delete(f"{_SESSION_MSGS}{session_id}")
+        pipe.delete(f"{_SESSION_SUMMARY}{session_id}")
         pipe.delete(f"{_SESSION_LOCK}{session_id}")
         pipe.zrem(_SESSION_INDEX, session_id)
         if customer_id:

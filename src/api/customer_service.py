@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 _MAX_MEM_SESSIONS = 200
 _MAX_HISTORY = 50
 _mem_sessions: OrderedDict[str, list[dict]] = OrderedDict()
+_mem_summaries: dict[str, str] = {}
 
 
 def _mem_ensure(session_id: str) -> list[dict]:
@@ -45,7 +46,24 @@ def _mem_add(session_id: str, role: str, content: str) -> None:
     history = _mem_ensure(session_id)
     history.append({"role": role, "content": content})
     if len(history) > _MAX_HISTORY:
+        overflow = history[: len(history) - _MAX_HISTORY]
+        _mem_update_summary(session_id, overflow)
         del history[: len(history) - _MAX_HISTORY]
+
+
+def _mem_update_summary(session_id: str, messages: list[dict]) -> None:
+    """Synchronously fold trimmed messages into a simple text summary."""
+    lines = []
+    for message in messages:
+        role = "用户" if message.get("role") == "user" else "客服"
+        content = (message.get("content") or "")[:100]
+        lines.append(f"{role}：{content}")
+    new_summary = "\n".join(lines)
+    existing = _mem_summaries.get(session_id, "")
+    combined = f"{existing}\n{new_summary}" if existing else new_summary
+    if len(combined) > 2000:
+        combined = combined[-2000:]
+    _mem_summaries[session_id] = combined
 
 
 def _get_session_manager() -> SessionManager | None:
@@ -108,11 +126,16 @@ async def chat(
             raise AppError("Session is busy, please retry", status_code=429)
         use_redis = True
         history = await sm.get_history(request.session_id, limit=20)
+        session_summary = await sm.get_summary(request.session_id)
         await sm.add_message(request.session_id, "user", request.message)
     else:
         use_redis = False
         history = _mem_ensure(request.session_id)[-20:]
+        session_summary = _mem_summaries.get(request.session_id, "")
         _mem_add(request.session_id, "user", request.message)
+
+    if session_summary:
+        history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
 
     try:
         # Call new simplified chat function
