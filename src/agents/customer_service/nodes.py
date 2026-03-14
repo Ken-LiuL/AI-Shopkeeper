@@ -19,6 +19,64 @@ from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
 logger = logging.getLogger(__name__)
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 快速意图预判 + 上下文预算器（不额外调 LLM）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+def _quick_intent_guess(message: str) -> str:
+    """基于关键词的快速意图预判，用于上下文路由（不需要精确）"""
+    m = message.lower()
+    # 投诉（优先级最高，涉及升级）
+    if any(kw in m for kw in ["投诉", "举报", "315", "律师", "消协", "骗"]):
+        return "complaint"
+    # 售后
+    if any(kw in m for kw in ["退", "换", "坏了", "破损", "过期", "质量"]):
+        return "after_sales"
+    # 医疗建议（需在推荐之前检查）
+    if any(kw in m for kw in ["吃什么药", "用药", "治疗", "诊断", "处方", "药"]):
+        return "medical_advice"
+    # 物流（含"订单"+"还没到"等组合）
+    if any(kw in m for kw in ["发货", "物流", "送到", "配送", "骑手", "多久到", "还没到", "催单"]):
+        return "logistics"
+    if "订单" in m and any(kw in m for kw in ["还没", "多久", "到了吗", "在哪", "怎么"]):
+        return "logistics"
+    # 对比（需在推荐之前检查，因为"哪个好"可能同时命中）
+    if any(kw in m for kw in ["对比", "区别", "vs", "哪个更"]):
+        return "comparison"
+    if any(kw in m for kw in ["和", "跟"]) and any(kw in m for kw in ["哪个好", "哪个更", "区别", "好"]):
+        return "comparison"
+    # 使用问题
+    if any(kw in m for kw in ["怎么用", "用法", "用量", "一盒", "能用多久"]):
+        return "usage_question"
+    # 推荐
+    if any(kw in m for kw in ["推荐", "有没有", "哪个好", "哪款", "什么牌子"]):
+        return "recommendation"
+    # 问候
+    if any(kw in m for kw in ["你好", "在吗", "hi", "hello"]):
+        return "greeting"
+    # 商品咨询
+    if any(kw in m for kw in ["价格", "多少钱", "贵", "便宜", "打折"]):
+        return "product_inquiry"
+    return "other"
+
+
+def _select_context_by_intent(intent: str) -> set:
+    """返回该意图下应注入的上下文类型（上下文预算器）"""
+    INTENT_CONTEXT_MAP = {
+        "product_inquiry": {"products", "faq"},
+        "recommendation": {"products", "faq"},
+        "usage_question": {"products", "faq"},
+        "comparison": {"products"},
+        "logistics": {"order", "faq"},
+        "after_sales": {"policy", "order"},
+        "complaint": {"policy", "order", "profile"},
+        "medical_advice": {"products", "policy"},
+        "greeting": set(),
+        "other": {"faq"},
+    }
+    return INTENT_CONTEXT_MAP.get(intent, {"faq"})
+
+
 async def _summarize_conversation(messages: list[dict]) -> str:
     """使用 LLM 总结对话历史，避免 context 过长
 
@@ -978,10 +1036,19 @@ async def chat(
             review_sentiment_context = _review_r if isinstance(_review_r, list) else []
             dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
 
+        # ── 快速意图预判（用于上下文路由，不依赖 LLM） ──────────────
+        quick_intent = _quick_intent_guess(message)
+        # 如果 intent_result 有 LLM 结果就用 LLM 的，否则用快速预判
+        current_intent = intent_result.get("intent") if intent_result else quick_intent
+        if current_intent == "other":
+            current_intent = quick_intent  # LLM 也不确定时用规则兜底
+        logger.info(f"[CS] Intent routing: quick={quick_intent}, llm={intent_result.get('intent', 'N/A')}, final={current_intent}")
+
         # 3. 构建优化版系统提示词
         try:
             from ..prompts.customer_service import AFTER_SALES_SCRIPTS
             from ..prompts.customer_service_optimized import (
+                SCENARIO_CONTEXTS,
                 build_optimized_system_prompt,
                 build_optimized_user_message_with_context,
             )
@@ -992,6 +1059,12 @@ async def chat(
                 customer_profile_str=customer_profile_str if customer_profile_str else None,
                 dynamic_few_shots=dynamic_few_shots if dynamic_few_shots else None,
             )
+
+            # 场景指引注入到 system prompt（按当前意图）
+            scenario_hint = SCENARIO_CONTEXTS.get(current_intent, "")
+            if scenario_hint:
+                system_prompt += f"\n\n# 当前场景指引\n{scenario_hint}"
+
             use_optimized = True
             logger.info("Using optimized prompts for better quality")
         except ImportError:
@@ -1062,8 +1135,9 @@ async def chat(
                 conversation_history=None,  # 不再把历史塞这里
                 product_results=product_results,
                 conversation_context=conversation_context,
-                business_context=business_context,
+                business_context=None,  # 永远不向买家暴露经营数据
                 dynamic_few_shots=dynamic_few_shots if dynamic_few_shots else None,
+                intent=current_intent,
             )
         else:
             from ..prompts.customer_service import build_user_message_with_context
@@ -1075,27 +1149,31 @@ async def chat(
                 conversation_context=conversation_context,
             )
 
-        # 5.2 附加补充上下文
+        # 5.2 上下文预算器：按意图选择性注入上下文（不再全量塞入）
+        allowed_contexts = _select_context_by_intent(current_intent)
+        logger.info(f"[CS] Context budget for intent '{current_intent}': {allowed_contexts}")
+
         extra_sections = []
-        if customer_profile_str:
+        if "profile" in allowed_contexts and customer_profile_str:
             extra_sections.append(customer_profile_str)
-        if order_context_str:
+        if "order" in allowed_contexts and order_context_str:
             extra_sections.append(order_context_str)
-        if faq_context:
+        if "faq" in allowed_contexts and faq_context:
             extra_sections.append(
-                "【FAQ 匹配参考（仅参考，不要逐字照搬）】\n"
-                + json.dumps(faq_context, ensure_ascii=False)
+                "【FAQ参考】\n"
+                + json.dumps(faq_context[:3], ensure_ascii=False)
             )
-        if policy_context:
+        if "policy" in allowed_contexts and policy_context:
             extra_sections.append(
-                "【售后政策参考】\n"
-                + json.dumps(policy_context, ensure_ascii=False)
+                "【售后政策】\n"
+                + json.dumps(policy_context[:3], ensure_ascii=False)
             )
-        if review_sentiment_context:
+        if "products" in allowed_contexts and review_sentiment_context:
             extra_sections.append(
-                "【商品评价情感参考】\n"
-                + json.dumps(review_sentiment_context, ensure_ascii=False)
+                "【商品评价】\n"
+                + json.dumps(review_sentiment_context[:3], ensure_ascii=False)
             )
+        # 注意：business_context（店铺经营数据）永远不注入客服回复
         if extra_sections:
             context_prompt = f"{context_prompt}\n\n" + "\n\n".join(extra_sections)
 

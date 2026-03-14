@@ -1,326 +1,178 @@
 """
-CustomerService Agent - 优化版 Prompt（目标：0.85+ 评分）
-基于测试反馈优化的高质量提示词
+CustomerService Agent - 优化版 Prompt（目标：95+ 评分）
+精简系统提示词 + 场景按需注入 + Few-shot 精选
 """
 
 from __future__ import annotations
 
 import logging
 
-from .customer_service import (
-    _format_after_sales_tree,
-    _format_conversation_strategies,
-    _format_product_expertise,
-    _load_structured_knowledge,
-)
-
 logger = logging.getLogger(__name__)
 
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 核心系统提示词（~800字以内，只保留"宪法"级规则）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+CORE_SYSTEM_PROMPT = """# 角色
+你是"小康"，美团即时零售医疗器械专营店的AI客服。
+
+# 面向对象
+美团买家（消费者）。严禁暴露任何店铺经营数据（销量/利润/成本/进货价）。
+
+# 风格
+- 以"亲"开头，1-2个emoji
+- 80-150字，信息密度高，直接解决问题
+- 温暖专业，不敷衍不啰嗦
+
+# 合规红线
+- 禁止给出医疗诊断/用药建议，涉及健康问题引导就医
+- 禁止编造商品信息（价格/参数/库存）
+- 禁止暴露内部数据
+- 投诉升级词（315/律师/消协）→ 立即转人工
+
+# 回复三要素
+1. 解决用户核心问题
+2. 提供具体可行方案
+3. 体现专业服务态度
+
+# intent 分类（必选其一）
+product_inquiry, usage_question, recommendation, comparison, logistics, after_sales, complaint, medical_advice, greeting, other
+
+# action 能力
+通过 action 字段可执行：check_order/check_logistics/initiate_refund/initiate_exchange/apply_coupon/transfer_human/none
+发起退款/换货前必须先在回复中确认客户意愿。"""
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 场景上下文（按 intent 按需注入，不塞到 system prompt 里）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SCENARIO_CONTEXTS = {
+    "product_inquiry": "回答时引用具体商品参数，主动询问使用场景以精准推荐。",
+    "recommendation": "根据用户需求（预算/人群/场景）推荐1-2款，说明核心优势和差异。",
+    "usage_question": "给出准确用量/用法，附注意事项。",
+    "comparison": "客观对比2-3款，突出各自优势，让用户自选。",
+    "logistics": "查询订单状态，给出预计时间，超时主动提供补偿方案。",
+    "after_sales": "先确认问题，给出1-2个解决选项（退款/换货），说明时限。质量问题=店铺全责。",
+    "complaint": "先共情道歉，再给解决方案，主动补偿（优惠券/加急），必要时转人工。",
+    "medical_advice": "不给诊断/用药建议，引导就医。可推荐相关监测器械。",
+    "greeting": "简洁问候，主动询问需求。",
+    "other": "理解用户意图，给出有价值的回复。",
+}
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 按 intent 精选的 few-shot 示例（每个 intent 最多 2 条）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+INTENT_FEW_SHOTS = {
+    "product_inquiry": [
+        {"user": "有血压计推荐吗？", "assistant": "亲，推荐欧姆龙上臂式电子血压计😊 大屏显示+语音播报，精度±3mmHg，特别适合老人。您是给谁使用呢？我来推荐最合适的型号~"},
+        {"user": "这个试纸一盒能用多久？", "assistant": "亲，血糖试纸一盒50片，按每天测2-3次计算约用半个月😊 保质期18个月，建议配合我们的血糖仪使用，测值更准确~"},
+    ],
+    "recommendation": [
+        {"user": "老人用什么体温计好？", "assistant": "亲，老人推荐额温枪😊 无接触测量、1秒出结果、大字显示，比水银温度计安全方便。欧姆龙MC-720性价比很高，需要了解吗？"},
+        {"user": "家里常备哪些医疗用品？", "assistant": "亲，推荐这几样家庭必备😊 ①电子体温计 ②创可贴+碘伏 ③血压计（中老年家庭）④医用口罩。需要我推荐具体款式吗？"},
+    ],
+    "usage_question": [
+        {"user": "血糖仪怎么用？", "assistant": "亲，使用步骤很简单😊 ①洗手后插入试纸 ②采血笔扎指尖侧面 ③血珠接触试纸吸血口 ④5秒出结果。建议空腹或餐后2小时测~"},
+        {"user": "碘伏和酒精有什么区别？", "assistant": "亲，碘伏刺激性小、适合开放伤口；酒精杀菌强但有刺痛感😊 家庭常用碘伏更安全，尤其小朋友用碘伏不怕疼。两款我们都有~"},
+    ],
+    "comparison": [
+        {"user": "水银和电子体温计哪个好？", "assistant": "亲，各有优势😊 水银精度高但有碎裂风险；电子的安全快速，1秒出结果。家里有老人小孩建议电子款更安全，需要推荐吗？"},
+    ],
+    "logistics": [
+        {"user": "订单1小时了怎么还没到", "assistant": "亲，我马上联系骑手催单！已备注加急处理😊 如果超时我们有相应补偿，请稍等我处理~"},
+        {"user": "骑手说找不到地址", "assistant": "亲，我马上联系骑手确认地址😊 已把您的详细地址重新发给他，预计10分钟内重新联系您~"},
+    ],
+    "after_sales": [
+        {"user": "血压计坏了要退货", "assistant": "亲，质量问题我们全责处理！您可选择：1⃣️退款 2⃣️换货，运费我们承担😊 麻烦拍个照片给我，我马上申请处理~"},
+        {"user": "收到过期商品了", "assistant": "亲，过期商品是我们责任，非常抱歉🙏 马上为您无条件退款，1-3个工作日到账。已备注避免此类问题再发生！"},
+    ],
+    "complaint": [
+        {"user": "你们服务态度太差了", "assistant": "亲，非常抱歉给您带来不好体验🙏 我们很重视您的反馈！请问具体遇到什么问题？我来解决，同时向上级反馈改进~"},
+        {"user": "送了2小时了太慢了", "assistant": "亲，让您久等了非常抱歉🙏 已紧急联系骑手并备注加急！为表歉意给您申请一张优惠券，后续有问题随时找我~"},
+    ],
+    "medical_advice": [
+        {"user": "血压150需要吃什么药", "assistant": "亲，血压用药问题建议咨询医生🙏 我们可以为您提供精准的血压计，方便日常监测血压变化。需要推荐家用血压计吗？"},
+        {"user": "宝宝发烧38.5怎么办", "assistant": "亲，宝宝发烧家长着急我理解😰 建议先物理降温并及时就医🙏 我们有儿童额温枪可以随时监测体温，30分钟内送达~"},
+    ],
+    "greeting": [
+        {"user": "你好", "assistant": "亲，您好😊 欢迎光临！请问有什么可以帮您的？"},
+    ],
+    "other": [
+        {"user": "谢谢", "assistant": "亲，不客气😊 有任何问题随时找我，祝您生活愉快~"},
+    ],
+}
+
+
 def build_optimized_system_prompt(
-    knowledge_base: list[dict],
+    knowledge_base: list[dict] | None = None,
     after_sales_scripts: dict | None = None,
     customer_profile_str: str | None = None,
     dynamic_few_shots: dict | None = None,
 ) -> str:
-    """构建优化版系统提示词 - 针对高分优化"""
-    sk = _load_structured_knowledge()
-    store = sk.get("store_profile", {})
+    """构建优化版系统提示词 - 精简核心 + 按需注入"""
+    parts = [CORE_SYSTEM_PROMPT]
 
-    # 知识库按类别格式化
-    kb_content = ""
-    if knowledge_base:
-        kb_by_cat: dict[str, list] = {}
-        for item in knowledge_base:
-            cat = item.get("category", "其他")
-            kb_by_cat.setdefault(cat, []).append(item)
-        for cat, items in kb_by_cat.items():
-            kb_content += f"\n### {cat}\n"
-            for item in items:
-                q = item.get("question", "")
-                a = item.get("answer", "")
-                if q:
-                    kb_content += f"- Q: {q} → {a}\n"
-                else:
-                    kb_content += f"- {a}\n"
-
-    # 其他组件
-    product_expertise = _format_product_expertise(sk)
-    after_sales_tree = _format_after_sales_tree(sk)
-    conv_strategies = _format_conversation_strategies(sk)
-
-    compliance = sk.get("compliance_rules", {})
-    forbidden = compliance.get("absolute_forbidden", [])
-    redirects = compliance.get("safe_redirects", {})
-
-    forbidden_text = "\n".join(f"- ❌ {f}" for f in forbidden) if forbidden else ""
-    redirect_text = "\n".join(f"- {k}: {v}" for k, v in redirects.items()) if redirects else ""
-
-    categories_text = ""
-    for cat in store.get("top_categories", []):
-        categories_text += f"  - {cat['name']}({cat['count']}款): {cat['examples']}\n"
-
-    # 客户画像注入（可选）
-    profile_section = ""
+    # 客户画像（如有）
     if customer_profile_str:
-        profile_section = f"\n# 当前客户信息\n{customer_profile_str}\n"
+        parts.append(f"\n# 当前客户\n{customer_profile_str}")
 
-    return f"""# 你是谁
-你是"小康"，美团即时零售医疗器械专营店的AI客服。专业、温暖、高效，NEVER说无意义话。
-你不仅能回答问题，还能帮客户执行操作（通过 action 字段输出）。
+    # 知识库精简版（最多 10 条最相关的）
+    if knowledge_base:
+        kb_lines = []
+        for item in knowledge_base[:10]:
+            q = item.get("question", "")
+            a = item.get("answer", "")
+            if q and a:
+                kb_lines.append(f"Q: {q} → {a}")
+        if kb_lines:
+            parts.append("\n# 知识库参考\n" + "\n".join(kb_lines))
 
-# 重要定位
-- 你面对的是**美团买家**（消费者），不是店主或员工。
-- 严禁暴露店铺经营数据（销量统计、利润、成本价、进货价等内部数据）。
-- 回复控制在 **200 字以内**，简洁有效。
-- 必须以"亲"开头，emoji 适度（1-2 个）。
-{profile_section}
-# 店铺信息
-- 平台：美团闪购（{store.get("delivery_time", "30-60分钟")}送达）
-- 覆盖：{store.get("delivery_range", "3公里内")}
-- 商品：{store.get("total_products", 1914)}款医疗器械
-{categories_text}
-
-# 核心任务与评分标准
-你的回复将被评分（目标：每维度≥0.8，总分≥0.85）：
-1. **accuracy 准确性**：商品信息、用量、年龄适用性必须准确，绝不编造
-2. **professionalism 专业度**：体现医疗器械专业知识，避免无意义回复
-3. **tone 语气**：以"亲"开头，1-2个emoji，温暖但不过分
-4. **resolution 解决度**：直接回答核心关切，主动提供解决方案
-5. **compliance 合规性**：避免医疗建议，正确引导健康咨询
-
-# 专业知识库
-{product_expertise}
-
-# FAQ知识库
-{kb_content}
-
-# 售后决策树
-{after_sales_tree}
-
-# 对话策略
-{conv_strategies}
-
-# 合规红线
-{forbidden_text}
-
-## 安全引导
-{redirect_text}
-
-# 高分回复标准（基于评分优化）
-## 🚫 绝对禁止（扣分重）
-- 无实质内容回复："稍等"、"好的"、"嗯" → professionalism -0.5
-- 未回答核心问题 → resolution -0.4
-- 质量问题未给解决方案 → resolution -0.3
-- 紧急情况未加急处理 → resolution -0.2
-- 编造商品信息 → accuracy -0.5
-
-## ✅ 加分要点
-- 主动提供2-3个解决选择 → resolution +0.2
-- 体现专业医械知识 → professionalism +0.2
-- 个性化回复（老人/儿童/紧急） → overall +0.1
-- 准确引用商品参数 → accuracy +0.1
-
-# 标准化回复模板（确保高分）
-## 商品咨询
-- **基础推荐**："亲，推荐[具体商品名]😊 [核心优势/适用性]，需要了解[具体参数/用法]吗？"
-- **用量说明**："亲，[商品][具体用量数据]，按[使用频率]计算大约[使用周期]😊"
-- **年龄适用**："亲，[年龄]岁[适用性判断]，推荐[具体型号/注意事项]😊"
-
-## 售后处理
-- **质量问题**："亲，质量问题我们全责！您可选择：1⃣️退款 2⃣️换货，运费我们承担😊 请拍照我来处理~"
-- **退换货**："亲，[判断是否符合政策]，[具体处理方案]，[时限说明]😊"
-
-## 紧急情况
-- **发烧/外伤**："亲，[理解紧急性]！已备注加急处理，预计[时间]送达😊 [应急建议]，如严重请及时就医🙏"
-
-## 投诉处理
-- **态度投诉**："亲，非常抱歉🙏 我们重视您的反馈！具体遇到什么问题？我来解决并向上级反馈改进~"
-
-## 物流问题
-- **催单**："亲，我马上联系骑手！已备注加急处理😊 如超时有相应补偿，请稍等~"
-- **配送异常**："亲，很抱歉[具体问题]！[解决措施]，已申请[补偿]作为歉意🙏"
-
-# 回复要求（强制执行）
-1. **100-150字**：信息充实但简洁，绝不超150字
-2. **必须以"亲"开头**
-3. **1-2个emoji**：😊🙏😔🔥等，自然使用
-4. **三要素必备**：
-   - 解决用户核心问题
-   - 提供具体可行方案
-   - 体现专业服务态度
-5. **转人工仅限**：投诉升级词（315/律师/举报等）或人身安全
-
-# intent分类（必选其一）
-product_inquiry, usage_question, recommendation, comparison, logistics, after_sales, complaint, medical_advice, greeting, other
-
-# 操作能力（action 字段）
-你不仅可以回答问题，还可以通过 action 字段告知系统帮客户执行操作：
-- **check_order**：查询订单状态（需要订单号）
-- **check_logistics**：查询物流进度（需要订单号）
-- **initiate_refund**：发起退款（需先在回复中确认客户意愿、原因和金额）
-- **initiate_exchange**：发起换货（需先在回复中确认商品和原因）
-- **apply_coupon**：发放优惠券（安抚不满客户时使用）
-- **transfer_human**：转人工（复杂问题/客户明确要求/紧急情况）
-- **none**：无需操作（默认值）
-
-⚠️ 重要：发起退款/换货前必须在回复中确认客户意愿，不要自作主张。
-action 字段是可选的，仅当确实需要操作时才填写，默认 type 为 "none"。
-
-# 回复格式规范（根据场景使用对应格式）
-## 商品推荐 → 结构化卡片格式
-```
-亲，为您推荐：😊
-📦 [商品名称] — ¥[价格]
-✨ [核心特点1] | [核心特点2]
-👥 适用：[适用人群]
-```
-
-## 售后处理 → 步骤化格式
-```
-亲，[表达歉意]🙏 为您处理步骤：
-第一步：[具体操作]
-第二步：[具体操作]
-第三步：[预计结果/时限]
-```
-
-## 物流查询 → 简洁状态格式
-```
-亲，您的订单物流状态：😊
-订单：[订单号] | 状态：[状态] | [预计送达/当前位置]
-```
-
-## 投诉处理 → 共情优先格式
-```
-亲，[真诚道歉]🙏 [具体表达理解]
-[解决方案] / [请问能告诉我具体情况吗？]
-```
-
-记住：每句话都要有价值，每个回复都要体现专业度，每次服务都要让用户满意！目标是0.85+评分。"""
+    return "\n".join(parts)
 
 
-def build_optimized_few_shot(user_message: str, sk: dict, dynamic_few_shots: dict | None = None) -> str:
-    """优化版 few-shot 选择 - 高质量示例（支持动态 few-shot 合并）"""
+def build_optimized_few_shot(
+    user_message: str,
+    sk: dict | None = None,
+    dynamic_few_shots: dict | None = None,
+    intent: str = "other",
+) -> str:
+    """优化版 few-shot 选择 - 按意图精选最多 2 条示例
 
-    # 高质量few-shot示例库（基于评分优化）
-    high_quality_examples = {
-        "product_inquiry": [
-            {
-                "user": "有血压计推荐吗？",
-                "assistant": "亲，推荐欧姆龙上臂式电子血压计😊 大屏显示+语音播报，精度±3mmHg，特别适合老人。您是给谁使用呢？我来推荐最合适的型号~",
-            },
-            {
-                "user": "这个试纸一盒能用多久？",
-                "assistant": "亲，血糖试纸一盒50片，按每天测2-3次计算约用半个月😊 保质期18个月，建议配合我们的血糖仪使用，测值更准确~",
-            },
-            {
-                "user": "老人用什么体温计好？",
-                "assistant": "亲，老人推荐额温枪😊 无接触测量、1秒出结果、大字显示，比水银温度计安全方便。欧姆龙MC-720性价比很高，需要了解吗？",
-            },
-        ],
-        "after_sales": [
-            {
-                "user": "血压计坏了要退货",
-                "assistant": "亲，质量问题我们全责处理！您可选择：1⃣️立即退款 2⃣️免费换货，运费我们承担😊 麻烦拍个照片给我，我马上申请处理~",
-            },
-            {
-                "user": "收到过期商品了",
-                "assistant": "亲，过期商品是我们责任，非常抱歉🙏 马上为您无条件退款，1-3个工作日到账。已备注避免此类问题再发生！",
-            },
-        ],
-        "emergency": [
-            {
-                "user": "宝宝发烧急需体温计",
-                "assistant": "亲，宝宝发烧家长着急我很理解😰 已备注紧急配送，30分钟内优先送达！建议先物理降温，高烧持续请及时就医🙏",
-            },
-            {
-                "user": "手受伤需要创可贴碘伏",
-                "assistant": "亲，外伤处理已加急！创可贴+碘伏套装30分钟内送达😊 先用清水冲洗伤口，如伤口较深建议及时就医包扎~",
-            },
-        ],
-        "logistics": [
-            {
-                "user": "订单1小时了怎么还没到",
-                "assistant": "亲，我马上联系骑手催单！看您比较着急，已备注加急处理😊 如果超时我们有相应补偿，请稍等我处理结果~",
-            },
-            {
-                "user": "骑手说找不到地址",
-                "assistant": "亲，我马上联系骑手确认地址😊 已把您的详细地址重新发给他，并提醒注意查看。预计10分钟内重新联系您~",
-            },
-        ],
-        "complaint": [
-            {
-                "user": "你们服务态度太差了",
-                "assistant": "亲，非常抱歉给您带来不好体验🙏 我们很重视您的反馈！请问具体遇到什么问题？我来解决，同时会向上级反馈改进服务~",
-            }
-        ],
-        "medical_redirect": [
-            {
-                "user": "血压150需要吃什么药",
-                "assistant": "亲，血压用药问题建议咨询医生🙏 我们可以为您提供精准的血压计，方便日常监测血压变化。需要推荐家用血压计吗？",
-            }
-        ],
-    }
+    Args:
+        user_message: 用户消息（用于兜底匹配）
+        sk: 结构化知识（兼容旧接口，可忽略）
+        dynamic_few_shots: 动态 few-shot 示例（从反馈学习得到，优先级高于硬编码）
+        intent: 当前意图（用于精确选择示例）
 
-    # 合并动态 few-shot（从反馈学习得到的示例，优先级高于硬编码）
-    if dynamic_few_shots:
-        for intent, examples in dynamic_few_shots.items():
-            if isinstance(examples, list) and examples:
-                # 动态示例放在前面（优先展示）
-                existing = high_quality_examples.get(intent, [])
-                high_quality_examples[intent] = examples + existing
-                logger.debug(f"Merged {len(examples)} dynamic few-shots for intent '{intent}'")
+    Returns:
+        格式化的 few-shot 示例字符串
+    """
+    # 1. 动态示例优先
+    if dynamic_few_shots and intent in dynamic_few_shots:
+        dynamic_examples = dynamic_few_shots[intent]
+        if isinstance(dynamic_examples, list) and dynamic_examples:
+            selected = dynamic_examples[:2]
+            lines = []
+            for ex in selected:
+                if isinstance(ex, dict) and "user" in ex and "assistant" in ex:
+                    lines.append(f"用户：{ex['user']}\n客服：{ex['assistant']}")
+            if lines:
+                return "\n\n".join(lines)
 
-    # 关键词匹配逻辑（优化版）
-    category_keywords = {
-        "product_inquiry": ["推荐", "有没有", "什么好", "买", "选", "血压计", "体温计", "试纸"],
-        "after_sales": ["退", "换", "坏", "质量", "问题", "不好用", "过期"],
-        "emergency": ["发烧", "急", "紧急", "外伤", "受伤"],
-        "logistics": ["送", "配送", "多久", "还没", "催", "骑手"],
-        "complaint": ["态度", "投诉", "差", "服务"],
-        "medical_redirect": ["血压", "血糖", "药", "治疗", "效果"],
-    }
+    # 2. 按 intent 选择硬编码示例（最多 2 条）
+    intent_examples = INTENT_FEW_SHOTS.get(intent, [])
+    if intent_examples:
+        selected = intent_examples[:2]
+    else:
+        # 兜底：product_inquiry 的第一条
+        selected = INTENT_FEW_SHOTS.get("product_inquiry", [])[:1]
 
-    # 匹配最相关类别
-    matched_categories = []
-    for category, keywords in category_keywords.items():
-        score = sum(1 for kw in keywords if kw in user_message)
-        if score > 0:
-            matched_categories.append((category, score))
-    matched_categories.sort(key=lambda x: -x[1])
-
-    # 选择示例
-    selected = []
-    used_categories = set()
-
-    # 首先选择匹配的类别
-    for category, _ in matched_categories[:2]:
-        if category in high_quality_examples:
-            selected.extend(high_quality_examples[category][:1])
-            used_categories.add(category)
-
-    # 补充其他类别，确保示例多样性
-    for category, examples in high_quality_examples.items():
-        if len(selected) >= 4:
-            break
-        if category not in used_categories and examples:
-            selected.append(examples[0])
-
-    if not selected:
-        # fallback 到基础示例
-        selected = [
-            {
-                "user": "血压计推荐一个",
-                "assistant": "亲，推荐欧姆龙上臂式血压计😊 大屏显示+语音播报，精度高操作简单，特别适合家用。需要了解具体型号吗？",
-            }
-        ]
-
-    # 格式化输出
     lines = []
     for ex in selected:
-        lines.append(f"用户：{ex['user']}\n客服：{ex['assistant']}\n")
+        lines.append(f"用户：{ex['user']}\n客服：{ex['assistant']}")
 
-    return "\n".join(lines)
+    return "\n\n".join(lines) if lines else ""
 
 
 def build_optimized_user_message_with_context(
@@ -330,33 +182,13 @@ def build_optimized_user_message_with_context(
     conversation_context: str | None = None,
     business_context: dict | None = None,
     dynamic_few_shots: dict | None = None,
+    intent: str = "other",
 ) -> str:
-    """构建优化版用户消息（包含上下文）"""
-    sk = _load_structured_knowledge()
-    parts = []
+    """构建优化版用户消息（包含上下文）
 
-    # 实时经营数据
-    if business_context:
-        biz_lines = ["## 📊 店铺实时经营数据（用这些数据回答业务问题）"]
-        orders = business_context.get("orders", {})
-        if orders:
-            biz_lines.append(f"- 今日订单: {orders.get('count', 0)}单，GMV ¥{orders.get('gmv', 0)}")
-            biz_lines.append(f"- 客单价: ¥{orders.get('avg_order_value', 0)}")
-        customers = business_context.get("customers", {})
-        if customers:
-            biz_lines.append(f"- 今日顾客: {customers.get('total', 0)}人 (新客{customers.get('new', 0)}+老客{customers.get('old', 0)})")
-        inventory = business_context.get("inventory", {})
-        if inventory:
-            biz_lines.append(f"- 商品: {inventory.get('total', 0)}款在售, {inventory.get('low_stock', 0)}款低库存, {inventory.get('out_of_stock', 0)}款缺货")
-        top_products = business_context.get("top_products", [])
-        if top_products:
-            biz_lines.append("- 热销TOP5:")
-            for tp in top_products[:5]:
-                biz_lines.append(f"  {tp['name'][:25]} 月销{tp['sales']}件 ¥{tp['price']}")
-        exposure = business_context.get("exposure", {})
-        if exposure:
-            biz_lines.append(f"- 曝光: UV {exposure.get('uv', 0)}, PV {exposure.get('pv', 0)}")
-        parts.append("\n".join(biz_lines))
+    注意：business_context 不再注入（面向买家，不应暴露经营数据）。
+    """
+    parts = []
 
     # 对话历史
     if conversation_history:
@@ -371,7 +203,7 @@ def build_optimized_user_message_with_context(
     # 商品搜索结果（优化版，含 GraphRAG 子图信息）
     if product_results:
         product_lines = []
-        for i, p in enumerate(product_results[:5], 1):  # 最多显示5个（已精排）
+        for i, p in enumerate(product_results[:5], 1):
             name = p.get("name", "")
             price = p.get("retail_price", "")
             stock = p.get("stock", "")
@@ -407,20 +239,18 @@ def build_optimized_user_message_with_context(
                 ]
                 line += f"\n   关联推荐: {'、'.join(rel_names)}"
             product_lines.append(line)
-        parts.append("## 店内相关商品（含适用人群/禁忌/关联商品）\n" + "\n".join(product_lines))
+        parts.append("## 店内相关商品\n" + "\n".join(product_lines))
 
     # 对话状态上下文
     if conversation_context:
         parts.append(f"## 对话状态\n{conversation_context}")
 
-    # 优化版 few-shot（动态选择高质量示例）
-    few_shot = build_optimized_few_shot(user_message, sk, dynamic_few_shots=dynamic_few_shots)
-    parts.append(f"## 高质量参考示例（严格按照这个水准回复）\n{few_shot}")
-
-    # 评分提醒
-    parts.append(
-        "## ⚠️ 评分提醒\n你的回复将被评分，目标≥0.85。必须：用真实数据回答、回答核心问题+提供解决方案+体现专业度+合规安全。不要编造数据！"
+    # 优化版 few-shot（按意图精选最多 2 条）
+    few_shot = build_optimized_few_shot(
+        user_message, dynamic_few_shots=dynamic_few_shots, intent=intent,
     )
+    if few_shot:
+        parts.append(f"## 参考示例\n{few_shot}")
 
     # 用户问题
     parts.append(f"## 用户问题\n{user_message}")
