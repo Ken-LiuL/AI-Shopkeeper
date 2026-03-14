@@ -105,6 +105,10 @@ class FeedbackRequest(BaseModel):
     message_id: str | None = None
     rating: str = Field(..., pattern="^(good|bad)$")
     comment: str | None = None
+    action: str | None = Field(None, pattern="^(adopted|edited|ignored)$")
+    original_reply: str | None = None
+    edited_reply: str | None = None
+    actual_reply: str | None = None
 
 
 # ── Alerts ───────────────────────────────────────────────────

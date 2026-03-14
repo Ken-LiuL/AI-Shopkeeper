@@ -253,6 +253,28 @@ async def feedback_tracking_job() -> None:
         logger.exception("Feedback tracking job failed")
 
 
+async def cs_automatic_learning_task() -> None:
+    """客服反馈自动学习任务 (每小时) — 从反馈数据更新 few-shot 示例"""
+    logger.info("Starting CS automatic learning task")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip CS automatic learning")
+        return
+    try:
+        import asyncpg
+
+        from src.agents.customer_service.learning import run_automatic_learning
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            await run_automatic_learning(pool)
+            logger.info("CS automatic learning task completed")
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("CS automatic learning task failed")
+
+
 async def daily_selection_task() -> None:
     """每日选品任务 (6:00)"""
     logger.info("Starting daily selection task")
@@ -1362,6 +1384,17 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
         _make_heartbeat_task("bundle_mining", bundle_mining_task),
         CronTrigger.from_crontab(tasks.get("bundle_mining", "0 23 * * *")),
         id="bundle_mining",
+        replace_existing=True,
+    )
+
+    # 客服反馈自动学习 (每小时) — 从反馈数据更新 few-shot 示例
+    scheduler.add_job(
+        _make_heartbeat_task("cs_automatic_learning", cs_automatic_learning_task),
+        CronTrigger.from_crontab(
+            tasks.get("cs_automatic_learning", "0 * * * *"),
+            timezone=SH_TZ,
+        ),
+        id="cs_automatic_learning",
         replace_existing=True,
     )
 

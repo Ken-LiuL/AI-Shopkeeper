@@ -374,17 +374,50 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
         raise AppError("Database connection unavailable", status_code=503)
 
     try:
-        # Store feedback in database
-        await pool.execute(
-            """
-            INSERT INTO cs_feedback (session_id, message_id, rating, comment, created_at)
-            VALUES ($1, $2, $3, $4, NOW())
-            """,
-            request.session_id,
-            request.message_id,
-            request.rating,
-            request.comment,
-        )
+        # Ensure extended feedback columns exist (safe idempotent migration)
+        try:
+            await pool.execute(
+                """
+                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS action VARCHAR(20);
+                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS original_reply TEXT;
+                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS edited_reply TEXT;
+                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS actual_reply TEXT;
+                """
+            )
+        except Exception:
+            logger.debug("Extended feedback columns may already exist or ALTER failed (non-critical)")
+
+        # Store feedback with extended fields
+        try:
+            await pool.execute(
+                """
+                INSERT INTO cs_feedback (session_id, message_id, rating, comment,
+                                         action, original_reply, edited_reply, actual_reply,
+                                         created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                """,
+                request.session_id,
+                request.message_id,
+                request.rating,
+                request.comment,
+                request.action,
+                request.original_reply,
+                request.edited_reply,
+                request.actual_reply,
+            )
+        except Exception:
+            # Fallback: store basic fields only (columns may not exist yet)
+            logger.warning("Extended feedback insert failed, falling back to basic fields")
+            await pool.execute(
+                """
+                INSERT INTO cs_feedback (session_id, message_id, rating, comment, created_at)
+                VALUES ($1, $2, $3, $4, NOW())
+                """,
+                request.session_id,
+                request.message_id,
+                request.rating,
+                request.comment,
+            )
 
         return APIResponse(data={"submitted": True})
 

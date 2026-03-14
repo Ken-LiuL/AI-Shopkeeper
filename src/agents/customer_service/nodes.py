@@ -906,6 +906,19 @@ async def chat(
                 _load_review_sentiment_context(pool, product_results),
             )
 
+        # 2.7 加载动态 few-shot（从反馈学习得到）
+        dynamic_few_shots = {}
+        if pool:
+            try:
+                row = await pool.fetchrow(
+                    "SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"
+                )
+                if row:
+                    dynamic_few_shots = json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                    logger.info(f"Loaded {len(dynamic_few_shots)} dynamic few-shot intents")
+            except Exception as e:
+                logger.debug(f"Dynamic few-shot load failed (non-critical): {e}")
+
         # 3. 构建优化版系统提示词
         try:
             from ..prompts.customer_service import AFTER_SALES_SCRIPTS
@@ -918,6 +931,7 @@ async def chat(
                 knowledge_base=relevant_knowledge,
                 after_sales_scripts=AFTER_SALES_SCRIPTS,
                 customer_profile_str=customer_profile_str if customer_profile_str else None,
+                dynamic_few_shots=dynamic_few_shots if dynamic_few_shots else None,
             )
             use_optimized = True
             logger.info("Using optimized prompts for better quality")
@@ -980,6 +994,7 @@ async def chat(
                 product_results=product_results,
                 conversation_context=conversation_context,
                 business_context=business_context,
+                dynamic_few_shots=dynamic_few_shots if dynamic_few_shots else None,
             )
         else:
             from ..prompts.customer_service import build_user_message_with_context

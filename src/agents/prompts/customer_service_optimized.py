@@ -21,6 +21,7 @@ def build_optimized_system_prompt(
     knowledge_base: list[dict],
     after_sales_scripts: dict | None = None,
     customer_profile_str: str | None = None,
+    dynamic_few_shots: dict | None = None,
 ) -> str:
     """构建优化版系统提示词 - 针对高分优化"""
     sk = _load_structured_knowledge()
@@ -198,8 +199,8 @@ action 字段是可选的，仅当确实需要操作时才填写，默认 type �
 记住：每句话都要有价值，每个回复都要体现专业度，每次服务都要让用户满意！目标是0.85+评分。"""
 
 
-def build_optimized_few_shot(user_message: str, sk: dict) -> str:
-    """优化版 few-shot 选择 - 高质量示例"""
+def build_optimized_few_shot(user_message: str, sk: dict, dynamic_few_shots: dict | None = None) -> str:
+    """优化版 few-shot 选择 - 高质量示例（支持动态 few-shot 合并）"""
 
     # 高质量few-shot示例库（基于评分优化）
     high_quality_examples = {
@@ -261,6 +262,15 @@ def build_optimized_few_shot(user_message: str, sk: dict) -> str:
         ],
     }
 
+    # 合并动态 few-shot（从反馈学习得到的示例，优先级高于硬编码）
+    if dynamic_few_shots:
+        for intent, examples in dynamic_few_shots.items():
+            if isinstance(examples, list) and examples:
+                # 动态示例放在前面（优先展示）
+                existing = high_quality_examples.get(intent, [])
+                high_quality_examples[intent] = examples + existing
+                logger.debug(f"Merged {len(examples)} dynamic few-shots for intent '{intent}'")
+
     # 关键词匹配逻辑（优化版）
     category_keywords = {
         "product_inquiry": ["推荐", "有没有", "什么好", "买", "选", "血压计", "体温计", "试纸"],
@@ -319,6 +329,7 @@ def build_optimized_user_message_with_context(
     product_results: list[dict] | None = None,
     conversation_context: str | None = None,
     business_context: dict | None = None,
+    dynamic_few_shots: dict | None = None,
 ) -> str:
     """构建优化版用户消息（包含上下文）"""
     sk = _load_structured_knowledge()
@@ -403,7 +414,7 @@ def build_optimized_user_message_with_context(
         parts.append(f"## 对话状态\n{conversation_context}")
 
     # 优化版 few-shot（动态选择高质量示例）
-    few_shot = build_optimized_few_shot(user_message, sk)
+    few_shot = build_optimized_few_shot(user_message, sk, dynamic_few_shots=dynamic_few_shots)
     parts.append(f"## 高质量参考示例（严格按照这个水准回复）\n{few_shot}")
 
     # 评分提醒
