@@ -1240,23 +1240,36 @@ async def chat(
 
         # 真正的对话历史（user/assistant 交替）
         if conversation_history:
+            prev_role = None
             for msg in conversation_history:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 if not content:
                     continue
                 if role == "system":
-                    # system message 塞到 user 侧
-                    llm_messages.append({"role": "user", "content": f"[系统提示] {content}"})
-                    llm_messages.append({"role": "assistant", "content": "收到。"})
+                    # system 消息（如对话摘要）已经通过 conversation_summary 处理，跳过
+                    continue
+                # 确保 user/assistant 严格交替（某些 LLM 要求）
+                # 如果连续两条同 role，合并到前一条
+                if role == prev_role and llm_messages:
+                    llm_messages[-1]["content"] += f"\n{content}"
                 else:
                     llm_messages.append({"role": role, "content": content})
+                prev_role = role
 
         # 当前用户消息 + 所有上下文
-        llm_messages.append({"role": "user", "content": context_prompt})
+        # 如果最后一条已经是 user（可能 history 包含了当前消息），合并
+        if llm_messages and llm_messages[-1]["role"] == "user":
+            llm_messages[-1]["content"] = context_prompt  # 用带上下文的版本替换
+        else:
+            llm_messages.append({"role": "user", "content": context_prompt})
 
         # 用于 LLM 调用的最终 prompt
         user_message_with_context = llm_messages
+
+        # 调试日志：打印传给 LLM 的 messages 结构（只打角色和前50字）
+        _msg_debug = [f"{m['role']}: {(m.get('content',''))[:50]}..." for m in llm_messages]
+        logger.info(f"[CS-DEBUG] LLM messages ({len(llm_messages)} turns): {_msg_debug}")
 
         _t_pre_llm = time.time()
         logger.info(f"[CS-PERF] Pre-LLM pipeline took {(_t_pre_llm - _t0)*1000:.0f}ms")
