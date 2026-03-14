@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import re
 import time
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
@@ -67,6 +68,37 @@ async def _summarize_conversation(messages: list[dict]) -> str:
             content = (m.get("content") or "")[:50]
             fallback_lines.append(f"{role}：{content}…")
         return "【早期对话摘要】\n" + "\n".join(fallback_lines)
+
+
+def _is_vague_followup(message: str) -> bool:
+    """判断是否是依赖上文的短句追问。"""
+    if not message:
+        return False
+    m = message.strip()
+    if len(m) <= 8:
+        vague_patterns = [
+            r"有哪些", r"都有什么", r"还有吗", r"有啥", r"哪个", r"哪款", r"多少钱", r"预算", r"便宜点", r"贵吗",
+        ]
+        return any(re.search(p, m) for p in vague_patterns)
+    return False
+
+
+def _detect_recent_topic(conversation_history: list[dict] | None) -> str:
+    """从最近对话中提取主要商品话题，避免追问时丢上下文。"""
+    if not conversation_history:
+        return ""
+
+    recent_text = "\n".join((m.get("content") or "") for m in conversation_history[-8:])
+    topic_map = {
+        "血压计": ["血压计", "上臂式", "腕式", "欧姆龙", "鱼跃"],
+        "体温计": ["体温计", "额温枪", "耳温枪"],
+        "血糖仪": ["血糖仪", "试纸", "血糖"],
+        "口罩": ["口罩", "n95", "医用外科"],
+    }
+    for topic, kws in topic_map.items():
+        if any(kw in recent_text for kw in kws):
+            return topic
+    return ""
 
 
 async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
@@ -1048,6 +1080,16 @@ async def chat(
         if memory_ctx:
             system_prompt = f"{system_prompt}\n\n{memory_ctx}"
 
+        # 4.5 上下文延续提示：处理“有哪些/多少钱”这类短追问
+        continuation_hint = ""
+        if _is_vague_followup(message):
+            recent_topic = _detect_recent_topic(conversation_history)
+            if recent_topic:
+                continuation_hint = (
+                    f"【上下文延续提示】当前用户在追问上一轮话题，默认仍然是“{recent_topic}”品类。"
+                    "优先回答该品类下可选型号/价格区间，不要突然切到全店泛类目。"
+                )
+
         # 5. 构建包含上下文的用户消息（优化版）
         if use_optimized:
             user_message_with_context = build_optimized_user_message_with_context(
@@ -1094,6 +1136,8 @@ async def chat(
                 "【商品评价情感参考】\n"
                 + json.dumps(review_sentiment_context, ensure_ascii=False)
             )
+        if continuation_hint:
+            extra_sections.append(continuation_hint)
         if extra_sections:
             user_message_with_context = (
                 f"{user_message_with_context}\n\n" + "\n\n".join(extra_sections)
