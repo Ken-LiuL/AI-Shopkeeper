@@ -1,6 +1,6 @@
 /**
  * background.js — AI店长 Chrome Extension Service Worker
- * 仅处理客服消息：转发到后端 AI 接口并返回回复建议
+ * 处理客服消息转发 + 反馈接口
  */
 
 const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
@@ -37,12 +37,20 @@ async function getApiSettings() {
   };
 }
 
+/* ═══════════════════ Message Router ═══════════════════ */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'CUSTOMER_MESSAGE') {
     handleCustomerMessage(message.payload)
       .then((result) => sendResponse(result))
       .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
+    return true; // async
+  }
+
+  if (message.type === 'SEND_FEEDBACK') {
+    handleFeedback(message.payload)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true; // async
   }
 
   if (message.type === 'GET_SYNC_STATS') {
@@ -58,6 +66,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+/* ═══════════════════ Connection Test ═══════════════════ */
 async function testConnection() {
   const settings = await getApiSettings();
   const baseUrl = settings.chatBase;
@@ -72,6 +81,7 @@ async function testConnection() {
   }
 }
 
+/* ═══════════════════ Customer Message → AI Reply ═══════════════════ */
 async function handleCustomerMessage(payload) {
   const settings = await getApiSettings();
   const body = {
@@ -99,12 +109,14 @@ async function handleCustomerMessage(payload) {
       const data = await response.json();
       const reply = data.reply || data.message || data.response || data.data?.reply || '';
       if (!reply) {
+        addLog('error', '后台返回空回复');
         return { success: false, error: '后台返回空回复' };
       }
-      addLog('success', '客服回复生成成功');
+      addLog('success', '客服回复生成成功', reply.slice(0, 60));
       return { success: true, reply };
     } catch (err) {
       lastError = err;
+      addLog('error', `请求失败 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`, err.message);
       if (attempt < MAX_RETRIES) {
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
       }
@@ -113,4 +125,47 @@ async function handleCustomerMessage(payload) {
 
   addLog('error', '客服回复生成失败', lastError?.message || 'unknown');
   return { success: false, error: lastError?.message || '请求失败' };
+}
+
+/* ═══════════════════ Feedback API ═══════════════════ */
+async function handleFeedback(payload) {
+  const settings = await getApiSettings();
+  const feedbackUrl = `${settings.chatBase}/api/customer-service/feedback`;
+
+  const body = {
+    session_id: payload.session_id || '',
+    message_id: payload.message_id || '',
+    feedback: payload.feedback || '',      // "good" | "bad" | "neutral"
+    action: payload.action || '',          // "adopted" | "edited" | "ignored"
+    original_reply: payload.original_reply || '',
+    edited_reply: payload.edited_reply || '',
+    actual_reply: payload.actual_reply || '',
+    timestamp: new Date().toISOString(),
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+
+  try {
+    const response = await fetch(feedbackUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      const errMsg = `反馈 HTTP ${response.status}${errText ? `: ${errText.slice(0, 80)}` : ''}`;
+      addLog('error', errMsg);
+      // Non-critical: don't retry feedback, just log
+      return { success: false, error: errMsg };
+    }
+
+    addLog('info', `反馈已发送: ${body.action || body.feedback}`, `session=${body.session_id}`);
+    return { success: true };
+  } catch (err) {
+    // Feedback failures are non-critical — log but don't block
+    addLog('error', `反馈发送失败: ${err.message}`);
+    return { success: false, error: err.message };
+  }
 }

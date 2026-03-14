@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 客服助手",
-  "version": "2.0.0",
-  "description": "AI店长客服助手 — 自动拦截客户消息，由 AI 生成回复建议",
+  "version": "2.1.0",
+  "description": "AI店长客服助手 — 建议/半自动/全自动三种模式，支持反馈与回复对比追踪",
   "permissions": ["storage"],
   "host_permissions": [
     "https://yiyao.meituan.com/*",

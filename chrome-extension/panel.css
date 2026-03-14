@@ -1,68 +1,97 @@
-/* AI店长 Floating Panel */
+/* AI店长 Floating Panel — 完美客服助手 v2 */
+
 #ai-dianzhang-panel {
   position: fixed;
   top: 80px;
   right: 20px;
-  width: 280px;
+  width: 340px;
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.14);
   z-index: 2147483647;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 13px;
   color: #333;
   user-select: none;
-  transition: box-shadow 0.2s;
+  transition: box-shadow 0.2s, width 0.2s;
 }
 
 #ai-dianzhang-panel:hover {
-  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.2);
 }
 
+/* — 建议模式高亮 — */
+#ai-dianzhang-panel.aidz-suggest-mode {
+  border: 2px solid #ff9500;
+  box-shadow: 0 4px 24px rgba(255, 149, 0, 0.25);
+}
+
+/* — 最小化状态 — */
+#ai-dianzhang-panel.aidz-minimized {
+  width: auto;
+}
+
+/* ---- Header ---- */
 .aidz-header {
   display: flex;
   align-items: center;
   padding: 10px 14px;
   background: linear-gradient(135deg, #ff9500, #ff6a00);
-  border-radius: 12px 12px 0 0;
+  border-radius: 11px 11px 0 0;
   cursor: move;
   color: #fff;
+  gap: 6px;
 }
 
 .aidz-title {
   flex: 1;
   font-weight: 600;
   font-size: 14px;
+  white-space: nowrap;
+}
+
+.aidz-badge {
+  background: rgba(255, 255, 255, 0.3);
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 .aidz-status {
   font-size: 18px;
-  margin-right: 8px;
+  margin-right: 4px;
   color: #4caf50;
   text-shadow: 0 0 4px currentColor;
+  transition: color 0.3s;
 }
 
 .aidz-minimize {
   background: rgba(255, 255, 255, 0.25);
   border: none;
   color: #fff;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 6px;
   cursor: pointer;
-  font-size: 12px;
-  line-height: 22px;
+  font-size: 14px;
+  line-height: 24px;
   text-align: center;
   padding: 0;
+  transition: background 0.15s;
 }
 
 .aidz-minimize:hover {
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.45);
 }
 
+/* ---- Body ---- */
 .aidz-body {
   padding: 12px 14px;
+  max-height: 480px;
+  overflow-y: auto;
 }
 
 .aidz-controls {
@@ -78,6 +107,7 @@
   gap: 6px;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 
 .aidz-toggle input[type="checkbox"] {
@@ -89,13 +119,14 @@
 
 #aidz-mode {
   flex: 1;
-  padding: 4px 8px;
+  padding: 5px 8px;
   border: 1px solid #ddd;
   border-radius: 6px;
   font-size: 12px;
   background: #fafafa;
   cursor: pointer;
   outline: none;
+  transition: border-color 0.2s;
 }
 
 #aidz-mode:focus {
@@ -108,36 +139,250 @@
   border-radius: 6px;
   font-size: 12px;
   color: #666;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   word-break: break-all;
+  line-height: 1.5;
 }
 
+/* ---- Reply Cards ---- */
 .aidz-replies {
-  max-height: 160px;
+  max-height: 360px;
   overflow-y: auto;
 }
 
-.aidz-reply {
+.aidz-reply-card {
+  background: #fffaf3;
+  border: 1px solid #ffe0b2;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.aidz-reply-card:hover {
+  border-color: #ff9500;
+}
+
+.aidz-reply-card.aidz-adopted {
+  border-color: #4caf50;
+  background: #f1f8e9;
+}
+
+.aidz-reply-card.aidz-ignored {
+  opacity: 0.5;
+}
+
+.aidz-reply-content {
+  padding: 10px 12px 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #333;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.aidz-reply-meta {
+  padding: 0 12px;
+  font-size: 11px;
+  color: #999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.aidz-reply-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-top: 1px solid #f0e0c8;
+  flex-wrap: wrap;
+}
+
+.aidz-action-btn {
+  padding: 4px 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #555;
+  transition: all 0.15s;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.aidz-action-btn:hover {
+  background: #f5f5f5;
+  border-color: #bbb;
+}
+
+.aidz-action-btn.aidz-btn-adopt {
+  background: #fff3e0;
+  border-color: #ff9500;
+  color: #e65100;
+  font-weight: 600;
+}
+
+.aidz-action-btn.aidz-btn-adopt:hover {
+  background: #ffe0b2;
+}
+
+.aidz-action-btn.aidz-btn-edit {
+  color: #1976d2;
+  border-color: #90caf9;
+}
+
+.aidz-action-btn.aidz-btn-edit:hover {
+  background: #e3f2fd;
+}
+
+.aidz-action-btn.aidz-btn-ignore {
+  color: #888;
+}
+
+.aidz-action-btn.aidz-btn-ignore:hover {
+  background: #f5f5f5;
+}
+
+.aidz-action-btn.aidz-btn-feedback {
+  border: none;
+  background: transparent;
+  font-size: 16px;
+  padding: 3px 6px;
+  color: #bbb;
+  transition: color 0.15s, transform 0.15s;
+}
+
+.aidz-action-btn.aidz-btn-feedback:hover {
+  transform: scale(1.2);
+}
+
+.aidz-action-btn.aidz-btn-feedback.aidz-fb-good:hover,
+.aidz-action-btn.aidz-btn-feedback.aidz-fb-good.active {
+  color: #4caf50;
+}
+
+.aidz-action-btn.aidz-btn-feedback.aidz-fb-bad:hover,
+.aidz-action-btn.aidz-btn-feedback.aidz-fb-bad.active {
+  color: #f44336;
+}
+
+.aidz-action-btn:disabled,
+.aidz-action-btn.aidz-btn-disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+.aidz-action-spacer {
+  flex: 1;
+}
+
+/* ---- Edit Area ---- */
+.aidz-edit-area {
+  padding: 6px 10px 10px;
+  border-top: 1px dashed #e0cfa8;
+  display: none;
+}
+
+.aidz-edit-area.active {
+  display: block;
+}
+
+.aidz-edit-textarea {
+  width: 100%;
+  min-height: 50px;
   padding: 6px 8px;
-  margin-bottom: 4px;
-  background: #fff8f0;
+  border: 1px solid #ddd;
   border-radius: 6px;
   font-size: 12px;
-  line-height: 1.4;
-  border-left: 3px solid #ff9500;
+  font-family: inherit;
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.2s;
 }
 
-.aidz-time {
-  color: #999;
-  font-size: 11px;
-  margin-right: 4px;
+.aidz-edit-textarea:focus {
+  border-color: #ff9500;
 }
 
-.aidz-replies::-webkit-scrollbar {
+.aidz-edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  justify-content: flex-end;
+}
+
+.aidz-edit-btn {
+  padding: 4px 12px;
+  border-radius: 5px;
+  border: none;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.aidz-edit-btn.confirm {
+  background: linear-gradient(135deg, #ff9500, #ff6a00);
+  color: #fff;
+}
+
+.aidz-edit-btn.confirm:hover {
+  background: linear-gradient(135deg, #e88500, #e55d00);
+}
+
+.aidz-edit-btn.cancel {
+  background: #f5f5f5;
+  color: #666;
+  border: 1px solid #ddd;
+}
+
+.aidz-edit-btn.cancel:hover {
+  background: #eee;
+}
+
+/* ---- Scrollbar ---- */
+.aidz-replies::-webkit-scrollbar,
+.aidz-body::-webkit-scrollbar {
   width: 4px;
 }
 
-.aidz-replies::-webkit-scrollbar-thumb {
+.aidz-replies::-webkit-scrollbar-thumb,
+.aidz-body::-webkit-scrollbar-thumb {
   background: #ddd;
   border-radius: 2px;
+}
+
+/* ---- Notification badge (suggest mode) ---- */
+.aidz-notify-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #f44336;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  min-width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 9px;
+  padding: 0 5px;
+  animation: aidz-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes aidz-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.15); }
+}
+
+/* ---- Empty state ---- */
+.aidz-empty {
+  text-align: center;
+  color: #bbb;
+  padding: 20px 10px;
+  font-size: 12px;
 }
