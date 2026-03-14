@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import os
+import time
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
 
@@ -636,6 +637,11 @@ async def _load_business_context(pool) -> dict:
 # 全局知识库缓存
 _knowledge_base_cache: list[dict] | None = None
 _cache_loaded = False
+_business_ctx_cache: dict | None = None
+_business_ctx_ts: float = 0
+_policy_ctx_cache: list[dict] | None = None
+_policy_ctx_ts: float = 0
+_CACHE_TTL = 300  # 5 minutes
 
 
 def _filter_relevant_knowledge(
@@ -724,6 +730,8 @@ async def chat(
     """
     global _knowledge_base_cache, _cache_loaded
 
+    _t0 = time.time()
+
     try:
         # 1. 加载知识库（带缓存）
         if not _cache_loaded:
@@ -769,7 +777,7 @@ async def chat(
         fast_mode = os.getenv("CS_FAST_MODE", "1") == "1"
         pipeline_timeout = float(os.getenv("CS_PIPELINE_TIMEOUT", "4.0" if fast_mode else "10.0"))
         enable_intent_llm = os.getenv("CS_INTENT_LLM", "0") == "1" and not fast_mode
-        max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "900" if fast_mode else "1400"))
+        max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "2048"))
 
         if history_to_summarize:
             summary_task = asyncio.create_task(
@@ -790,7 +798,16 @@ async def chat(
                     return []
 
             product_task = asyncio.create_task(_run_product_pipeline())
-            business_task = asyncio.create_task(_load_business_context(pool))
+            async def _cached_business_context():
+                global _business_ctx_cache, _business_ctx_ts
+                if _business_ctx_cache is not None and (time.time() - _business_ctx_ts) < _CACHE_TTL:
+                    return _business_ctx_cache
+                result = await _load_business_context(pool)
+                _business_ctx_cache = result
+                _business_ctx_ts = time.time()
+                return result
+
+            business_task = asyncio.create_task(_cached_business_context())
 
             try:
                 from .order_context import build_order_context_str, has_order_mention
@@ -840,7 +857,13 @@ async def chat(
             if task is not None
         ]
         if first_batch_tasks:
-            await asyncio.gather(*first_batch_tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*first_batch_tasks, return_exceptions=True),
+                    timeout=5.0,  # 所有前置数据加载总共不超过5秒
+                )
+            except asyncio.TimeoutError:
+                logger.warning("[CS] First batch tasks timed out at 5s, proceeding with available data")
 
         def _consume_task_result(task, default=None):
             if not task:
@@ -906,27 +929,53 @@ async def chat(
             # Fallback：降级到纯向量检索
             product_results = await search_products_with_embedding(message, pool)
 
-        # 2.6 新增补充上下文：售后政策 + 商品评价情感
+        # 2.6 售后政策 + 评价情感 + 动态 few-shot 并行加载（不阻塞主流程）
         policy_context = []
         review_sentiment_context = []
-        if pool:
-            policy_context, review_sentiment_context = await asyncio.gather(
-                _load_policy_documents_context(pool),
-                _load_review_sentiment_context(pool, product_results),
-            )
-
-        # 2.7 加载动态 few-shot（从反馈学习得到）
         dynamic_few_shots = {}
-        if pool:
+
+        async def _safe_load_policy():
+            global _policy_ctx_cache, _policy_ctx_ts
+            if _policy_ctx_cache is not None and (time.time() - _policy_ctx_ts) < _CACHE_TTL:
+                return _policy_ctx_cache
             try:
-                row = await pool.fetchrow(
-                    "SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"
+                result = await asyncio.wait_for(_load_policy_documents_context(pool), timeout=2.0)
+                _policy_ctx_cache = result
+                _policy_ctx_ts = time.time()
+                return result
+            except Exception:
+                return _policy_ctx_cache or []
+
+        async def _safe_load_review_sentiment():
+            try:
+                return await asyncio.wait_for(
+                    _load_review_sentiment_context(pool, product_results), timeout=2.0
+                )
+            except Exception:
+                return []
+
+        async def _safe_load_dynamic_few_shots():
+            try:
+                row = await asyncio.wait_for(
+                    pool.fetchrow("SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"),
+                    timeout=1.0,
                 )
                 if row:
-                    dynamic_few_shots = json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
-                    logger.info(f"Loaded {len(dynamic_few_shots)} dynamic few-shot intents")
-            except Exception as e:
-                logger.debug(f"Dynamic few-shot load failed (non-critical): {e}")
+                    return json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+            except Exception:
+                pass
+            return {}
+
+        if pool:
+            _policy_r, _review_r, dynamic_few_shots = await asyncio.gather(
+                _safe_load_policy(),
+                _safe_load_review_sentiment(),
+                _safe_load_dynamic_few_shots(),
+                return_exceptions=True,
+            )
+            policy_context = _policy_r if isinstance(_policy_r, list) else []
+            review_sentiment_context = _review_r if isinstance(_review_r, list) else []
+            dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
 
         # 3. 构建优化版系统提示词
         try:
@@ -958,42 +1007,46 @@ async def chat(
             use_optimized = False
             logger.warning("Using fallback prompts")
 
-        # 3.5 LLM 意图+情感检测（替代关键词规则）
+        # 3.5 情感指令 + 记忆上下文 + 多轮追踪（并行化）
         if emotion_instruction:
             system_prompt = f"{system_prompt}{emotion_instruction}"
 
-        # 加载客服历史决策记忆（非阻塞主流程，失败不影响回复）
+        # 并行：记忆上下文 + 多轮追踪（两个都是非关键，超时不阻塞）
         memory_ctx = ""
-        try:
-            from src.agents.action_tracker import format_memory_context
+        conversation_context = ""
 
-            memory_ctx = await format_memory_context(
-                pool=pool,
-                agent_name="customer_service",
-                context_type=intent_result.get("intent", "inquiry")
-                if "intent_result" in dir()
-                else "inquiry",
-            )
-        except Exception as e:
-            logger.debug(f"CS memory context load failed (non-critical): {e}")
+        async def _safe_load_memory():
+            try:
+                from src.agents.action_tracker import format_memory_context
+                return await asyncio.wait_for(
+                    format_memory_context(
+                        pool=pool,
+                        agent_name="customer_service",
+                        context_type=intent_result.get("intent", "inquiry"),
+                    ),
+                    timeout=2.0,
+                )
+            except Exception:
+                return ""
+
+        def _safe_track_conversation():
+            try:
+                from .tracker import track_conversation
+                result = track_conversation(
+                    conversation_history=conversation_history or [],
+                    user_intent=intent_result.get("intent", ""),
+                    user_message=message,
+                )
+                return result.get("context_summary", "")
+            except Exception:
+                return ""
+
+        if pool:
+            memory_ctx = await _safe_load_memory()
+        conversation_context = _safe_track_conversation()
 
         if memory_ctx:
             system_prompt = f"{system_prompt}\n\n{memory_ctx}"
-
-        # 4. 多轮意图追踪
-        conversation_context = ""
-        try:
-            from .tracker import track_conversation
-
-            tracking_result = track_conversation(
-                conversation_history=conversation_history or [],
-                user_intent=intent_result.get("intent", ""),
-                user_message=message,
-            )
-            conversation_context = tracking_result.get("context_summary", "")
-            logger.info(f"Conversation state: {tracking_result.get('state', 'unknown')}")
-        except Exception as e:
-            logger.warning(f"Failed to track conversation: {e}")
 
         # 5. 构建包含上下文的用户消息（优化版）
         if use_optimized:
@@ -1045,6 +1098,9 @@ async def chat(
             user_message_with_context = (
                 f"{user_message_with_context}\n\n" + "\n\n".join(extra_sections)
             )
+
+        _t_pre_llm = time.time()
+        logger.info(f"[CS-PERF] Pre-LLM pipeline took {(_t_pre_llm - _t0)*1000:.0f}ms")
 
         # 5. 调用LLM生成回复（支持图片）
         tool_schema = {
@@ -1122,6 +1178,9 @@ async def chat(
                 system=system_prompt,
                 trace_name="customer_service_chat",
             )
+
+        _t_post_llm = time.time()
+        logger.info(f"[CS-PERF] LLM call took {(_t_post_llm - _t_pre_llm)*1000:.0f}ms | Total so far: {(_t_post_llm - _t0)*1000:.0f}ms")
 
         # 6. 提取结果
         reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
