@@ -23,9 +23,9 @@ _OPENROUTER_MODELS = {
     "flash": "google/gemini-2.0-flash-001",  # 意图识别、FAQ匹配、简单分类（最便宜）
     "deepseek": "deepseek/deepseek-chat-v3-0324",  # 文本生成、套餐命名、上架文案（中文强+极便宜）
     "haiku": "google/gemini-2.0-flash-001",  # 兼容旧引用
-    "sonnet": "anthropic/claude-sonnet-4",  # 客服回复、需要高质量的任务
+    "sonnet": "deepseek/deepseek-chat-v3-0324",  # 客服回复（DeepSeek中文强+无区域限制+极低成本）
     "pro": "google/gemini-2.5-pro-preview",  # 选品分析、复杂推理（性价比）
-    "opus": "anthropic/claude-opus-4",  # 关键决策用 Opus
+    "opus": "google/gemini-2.5-pro-preview",  # 关键决策（Gemini Pro兜底，无区域限制）
 }
 
 # Anthropic 直连模型
