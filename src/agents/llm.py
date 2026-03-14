@@ -130,7 +130,14 @@ async def _call_openrouter(
     messages: list[dict] = []
     if system:
         messages.append({"role": "system", "content": system})
-    messages.append({"role": "user", "content": prompt})
+
+    # Support both single prompt string and multi-turn messages list
+    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+        # Multi-turn messages: append each as-is
+        messages.extend(prompt)
+    else:
+        # Single prompt (string or multimodal content list)
+        messages.append({"role": "user", "content": prompt})
 
     openai_tool = _anthropic_tool_to_openai_function(tool)
 
@@ -179,12 +186,18 @@ async def _call_anthropic(
     """通过 Anthropic 直连调用"""
     client = _get_anthropic_client()
 
+    # Support both single prompt and multi-turn messages
+    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+        msgs = prompt
+    else:
+        msgs = [{"role": "user", "content": prompt}]
+
     kwargs: dict[str, Any] = {
         "model": model,
         "max_tokens": max_tokens,
         "tools": [tool],
         "tool_choice": {"type": "tool", "name": tool["name"]},
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": msgs,
     }
     if system:
         kwargs["system"] = system
