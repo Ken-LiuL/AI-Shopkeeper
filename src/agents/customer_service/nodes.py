@@ -23,45 +23,78 @@ logger = logging.getLogger(__name__)
 # 快速意图预判 + 上下文预算器（不额外调 LLM）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-def _quick_intent_guess(message: str) -> str:
-    """基于关键词的快速意图预判，用于上下文路由（不需要精确）"""
-    m = message.lower()
-    # 投诉（优先级最高，涉及升级）
+def _quick_intent_guess(message: str, conversation_history: list[dict] | None = None) -> str:
+    """基于关键词的快速意图预判，结合对话历史判断上下文延续。
+
+    核心原则：短/模糊消息（如"有哪些"/"多少钱"）必须结合历史判断，
+    不能当作独立新问题。否则会丢失"我们一直在聊血压计"的上下文。
+    """
+    m = message.strip().lower()
+
+    # ===== 第一层：明确意图，关键词足够强，无需历史 =====
     if any(kw in m for kw in ["投诉", "举报", "315", "律师", "消协", "骗"]):
         return "complaint"
-    # 售后
     if any(kw in m for kw in ["退", "换", "坏了", "破损", "过期", "质量"]):
         return "after_sales"
-    # 医疗建议（需在推荐之前检查）
     if any(kw in m for kw in ["吃什么药", "用药", "治疗", "诊断", "处方", "药"]):
         return "medical_advice"
-    # 物流（含"订单"+"还没到"等组合）
     if any(kw in m for kw in ["发货", "物流", "送到", "配送", "骑手", "多久到", "还没到", "催单"]):
         return "logistics"
     if "订单" in m and any(kw in m for kw in ["还没", "多久", "到了吗", "在哪", "怎么"]):
         return "logistics"
-    # 对比（需在推荐之前检查，因为"哪个好"可能同时命中）
     if any(kw in m for kw in ["对比", "区别", "vs", "哪个更"]):
         return "comparison"
     if any(kw in m for kw in ["和", "跟"]) and any(kw in m for kw in ["哪个好", "哪个更", "区别", "好"]):
         return "comparison"
-    # 使用问题
     if any(kw in m for kw in ["怎么用", "用法", "用量", "一盒", "能用多久"]):
         return "usage_question"
-    # 推荐
+
+    # ===== 第二层：模糊/短消息 → 从历史推断 =====
+    VAGUE_KWS = [
+        "有哪些", "都有什么", "还有吗", "有啥", "哪个", "哪款",
+        "多少钱", "价格", "贵吗", "便宜", "打折", "推荐",
+        "有没有", "哪个好", "什么牌子", "不是", "那个",
+    ]
+    is_vague = len(m) <= 20 and any(kw in m for kw in VAGUE_KWS)
+
+    if is_vague and conversation_history:
+        # 向上扫描最近对话，找到最近的"商品话题"
+        PRODUCT_SIGNALS = [
+            "推荐", "血压", "体温", "血糖", "口罩", "创可贴",
+            "型号", "库存", "月销", "欧姆龙", "鱼跃", "体重秤",
+            "轮椅", "拐杖", "雾化", "制氧", "呼吸机",
+            "退热贴", "纱布", "绷带", "面膜", "敷料",
+        ]
+        for msg in reversed(conversation_history[-8:]):
+            content = (msg.get("content") or "").lower()
+            if any(kw in content for kw in PRODUCT_SIGNALS):
+                return "product_inquiry"  # 延续商品话题
+        # 历史里没有商品话题，但用户在追问 → 大概率还是商品
+        return "product_inquiry"
+
+    # ===== 第三层：非模糊的常规判断 =====
     if any(kw in m for kw in ["推荐", "有没有", "哪个好", "哪款", "什么牌子"]):
         return "recommendation"
-    # 问候
-    if any(kw in m for kw in ["你好", "在吗", "hi", "hello"]):
-        return "greeting"
-    # 商品咨询
     if any(kw in m for kw in ["价格", "多少钱", "贵", "便宜", "打折"]):
         return "product_inquiry"
+
+    # greeting: 仅在对话开头或纯问候短语时触发
+    # "我是塔哥" 这种自报身份不是 greeting（对话已经在进行中）
+    if any(kw in m for kw in ["你好", "在吗", "hi", "hello"]):
+        if not conversation_history or len(m) <= 5:
+            return "greeting"
+        # 有历史对话时，"你好"可能是打断但不应该重置上下文
+        return "other"
+
     return "other"
 
 
-def _select_context_by_intent(intent: str) -> set:
-    """返回该意图下应注入的上下文类型（上下文预算器）"""
+def _select_context_by_intent(intent: str, has_product_history: bool = False) -> set:
+    """返回该意图下应注入的上下文类型（上下文预算器）
+
+    has_product_history: 如果之前对话涉及商品，即使当前意图不是商品类，
+    也保留 products 上下文以避免上下文断裂。
+    """
     INTENT_CONTEXT_MAP = {
         "product_inquiry": {"products", "faq"},
         "recommendation": {"products", "faq"},
@@ -71,10 +104,16 @@ def _select_context_by_intent(intent: str) -> set:
         "after_sales": {"policy", "order"},
         "complaint": {"policy", "order", "profile"},
         "medical_advice": {"products", "policy"},
-        "greeting": set(),
+        "greeting": {"faq"},
         "other": {"faq"},
     }
-    return INTENT_CONTEXT_MAP.get(intent, {"faq"})
+    result = INTENT_CONTEXT_MAP.get(intent, {"faq"})
+
+    # 如果历史中有商品话题，保持 products 上下文不丢失
+    if has_product_history and "products" not in result:
+        result = result | {"products"}
+
+    return result
 
 
 async def _summarize_conversation(messages: list[dict]) -> str:
@@ -1037,7 +1076,7 @@ async def chat(
             dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
 
         # ── 快速意图预判（用于上下文路由，不依赖 LLM） ──────────────
-        quick_intent = _quick_intent_guess(message)
+        quick_intent = _quick_intent_guess(message, conversation_history)
         # 如果 intent_result 有 LLM 结果就用 LLM 的，否则用快速预判
         current_intent = intent_result.get("intent") if intent_result else quick_intent
         if current_intent == "other":
@@ -1150,7 +1189,15 @@ async def chat(
             )
 
         # 5.2 上下文预算器：按意图选择性注入上下文（不再全量塞入）
-        allowed_contexts = _select_context_by_intent(current_intent)
+        # 判断历史中是否有商品话题（用于上下文预算器保持商品上下文不丢）
+        _has_product_history = bool(product_results)
+        if not _has_product_history and conversation_history:
+            _PRODUCT_SIGNALS = ["推荐", "血压", "体温", "血糖", "口罩", "型号", "价格", "库存"]
+            for _h_msg in conversation_history[-6:]:
+                if any(kw in (_h_msg.get("content") or "") for kw in _PRODUCT_SIGNALS):
+                    _has_product_history = True
+                    break
+        allowed_contexts = _select_context_by_intent(current_intent, _has_product_history)
         logger.info(f"[CS] Context budget for intent '{current_intent}': {allowed_contexts}")
 
         extra_sections = []
