@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
 
@@ -740,7 +741,8 @@ async def chat(
             for m in effective_history
         )
         history_to_summarize: list[dict] = []
-        if not has_api_summary and effective_history and len(effective_history) > 12:
+        summarize_threshold = 20 if os.getenv("CS_FAST_MODE", "1") == "1" else 12
+        if not has_api_summary and effective_history and len(effective_history) > summarize_threshold:
             history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
             effective_history = effective_history[-6:]
         conversation_history = effective_history
@@ -763,6 +765,12 @@ async def chat(
         intent_task = None
         build_profile_context_str = None
 
+        # 性能优先配置（默认开启）
+        fast_mode = os.getenv("CS_FAST_MODE", "1") == "1"
+        pipeline_timeout = float(os.getenv("CS_PIPELINE_TIMEOUT", "4.0" if fast_mode else "10.0"))
+        enable_intent_llm = os.getenv("CS_INTENT_LLM", "0") == "1" and not fast_mode
+        max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "900" if fast_mode else "1400"))
+
         if history_to_summarize:
             summary_task = asyncio.create_task(
                 _summarize_conversation(history_to_summarize)
@@ -775,7 +783,7 @@ async def chat(
                 try:
                     return await asyncio.wait_for(
                         _full_pipeline_search(message, pool),
-                        timeout=10.0,
+                        timeout=pipeline_timeout,
                     )
                 except asyncio.TimeoutError:
                     logger.warning("[CS] Pipeline timeout, falling back")
@@ -809,13 +817,14 @@ async def chat(
             except Exception as e:
                 logger.debug(f"[CS] Customer profile load failed (non-critical): {e}")
 
-        try:
-            from src.agents.customer_service.tracker import ConversationTracker
+        if enable_intent_llm:
+            try:
+                from src.agents.customer_service.tracker import ConversationTracker
 
-            _tracker = ConversationTracker()
-            intent_task = asyncio.create_task(_tracker.classify_intent_llm(message))
-        except Exception:
-            intent_task = None
+                _tracker = ConversationTracker()
+                intent_task = asyncio.create_task(_tracker.classify_intent_llm(message))
+            except Exception:
+                intent_task = None
 
         first_batch_tasks = [
             task
@@ -1098,6 +1107,7 @@ async def chat(
                 images=images,
                 tool=tool_schema,
                 model="google/gemini-2.0-flash-001",
+                max_tokens=max_reply_tokens,
                 system=system_prompt
                 + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
                 trace_name="customer_service_vision_chat",
@@ -1108,6 +1118,7 @@ async def chat(
                 prompt=user_message_with_context,
                 tool=tool_schema,
                 model=MODEL_SONNET,
+                max_tokens=max_reply_tokens,
                 system=system_prompt,
                 trace_name="customer_service_chat",
             )
