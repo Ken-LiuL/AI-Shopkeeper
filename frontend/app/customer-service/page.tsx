@@ -518,13 +518,19 @@ function CustomerServicePage() {
                                 </Badge>
                               )}
                               {msg.errorCode && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[10px] h-4 px-1 border-red-200 text-red-600"
-                                  title={msg.errorDetail || msg.errorCode}
-                                >
-                                  错误: {msg.errorCode}
-                                </Badge>
+                                <div className="flex flex-col gap-0.5">
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[10px] h-4 px-1 border-red-200 text-red-600"
+                                  >
+                                    错误: {msg.errorCode}
+                                  </Badge>
+                                  {msg.errorDetail && (
+                                    <span className="text-[10px] text-red-500 max-w-[300px] break-all leading-tight">
+                                      {msg.errorDetail}
+                                    </span>
+                                  )}
+                                </div>
                               )}
                               <div className="flex gap-0.5 ml-1">
                                 <button
