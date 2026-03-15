@@ -14,6 +14,44 @@
   let pendingSuggestions = 0; // unread count for suggest mode badge
   let lastAISuggestion = null; // for reply comparison tracking
 
+  /* ═══════════════════ Session ID Management ═══════════════════ */
+  // 确保每个页面会话有稳定的 session_id，避免 DOM fallback 时丢失上下文
+  let _pageSessionId = null;
+
+  function getOrCreateSessionId(extractedId) {
+    // 优先用从 WS/DOM 提取到的真实 session_id
+    if (extractedId && extractedId !== '') return extractedId;
+    // 否则用页面级持久化的 session_id（同一个客服对话页面保持一致）
+    if (!_pageSessionId) {
+      // 尝试从 URL 提取会话标识
+      const urlMatch = location.href.match(/(?:session|conversation|chat)[_-]?(?:id)?[=\/]([a-zA-Z0-9_-]+)/i);
+      if (urlMatch) {
+        _pageSessionId = `ext-${urlMatch[1]}`;
+      } else {
+        // 用 tab + URL 生成稳定 ID（同一页面刷新后恢复）
+        _pageSessionId = `ext-${hashCode(location.origin + location.pathname)}-${Date.now().toString(36)}`;
+      }
+      // 持久化到 sessionStorage（页面刷新后恢复，tab 关闭后清除）
+      try {
+        const stored = sessionStorage.getItem('__aidz_session_id__');
+        if (stored) {
+          _pageSessionId = stored;
+        } else {
+          sessionStorage.setItem('__aidz_session_id__', _pageSessionId);
+        }
+      } catch (_) {}
+    }
+    return _pageSessionId;
+  }
+
+  function hashCode(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash).toString(36);
+  }
+
   /* ═══════════════════ Inject ═══════════════════ */
   function injectScript() {
     const s = document.createElement('script');
@@ -45,12 +83,22 @@
   }
 
   function extractCustomerMessage(data) {
+    // 辅助：从各种字段名提取 session/conversation ID
+    function pickSessionId(...candidates) {
+      for (const c of candidates) {
+        if (c && typeof c === 'string' && c.trim() !== '') return c;
+      }
+      return ''; // 空字符串 → getOrCreateSessionId 会兜底
+    }
+
     // Pattern 1: top-level message
     if (data.type === 'message' && data.direction === 'in') {
       return {
         id: data.msgId || data.id || `${Date.now()}`,
         text: data.content || data.text || data.body,
-        sessionId: data.sessionId || data.conversationId || '',
+        sessionId: getOrCreateSessionId(pickSessionId(
+          data.sessionId, data.conversationId, data.session_id, data.conversation_id, data.chatId, data.chat_id
+        )),
         customerInfo: data.customer || data.sender || {},
       };
     }
@@ -60,7 +108,9 @@
       return {
         id: inner.msgId || inner.id || `${Date.now()}`,
         text: inner.content || inner.text || '',
-        sessionId: inner.sessionId || inner.conversationId || '',
+        sessionId: getOrCreateSessionId(pickSessionId(
+          inner.sessionId, inner.conversationId, inner.session_id, inner.conversation_id, inner.chatId, inner.chat_id
+        )),
         customerInfo: inner.customer || inner.sender || {},
       };
     }
@@ -71,7 +121,9 @@
         return {
           id: payload.msgId || payload.id || `${Date.now()}`,
           text: payload.content,
-          sessionId: payload.sessionId || payload.conversationId || '',
+          sessionId: getOrCreateSessionId(pickSessionId(
+            payload.sessionId, payload.conversationId, payload.session_id, payload.conversation_id, payload.chatId, payload.chat_id
+          )),
           customerInfo: payload.customer || {},
         };
       }
@@ -110,7 +162,7 @@
               const text = textEl?.textContent?.trim();
               if (text && !processedMessages.has(text)) {
                 processedMessages.add(text);
-                sendToBackend({ id: `dom-${Date.now()}`, text, sessionId: '', customerInfo: {} });
+                sendToBackend({ id: `dom-${Date.now()}`, text, sessionId: getOrCreateSessionId(''), customerInfo: {} });
               }
             }
           }

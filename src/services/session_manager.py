@@ -58,6 +58,33 @@ class SessionManager:
         logger.info("Created session %s (customer=%s)", session_id, customer_id)
         return session_id, now
 
+    async def create_session_with_id(
+        self, session_id: str, customer_id: str | None = None
+    ) -> str:
+        """Create a session with a specific ID (idempotent — skips if exists)."""
+        meta_key = f"{_SESSION_META}{session_id}"
+        if await self._r.exists(meta_key):
+            return session_id  # Already exists, no-op
+
+        now = datetime.now(UTC).isoformat()
+        meta = {
+            "customer_id": customer_id or "",
+            "created_at": now,
+            "updated_at": now,
+            "message_count": "0",
+            "metadata": "{}",
+        }
+        await self._r.hset(meta_key, mapping=meta)
+        await self._r.expire(meta_key, SESSION_TTL)
+
+        ts = datetime.now(UTC).timestamp()
+        await self._r.zadd(_SESSION_INDEX, {session_id: ts})
+        if customer_id:
+            await self._r.zadd(f"{_CUSTOMER_INDEX}{customer_id}", {session_id: ts})
+
+        logger.info("Auto-created session %s", session_id)
+        return session_id
+
     # ── Messages ──────────────────────────────────────────────
 
     async def get_history(self, session_id: str, limit: int = 20) -> list[dict[str, Any]]:

@@ -121,19 +121,44 @@ async def chat(
     sm = _get_session_manager()
     pool = pg_db.get_pool()
 
-    # Determine history source: Redis or in-memory fallback
-    if sm is not None and await sm.session_exists(request.session_id):
-        if not await sm.acquire_lock(request.session_id, timeout=30):
-            raise AppError("Session is busy, please retry", status_code=429)
-        use_redis = True
-        history = await sm.get_history(request.session_id, limit=20)
-        session_summary = await sm.get_summary(request.session_id)
-        await sm.add_message(request.session_id, "user", request.message)
+    # Determine history source: Redis (with auto-create) or in-memory fallback
+    #
+    # 关键修复：如果 session_id 在 Redis 中不存在，自动创建而不是降级到内存。
+    # 之前的 bug：Chrome 扩展传来的 session_id 如果没提前 create_session，
+    # 就会走 in-memory fallback，导致每次重启/部署丢失所有上下文。
+    #
+    if sm is not None:
+        session_exists = await sm.session_exists(request.session_id)
+        if not session_exists and request.session_id:
+            # Auto-create session in Redis (idempotent)
+            logger.info(f"[CS] Auto-creating Redis session for {request.session_id}")
+            await sm.create_session_with_id(request.session_id)
+        if request.session_id:
+            if not await sm.acquire_lock(request.session_id, timeout=30):
+                raise AppError("Session is busy, please retry", status_code=429)
+            use_redis = True
+            history = await sm.get_history(request.session_id, limit=20)
+            session_summary = await sm.get_summary(request.session_id)
+            await sm.add_message(request.session_id, "user", request.message)
+        else:
+            # session_id 为空 — 走内存 fallback（不应该发生，但兜底）
+            use_redis = False
+            logger.warning("[CS] Empty session_id received, using in-memory fallback")
+            history = _mem_ensure("__empty__")[-20:]
+            session_summary = _mem_summaries.get("__empty__", "")
+            _mem_add("__empty__", "user", request.message)
     else:
         use_redis = False
         history = _mem_ensure(request.session_id)[-20:]
         session_summary = _mem_summaries.get(request.session_id, "")
         _mem_add(request.session_id, "user", request.message)
+
+    # 调试日志：记录传给 chat() 的 history 条数
+    logger.info(
+        f"[CS-DEBUG] chat() called: session_id={request.session_id!r}, "
+        f"use_redis={use_redis}, history_len={len(history)}, "
+        f"has_summary={bool(session_summary)}"
+    )
 
     if session_summary:
         history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
@@ -266,7 +291,11 @@ async def chat_stream(request: ChatRequest):
     sm = _get_session_manager()
     pool = pg_db.get_pool()
 
-    if sm is not None and await sm.session_exists(request.session_id):
+    # 与 /chat 相同的 auto-create session 逻辑
+    if sm is not None and request.session_id:
+        if not await sm.session_exists(request.session_id):
+            logger.info(f"[CS] Stream: auto-creating Redis session for {request.session_id}")
+            await sm.create_session_with_id(request.session_id)
         if not await sm.acquire_lock(request.session_id, timeout=30):
             async def _busy():
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'Session is busy'})}\n\n"
@@ -278,9 +307,14 @@ async def chat_stream(request: ChatRequest):
         await sm.add_message(request.session_id, "user", request.message)
     else:
         use_redis = False
-        history = _mem_ensure(request.session_id)[-20:]
-        session_summary = _mem_summaries.get(request.session_id, "")
-        _mem_add(request.session_id, "user", request.message)
+        history = _mem_ensure(request.session_id or "__empty__")[-20:]
+        session_summary = _mem_summaries.get(request.session_id or "__empty__", "")
+        _mem_add(request.session_id or "__empty__", "user", request.message)
+
+    logger.info(
+        f"[CS-DEBUG] stream() called: session_id={request.session_id!r}, "
+        f"use_redis={use_redis}, history_len={len(history)}"
+    )
 
     if session_summary:
         history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
