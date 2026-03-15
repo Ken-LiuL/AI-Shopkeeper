@@ -78,6 +78,16 @@ def _quick_intent_guess(message: str, conversation_history: list[dict] | None = 
     if any(kw in m for kw in ["价格", "多少钱", "贵", "便宜", "打折"]):
         return "product_inquiry"
 
+    # 自报身份（"我是XX"）：在有历史对话时视为上下文延续，不是新对话
+    if re.match(r"^我是.{1,10}$", m) and conversation_history:
+        # 用户只是报了个名字，延续之前的话题
+        _id_product_kw = ["血压", "体温", "血糖", "口罩", "推荐", "型号", "价格"]
+        for msg in reversed(conversation_history[-6:]):
+            content = (msg.get("content") or "").lower()
+            if any(kw in content for kw in _id_product_kw):
+                return "product_inquiry"
+        return "other"
+
     # greeting: 仅在对话开头或纯问候短语时触发
     # "我是塔哥" 这种自报身份不是 greeting（对话已经在进行中）
     if any(kw in m for kw in ["你好", "在吗", "hi", "hello"]):
