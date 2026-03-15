@@ -1085,13 +1085,51 @@ async def chat(
             review_sentiment_context = _review_r if isinstance(_review_r, list) else []
             dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
 
+        # ── 话题管理器（统一的上下文追踪） ──────────────────────
+        from .conversation_manager import (
+            ConversationManager,
+            load_conversation_manager,
+            save_conversation_manager,
+        )
+        from src.db import redis as redis_db
+
+        _redis = redis_db.get_redis()
+        cm = await load_conversation_manager(_redis, session_id)
+        current_topic = cm.resolve_topic(message, conversation_history)
+        topic_context = cm.build_topic_context(current_topic)
+
+        # 把商品搜索结果关联到当前话题
+        if product_results:
+            for p in product_results[:3]:
+                cm.add_product_to_topic(p.get("name", ""))
+
+        # 异步保存话题状态（不阻塞）
+        asyncio.create_task(save_conversation_manager(_redis, session_id, cm))
+
+        logger.info(
+            f"[CM] Topic resolved: name={current_topic.name}, "
+            f"category={current_topic.category}, "
+            f"ephemeral={current_topic.ephemeral}, "
+            f"stack_depth={len(cm.topic_stack)}"
+        )
+
         # ── 快速意图预判（用于上下文路由，不依赖 LLM） ──────────────
         quick_intent = _quick_intent_guess(message, conversation_history)
         # 如果 intent_result 有 LLM 结果就用 LLM 的，否则用快速预判
         current_intent = intent_result.get("intent") if intent_result else quick_intent
         if current_intent == "other":
             current_intent = quick_intent  # LLM 也不确定时用规则兜底
-        logger.info(f"[CS] Intent routing: quick={quick_intent}, llm={intent_result.get('intent', 'N/A')}, final={current_intent}")
+
+        # 话题管理器覆盖意图：如果话题是商品类但 intent 判成了 greeting/other，纠正
+        if current_topic.category == "product" and current_intent in ("greeting", "other"):
+            logger.info(f"[CM] Topic override: intent {current_intent} → product_inquiry (topic={current_topic.name})")
+            current_intent = "product_inquiry"
+        elif current_topic.category == "after_sales" and current_intent in ("greeting", "other"):
+            current_intent = "after_sales"
+        elif current_topic.category == "complaint" and current_intent in ("greeting", "other"):
+            current_intent = "complaint"
+
+        logger.info(f"[CS] Intent routing: quick={quick_intent}, llm={intent_result.get('intent', 'N/A')}, topic={current_topic.name}, final={current_intent}")
 
         # 3. 构建优化版系统提示词
         try:
@@ -1113,6 +1151,10 @@ async def chat(
             scenario_hint = SCENARIO_CONTEXTS.get(current_intent, "")
             if scenario_hint:
                 system_prompt += f"\n\n# 当前场景指引\n{scenario_hint}"
+
+            # 话题上下文注入（最高优先级的上下文信号）
+            if topic_context:
+                system_prompt += f"\n\n# 当前对话话题\n{topic_context}"
 
             use_optimized = True
             logger.info("Using optimized prompts for better quality")
