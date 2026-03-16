@@ -1634,7 +1634,7 @@ async def chat(
                 text=user_message_with_context,
                 images=images,
                 tool=tool_schema,
-                model="google/gemini-2.0-flash-001",
+                model=MODEL_DEEPSEEK,  # vision fallback to main model
                 max_tokens=max_reply_tokens,
                 system=system_prompt
                 + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
