@@ -865,7 +865,6 @@ async def chat(
 
         faq_context = []
         product_results = []
-        business_context = {}
         order_context_str = ""
         customer_profile_str = ""
         intent_result = {}
@@ -1087,6 +1086,7 @@ async def chat(
 
         # ── 话题管理器（统一的上下文追踪） ──────────────────────
         from src.db import redis as redis_db
+
         from .conversation_manager import (
             load_conversation_manager,
             save_conversation_manager,

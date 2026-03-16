@@ -18,7 +18,11 @@ from typing import Any
 
 import pytest
 
-from tests.eval.eval_metrics import check_output_format, check_text_constraints, check_value_in_range
+from tests.eval.eval_metrics import (
+    check_output_format,
+    check_text_constraints,
+    check_value_in_range,
+)
 
 # ---------------------------------------------------------------------------
 # 合规约束常量

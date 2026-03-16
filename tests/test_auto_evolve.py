@@ -37,7 +37,6 @@ class TestCustomerServiceAutoEvolution:
         """创建临时数据目录"""
         with tempfile.TemporaryDirectory() as temp_dir:
             # 设置临时数据目录
-            original_cwd = os.getcwd()
             test_data_dir = os.path.join(temp_dir, "data")
             os.makedirs(test_data_dir)
 
