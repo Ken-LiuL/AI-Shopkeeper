@@ -1653,6 +1653,20 @@ async def chat(
         # P1-1: 合规过滤层（额外安全层）
         reply_text = _compliance_filter(reply_text)
 
+
+        # P2-1: 商品卡片富媒体回复
+        product_cards: list[dict] = []
+        if product_results:
+            for _p in product_results[:3]:
+                _card = {
+                    "name": _p.get("name", ""),
+                    "price": _p.get("price") or _p.get("retail_price"),
+                    "image_url": _p.get("image_url") or _p.get("image"),
+                    "description": (_p.get("description") or "")[:200],
+                }
+                if _card["name"]:
+                    product_cards.append(_card)
+
         # 如果 action 要求转人工，自动设置 needs_human
         if isinstance(suggested_action, dict) and suggested_action.get("type") == "transfer_human":
             needs_human = True
@@ -1751,6 +1765,7 @@ async def chat(
             "sources": product_results,
             "needs_human": needs_human,
             "action": suggested_action,
+            "product_cards": product_cards,  # P2-1
         }
 
     except Exception as e:
