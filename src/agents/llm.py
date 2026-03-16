@@ -16,22 +16,9 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 # LLM 提供商配置
-# "siliconflow" = 硅基流动（国内节点，兼容 OpenAI SDK，覆盖 DeepSeek/Qwen/GLM 等主流模型）
-# "openrouter"  = OpenRouter（海外中转，延迟较高）
-# "anthropic"   = Anthropic 直连
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "siliconflow")
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "anthropic"
 
-# ── SiliconFlow 模型映射（国内直连，延迟最低） ──────────────────────────
-_SILICONFLOW_MODELS = {
-    "flash": "Qwen/Qwen3-8B",                       # 意图识别、FAQ匹配（快+便宜）
-    "deepseek": "deepseek-ai/DeepSeek-V3-0324",     # 文本生成、上架文案（中文强）
-    "haiku": "Qwen/Qwen3-8B",                       # 兼容旧引用
-    "sonnet": "deepseek-ai/DeepSeek-V3-0324",       # 客服回复（主力模型）
-    "pro": "Qwen/Qwen3-235B-A22B",                  # 选品分析、复杂推理
-    "opus": "Qwen/Qwen3-235B-A22B",                 # 关键决策
-}
-
-# OpenRouter 模型映射（海外中转，作为 fallback）
+# OpenRouter 模型映射（按任务复杂度分层，优化成本）
 _OPENROUTER_MODELS = {
     "flash": "google/gemini-2.0-flash-001",  # 意图识别、FAQ匹配、简单分类（最便宜）
     "deepseek": "deepseek/deepseek-chat-v3-0324",  # 文本生成、套餐命名、上架文案（中文强+极便宜）
@@ -53,11 +40,7 @@ _ANTHROPIC_MODELS = {
 
 
 def _get_models() -> dict[str, str]:
-    if LLM_PROVIDER == "siliconflow":
-        return _SILICONFLOW_MODELS
-    if LLM_PROVIDER == "openrouter":
-        return _OPENROUTER_MODELS
-    return _ANTHROPIC_MODELS
+    return _OPENROUTER_MODELS if LLM_PROVIDER == "openrouter" else _ANTHROPIC_MODELS
 
 
 # 模块级常量
@@ -98,21 +81,15 @@ def _init_langfuse():
 
 
 def _get_openai_client():
-    """OpenAI-compatible client（SiliconFlow / OpenRouter 共用）"""
+    """OpenRouter 使用 OpenAI SDK"""
     global _openai_client
     if _openai_client is None:
         from openai import AsyncOpenAI
 
-        if LLM_PROVIDER == "siliconflow":
-            _openai_client = AsyncOpenAI(
-                api_key=os.environ.get("SILICONFLOW_API_KEY", ""),
-                base_url="https://api.siliconflow.cn/v1",
-            )
-        else:
-            _openai_client = AsyncOpenAI(
-                api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-                base_url="https://openrouter.ai/api/v1",
-            )
+        _openai_client = AsyncOpenAI(
+            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+            base_url="https://openrouter.ai/api/v1",
+        )
     return _openai_client
 
 
@@ -286,7 +263,7 @@ async def call_tool(
             logger.debug(f"Langfuse trace failed: {e}")
 
     try:
-        if LLM_PROVIDER in ("openrouter", "siliconflow"):
+        if LLM_PROVIDER == "openrouter":
             result, input_tokens, output_tokens = await _call_openrouter(
                 prompt, tool, model, max_tokens, system
             )
@@ -358,7 +335,7 @@ async def call_vision(
     text: str,
     images: list[str],
     tool: dict,
-    model: str = MODEL_FLASH,  # Default to vision-capable model
+    model: str = "google/gemini-2.0-flash-001",  # Default to vision model
     max_tokens: int = 4096,
     system: str | None = None,
     trace_name: str | None = None,
