@@ -237,10 +237,6 @@ class TestMedicalCompliance:
 
     def test_valid_registration_number_format(self):
         """注册证号格式应合法（国械注准/国械注进 + 年份 + 数字）。"""
-        valid_patterns = [
-            r"^国械注准\d{14}$",
-            r"^国械注进\d{14}$",
-        ]
         reg_num = "国械注准20183222345"
         # 注：示例号码长度不完全，此处只验证前缀格式
         assert reg_num.startswith("国械注准") or reg_num.startswith("国械注进"), (

@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
 from tests.eval.conftest import load_golden
 from tests.eval.eval_metrics import check_output_format, check_value_in_range
 

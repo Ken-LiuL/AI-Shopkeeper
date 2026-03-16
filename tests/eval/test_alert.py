@@ -15,10 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-
-from tests.eval.conftest import load_golden
-from tests.eval.eval_metrics import check_output_format, check_value_in_range
+from tests.eval.eval_metrics import check_output_format
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -62,9 +59,7 @@ def _should_trigger_price_alert(retail_price: float, cost_price: float, competit
     """判断是否应触发价格异常预警。"""
     if retail_price <= cost_price * 1.05:  # 毛利率低于 5%
         return True
-    if competitor_avg > 0 and (competitor_avg - retail_price) / competitor_avg > 0.3:
-        return True
-    return False
+    return competitor_avg > 0 and (competitor_avg - retail_price) / competitor_avg > 0.3
 
 
 def _make_alert_action(

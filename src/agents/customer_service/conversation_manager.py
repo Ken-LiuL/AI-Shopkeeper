@@ -20,7 +20,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Any
+
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class Topic:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "Topic":
+    def from_dict(cls, d: dict) -> Topic:
         return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})
 
 
@@ -178,19 +178,19 @@ class ConversationManager:
                     return inferred
 
         # Step 4: 售后/投诉/物流 — 新话题
-        AFTER_SALES_KW = ["退", "换", "坏了", "破损", "过期", "质量"]
-        COMPLAINT_KW = ["投诉", "举报", "315", "律师", "消协", "骗"]
-        LOGISTICS_KW = ["发货", "物流", "送到", "配送", "还没到", "骑手"]
+        after_sales_kw = ["退", "换", "坏了", "破损", "过期", "质量"]
+        complaint_kw = ["投诉", "举报", "315", "律师", "消协", "骗"]
+        logistics_kw = ["发货", "物流", "送到", "配送", "还没到", "骑手"]
 
-        if any(kw in m for kw in COMPLAINT_KW):
+        if any(kw in m for kw in complaint_kw):
             topic = Topic(name="投诉", category="complaint", started_at_turn=self.turn_count)
             self.topic_stack.append(topic)
             return topic
-        if any(kw in m for kw in AFTER_SALES_KW):
+        if any(kw in m for kw in after_sales_kw):
             topic = Topic(name="售后", category="after_sales", started_at_turn=self.turn_count)
             self.topic_stack.append(topic)
             return topic
-        if any(kw in m for kw in LOGISTICS_KW):
+        if any(kw in m for kw in logistics_kw):
             topic = Topic(name="物流", category="logistics", started_at_turn=self.turn_count)
             self.topic_stack.append(topic)
             return topic
@@ -283,7 +283,7 @@ class ConversationManager:
         }, ensure_ascii=False)
 
     @classmethod
-    def from_json(cls, data: str) -> "ConversationManager":
+    def from_json(cls, data: str) -> ConversationManager:
         """从 JSON 反序列化"""
         cm = cls()
         try:

@@ -14,8 +14,7 @@ test_fact_checker.py — 事实核查模块 (FactChecker) 评估
 
 from __future__ import annotations
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 

@@ -16,9 +16,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-import pytest
-
-from tests.eval.eval_metrics import check_output_format, check_value_in_range, check_text_constraints
+from tests.eval.eval_metrics import check_output_format, check_text_constraints, check_value_in_range
 
 # ---------------------------------------------------------------------------
 # Mock 经营建议输出构造器

@@ -50,16 +50,16 @@ def _quick_intent_guess(message: str, conversation_history: list[dict] | None = 
         return "usage_question"
 
     # ===== 第二层：模糊/短消息 → 从历史推断 =====
-    VAGUE_KWS = [
+    vague_kws = [
         "有哪些", "都有什么", "还有吗", "有啥", "哪个", "哪款",
         "多少钱", "价格", "贵吗", "便宜", "打折", "推荐",
         "有没有", "哪个好", "什么牌子", "不是", "那个",
     ]
-    is_vague = len(m) <= 20 and any(kw in m for kw in VAGUE_KWS)
+    is_vague = len(m) <= 20 and any(kw in m for kw in vague_kws)
 
     if is_vague and conversation_history:
         # 向上扫描最近对话，找到最近的"商品话题"
-        PRODUCT_SIGNALS = [
+        product_signals = [
             "推荐", "血压", "体温", "血糖", "口罩", "创可贴",
             "型号", "库存", "月销", "欧姆龙", "鱼跃", "体重秤",
             "轮椅", "拐杖", "雾化", "制氧", "呼吸机",
@@ -67,7 +67,7 @@ def _quick_intent_guess(message: str, conversation_history: list[dict] | None = 
         ]
         for msg in reversed(conversation_history[-8:]):
             content = (msg.get("content") or "").lower()
-            if any(kw in content for kw in PRODUCT_SIGNALS):
+            if any(kw in content for kw in product_signals):
                 return "product_inquiry"  # 延续商品话题
         # 历史里没有商品话题，但用户在追问 → 大概率还是商品
         return "product_inquiry"
@@ -105,7 +105,7 @@ def _select_context_by_intent(intent: str, has_product_history: bool = False) ->
     has_product_history: 如果之前对话涉及商品，即使当前意图不是商品类，
     也保留 products 上下文以避免上下文断裂。
     """
-    INTENT_CONTEXT_MAP = {
+    intent_context_map = {
         "product_inquiry": {"products", "faq"},
         "recommendation": {"products", "faq"},
         "usage_question": {"products", "faq"},
@@ -117,7 +117,7 @@ def _select_context_by_intent(intent: str, has_product_history: bool = False) ->
         "greeting": {"faq"},
         "other": {"faq"},
     }
-    result = INTENT_CONTEXT_MAP.get(intent, {"faq"})
+    result = intent_context_map.get(intent, {"faq"})
 
     # 如果历史中有商品话题，保持 products 上下文不丢失
     if has_product_history and "products" not in result:
@@ -901,7 +901,7 @@ async def chat(
                         _full_pipeline_search(message, pool),
                         timeout=pipeline_timeout,
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("[CS] Pipeline timeout, falling back")
                     return []
 
@@ -970,7 +970,7 @@ async def chat(
                     asyncio.gather(*first_batch_tasks, return_exceptions=True),
                     timeout=5.0,  # 所有前置数据加载总共不超过5秒
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.warning("[CS] First batch tasks timed out at 5s, proceeding with available data")
 
         def _consume_task_result(task, default=None):
@@ -999,7 +999,7 @@ async def chat(
             product_results = _consume_task_result(product_task, [])
 
         if business_task:
-            business_context = _consume_task_result(business_task, {})
+            _consume_task_result(business_task, {})
 
         if order_task:
             order_context_str = _consume_task_result(order_task, "")
@@ -1086,12 +1086,11 @@ async def chat(
             dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
 
         # ── 话题管理器（统一的上下文追踪） ──────────────────────
+        from src.db import redis as redis_db
         from .conversation_manager import (
-            ConversationManager,
             load_conversation_manager,
             save_conversation_manager,
         )
-        from src.db import redis as redis_db
 
         _redis = redis_db.get_redis()
         cm = await load_conversation_manager(_redis, session_id)
@@ -1244,9 +1243,9 @@ async def chat(
         # 判断历史中是否有商品话题（用于上下文预算器保持商品上下文不丢）
         _has_product_history = bool(product_results)
         if not _has_product_history and conversation_history:
-            _PRODUCT_SIGNALS = ["推荐", "血压", "体温", "血糖", "口罩", "型号", "价格", "库存"]
+            _product_signals = ["推荐", "血压", "体温", "血糖", "口罩", "型号", "价格", "库存"]
             for _h_msg in conversation_history[-6:]:
-                if any(kw in (_h_msg.get("content") or "") for kw in _PRODUCT_SIGNALS):
+                if any(kw in (_h_msg.get("content") or "") for kw in _product_signals):
                     _has_product_history = True
                     break
         allowed_contexts = _select_context_by_intent(current_intent, _has_product_history)

@@ -15,13 +15,7 @@ test_customer_service.py — 客服 Agent (CustomerService) 评估
 
 from __future__ import annotations
 
-import json
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import pytest
-
-from tests.eval.conftest import load_golden
 from tests.eval.eval_metrics import (
     ClassificationMetrics,
     HallucinationTracker,
