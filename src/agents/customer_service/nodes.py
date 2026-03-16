@@ -950,6 +950,19 @@ async def chat(
             except Exception:
                 intent_task = None
 
+        _t_tasks_start = time.time()
+        logger.info(f"[CS-PERF] Task setup took {(_t_tasks_start - _t0)*1000:.0f}ms")
+
+        task_labels = {
+            id(summary_task): "summary",
+            id(faq_task): "faq",
+            id(product_task): "product",
+            id(business_task): "business",
+            id(order_task): "order",
+            id(profile_task): "profile",
+            id(intent_task): "intent",
+        }
+
         first_batch_tasks = [
             task
             for task in [
@@ -971,6 +984,27 @@ async def chat(
                 )
             except TimeoutError:
                 logger.warning("[CS] First batch tasks timed out at 5s, proceeding with available data")
+
+        _t_tasks_done = time.time()
+        # 逐个任务报告耗时和状态
+        _task_perf = []
+        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task]:
+            if task is None:
+                continue
+            label = task_labels.get(id(task), "unknown")
+            status = "done" if task.done() and not task.cancelled() else ("cancelled" if task.cancelled() else "pending")
+            if status == "done":
+                try:
+                    r = task.result()
+                    if isinstance(r, BaseException):
+                        status = f"error:{type(r).__name__}"
+                except Exception as e:
+                    status = f"error:{type(e).__name__}"
+            _task_perf.append(f"{label}={status}")
+        logger.info(
+            f"[CS-PERF] All tasks waited {(_t_tasks_done - _t_tasks_start)*1000:.0f}ms | "
+            f"Tasks: {', '.join(_task_perf)}"
+        )
 
         def _consume_task_result(task, default=None):
             if not task:
@@ -1493,6 +1527,16 @@ async def chat(
             )
 
         # 8. 返回结果
+        _t_end = time.time()
+        logger.info(
+            f"[CS-PERF] ===== Total: {(_t_end - _t0)*1000:.0f}ms ===== "
+            f"(setup={(_t_tasks_start - _t0)*1000:.0f}ms, "
+            f"tasks={(_t_tasks_done - _t_tasks_start)*1000:.0f}ms, "
+            f"pre-llm={(_t_pre_llm - _t_tasks_done)*1000:.0f}ms, "
+            f"llm={(_t_post_llm - _t_pre_llm)*1000:.0f}ms, "
+            f"post-llm={(_t_end - _t_post_llm)*1000:.0f}ms) "
+            f"| reply_len={len(reply_text)}"
+        )
         return {
             "session_id": session_id,
             "reply": reply_text,

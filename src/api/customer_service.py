@@ -115,6 +115,9 @@ async def create_session(
 async def chat(
     request: ChatRequest,
 ) -> APIResponse[ChatResponse]:
+    import time as _time
+    _api_t0 = _time.time()
+
     from src.agents.customer_service.nodes import chat as cs_chat
     from src.db import postgres as pg_db
 
@@ -164,6 +167,9 @@ async def chat(
         history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
 
     try:
+        _api_pre_chat = _time.time()
+        logger.info(f"[CS-API-PERF] Pre-chat setup took {(_api_pre_chat - _api_t0)*1000:.0f}ms (session/history)")
+
         # Call new simplified chat function
         result = await cs_chat(
             session_id=request.session_id,
@@ -172,6 +178,9 @@ async def chat(
             conversation_history=history,
             images=request.images,
         )
+
+        _api_post_chat = _time.time()
+        logger.info(f"[CS-API-PERF] cs_chat() took {(_api_post_chat - _api_pre_chat)*1000:.0f}ms")
 
         reply = result.get("reply", "")
         intent = result.get("intent")
@@ -186,6 +195,13 @@ async def chat(
         else:
             _mem_add(request.session_id, "assistant", reply)
 
+        _api_end = _time.time()
+        logger.info(
+            f"[CS-API-PERF] ===== API Total: {(_api_end - _api_t0)*1000:.0f}ms ===== "
+            f"(setup={(_api_pre_chat - _api_t0)*1000:.0f}ms, "
+            f"chat={(_api_post_chat - _api_pre_chat)*1000:.0f}ms, "
+            f"post={(_api_end - _api_post_chat)*1000:.0f}ms)"
+        )
         return APIResponse(
             data=ChatResponse(
                 session_id=request.session_id,
