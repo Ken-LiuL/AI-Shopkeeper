@@ -16,7 +16,7 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 # LLM 提供商配置
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "anthropic"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "deepseek" | "anthropic"
 
 # OpenRouter 模型映射（按任务复杂度分层，优化成本）
 _OPENROUTER_MODELS = {
@@ -26,6 +26,16 @@ _OPENROUTER_MODELS = {
     "sonnet": "deepseek/deepseek-chat-v3-0324",  # 客服回复（DeepSeek中文强+无区域限制+极低成本）
     "pro": "google/gemini-2.5-pro-preview",  # 选品分析、复杂推理（性价比）
     "opus": "google/gemini-2.5-pro-preview",  # 关键决策（Gemini Pro兜底，无区域限制）
+}
+
+# DeepSeek 直连映射（去掉 OpenRouter 中转，降低延迟）
+_DEEPSEEK_MODELS = {
+    "flash": "deepseek-chat",
+    "deepseek": "deepseek-chat",
+    "haiku": "deepseek-chat",
+    "sonnet": "deepseek-chat",
+    "pro": "deepseek-reasoner",
+    "opus": "deepseek-reasoner",
 }
 
 # Anthropic 直连模型
@@ -40,7 +50,11 @@ _ANTHROPIC_MODELS = {
 
 
 def _get_models() -> dict[str, str]:
-    return _OPENROUTER_MODELS if LLM_PROVIDER == "openrouter" else _ANTHROPIC_MODELS
+    if LLM_PROVIDER == "deepseek":
+        return _DEEPSEEK_MODELS
+    if LLM_PROVIDER == "openrouter":
+        return _OPENROUTER_MODELS
+    return _ANTHROPIC_MODELS
 
 
 # 模块级常量
@@ -81,15 +95,21 @@ def _init_langfuse():
 
 
 def _get_openai_client():
-    """OpenRouter 使用 OpenAI SDK"""
+    """OpenAI-compatible client (OpenRouter / DeepSeek 直连)"""
     global _openai_client
     if _openai_client is None:
         from openai import AsyncOpenAI
 
-        _openai_client = AsyncOpenAI(
-            api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-            base_url="https://openrouter.ai/api/v1",
-        )
+        if LLM_PROVIDER == "deepseek":
+            _openai_client = AsyncOpenAI(
+                api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
+                base_url="https://api.deepseek.com",
+            )
+        else:
+            _openai_client = AsyncOpenAI(
+                api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                base_url="https://openrouter.ai/api/v1",
+            )
     return _openai_client
 
 
@@ -263,7 +283,7 @@ async def call_tool(
             logger.debug(f"Langfuse trace failed: {e}")
 
     try:
-        if LLM_PROVIDER == "openrouter":
+        if LLM_PROVIDER in ("openrouter", "deepseek"):
             result, input_tokens, output_tokens = await _call_openrouter(
                 prompt, tool, model, max_tokens, system
             )
