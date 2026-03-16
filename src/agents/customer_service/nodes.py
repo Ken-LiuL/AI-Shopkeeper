@@ -249,8 +249,80 @@ def _select_context_by_intent(intent: str, has_product_history: bool = False) ->
     return result
 
 
+
+def _extract_summary(messages: list[dict]) -> str:
+    """
+    P2-2 提取式摘要：扫描历史，提取商品名、价格、关键问题，拼成简洁摘要。
+    用于历史 <= 30 条时替代 LLM 摘要，速度快且不消耗 token。
+    确保摘要包含足够上下文，不丢关键信息。
+    """
+    _product_kws = [
+        "血压计", "体温计", "血糖仪", "血氧仪", "口罩", "创可贴", "轮椅", "拐杖",
+        "雾化器", "制氧机", "听诊器", "试纸", "绷带", "护理", "康复",
+        "欧姆龙", "鱼跃", "体重秤", "针头", "消毒", "纱布", "敷料",
+        "退热贴", "额温枪", "耳温枪",
+    ]
+    _issue_kws = [
+        "退款", "换货", "破损", "坏了", "质量问题", "发货",
+        "物流", "投诉", "超时", "未收到",
+    ]
+
+    product_mentions: list[str] = []
+    price_mentions: list[str] = []
+    key_issues: list[str] = []
+    condensed_lines: list[str] = []
+
+    for msg in messages:
+        role_str = msg.get("role", "user")
+        if role_str == "system":
+            continue
+        role_label = "用户" if role_str == "user" else "客服"
+        content = (msg.get("content") or "").strip()
+        if not content:
+            continue
+
+        for kw in _product_kws:
+            if kw in content and kw not in product_mentions:
+                product_mentions.append(kw)
+
+        prices = re.findall(r"\d+(?:\.\d+)?元", content)
+        for p in prices:
+            if p not in price_mentions:
+                price_mentions.append(p)
+
+        for kw in _issue_kws:
+            if kw in content and kw not in key_issues:
+                key_issues.append(kw)
+
+        condensed = content[:80].replace("\n", " ")
+        condensed_lines.append(f"{role_label}：{condensed}")
+
+    parts: list[str] = []
+    if product_mentions:
+        parts.append(f"涉及商品：{'、'.join(product_mentions[:6])}")
+    if price_mentions:
+        parts.append(f"价格信息：{'、'.join(price_mentions[:4])}")
+    if key_issues:
+        parts.append(f"待处理问题：{'、'.join(key_issues[:4])}")
+
+    header = "【早期对话摘要（提取式）】"
+    if parts:
+        header += "（" + "；".join(parts) + "）"
+
+    # 保留近8条压缩对话，保证上下文连贯
+    context_lines = condensed_lines[-8:] if len(condensed_lines) > 8 else condensed_lines
+    context_str = "\n".join(context_lines)
+
+    return f"{header}\n{context_str}" if context_str else header
+
+
+
 async def _summarize_conversation(messages: list[dict]) -> str:
-    """使用 LLM 总结对话历史，避免 context 过长
+    """总结对话历史，避免 context 过长。
+
+    P2-2 改进：
+    - 历史 <= 30 条：使用提取式摘要（无需调用 LLM，快速且保留关键信息）
+    - 历史 > 30 条：使用 LLM 摘要（更准确，适合长对话）
 
     Args:
         messages: 要总结的消息列表（role/content 格式）
@@ -261,6 +333,13 @@ async def _summarize_conversation(messages: list[dict]) -> str:
     if not messages:
         return ""
 
+    # P2-2 轻量路径：<=30 条用提取式摘要，不调 LLM
+    if len(messages) <= 30:
+        summary = _extract_summary(messages)
+        logger.info(f"[CS] Extractive summary (P2-2): {len(messages)} msgs → {len(summary)} chars")
+        return summary
+
+    # LLM 路径：>30 条才用 LLM 摘要
     try:
         dialogue_text = "\n".join(
             f"{'用户' if m.get('role') == 'user' else '客服'}：{m.get('content', '')}"
@@ -287,17 +366,12 @@ async def _summarize_conversation(messages: list[dict]) -> str:
             trace_name="conversation_summary",
         )
         summary = result.get("summary", "")
-        logger.info(f"[CS] Conversation summarized: {len(messages)} msgs → {len(summary)} chars")
+        logger.info(f"[CS] LLM summary: {len(messages)} msgs → {len(summary)} chars")
         return summary
     except Exception as e:
         logger.warning(f"[CS] Conversation summarization failed (graceful): {e}")
-        # Fallback: 简单截取最早几条的文本
-        fallback_lines = []
-        for m in messages[:4]:
-            role = "用户" if m.get("role") == "user" else "客服"
-            content = (m.get("content") or "")[:50]
-            fallback_lines.append(f"{role}：{content}…")
-        return "【早期对话摘要】\n" + "\n".join(fallback_lines)
+        # Fallback: 提取式摘要兜底
+        return _extract_summary(messages)
 
 
 async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
