@@ -11,12 +11,99 @@ import contextlib
 import json
 import logging
 import os
+import random
 import re
 import time
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# P0-1: Fast-Path 秒回（仅拦截确定性高频简单消息）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+_FAST_PATH_GREETINGS = frozenset({
+    "你好", "您好", "在吗", "在不在", "有人吗", "hi", "hello",
+    "你好啊", "您好啊", "嗨", "hey", "ni hao",
+})
+
+_FAST_PATH_THANKS = frozenset({
+    "谢谢", "谢谢你", "谢谢您", "感谢", "多谢", "thank you",
+    "thanks", "非常感谢", "太感谢了", "感谢您",
+})
+
+_FAST_PATH_ACKS = frozenset({
+    "好的", "嗯嗯", "嗯", "知道了", "收到", "好哒", "ok", "okay",
+})
+
+_GREETING_REPLIES = [
+    "亲，您好！😊 欢迎光临，请问有什么可以帮您的呢？",
+    "您好亲！🌟 我是AI客服小康，随时为您服务，请问有什么需要帮忙吗？",
+    "亲好！😊 很高兴为您服务，请问想了解哪方面的商品或问题呢？",
+]
+_THANKS_REPLIES = [
+    "亲，不客气！😊 还有其他需要帮忙的吗？",
+    "应该的亲！🌟 如有任何问题随时告诉我哦~",
+    "不用谢亲！😊 祝您购物愉快，有需要随时来找我~",
+]
+_ACK_REPLIES = [
+    "亲，好的！😊 有其他问题随时告诉我哦~",
+    "好的亲！🌟 如还有需要帮忙的随时找我~",
+]
+
+
+def _fast_path_reply(session_id: str, message: str) -> dict | None:
+    """
+    P0-1 快速路径：只拦截确定性高频简单消息（问候、感谢、简单确认）。
+    不拦截任何需要推理的商品/订单/售后问题。
+    命中时打印 [CS-PERF] Fast-path hit 日志。
+    """
+    m = message.strip().lower().rstrip("~！!。，,.?？ ")
+
+    if m in _FAST_PATH_GREETINGS:
+        reply = random.choice(_GREETING_REPLIES)
+        logger.info("[CS-PERF] Fast-path hit: greeting")
+        return {
+            "session_id": session_id,
+            "reply": reply,
+            "intent": "greeting",
+            "sources": [],
+            "needs_human": False,
+            "action": {"type": "none"},
+            "product_cards": [],
+        }
+
+    if m in _FAST_PATH_THANKS:
+        reply = random.choice(_THANKS_REPLIES)
+        logger.info("[CS-PERF] Fast-path hit: thanks")
+        return {
+            "session_id": session_id,
+            "reply": reply,
+            "intent": "greeting",
+            "sources": [],
+            "needs_human": False,
+            "action": {"type": "none"},
+            "product_cards": [],
+        }
+
+    # 简单确认：只对极短消息触发（防止"好的，那血压计多少钱"被拦截）
+    if m in _FAST_PATH_ACKS and len(message.strip()) <= 6:
+        reply = random.choice(_ACK_REPLIES)
+        logger.info("[CS-PERF] Fast-path hit: ack")
+        return {
+            "session_id": session_id,
+            "reply": reply,
+            "intent": "greeting",
+            "sources": [],
+            "needs_human": False,
+            "action": {"type": "none"},
+            "product_cards": [],
+        }
+
+    return None
+
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -841,7 +928,14 @@ async def chat(
     _t0 = time.time()
 
     try:
-        # 1. 加载知识库（带缓存）
+        # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
+        _fast = _fast_path_reply(session_id, message)
+        if _fast is not None:
+            _t_fast = time.time()
+            logger.info(f"[CS-PERF] Fast-path total: {(_t_fast - _t0)*1000:.0f}ms")
+            return _fast
+
+                # 1. 加载知识库（带缓存）
         if not _cache_loaded:
             _knowledge_base_cache = await load_knowledge_base(pool)
             _cache_loaded = True
