@@ -1389,6 +1389,17 @@ async def chat(
             if scenario_hint:
                 system_prompt += f"\n\n# 当前场景指引\n{scenario_hint}"
 
+
+            # P3-1: 话术模板注入（按意图注入参考素材，LLM 自由组织语言）
+            try:
+                from .templates import get_templates_for_intent
+
+                template_hint = get_templates_for_intent(current_intent)
+                if template_hint:
+                    system_prompt += f"\n\n{template_hint}"
+            except Exception as _tmpl_err:
+                logger.debug(f"[CS] Template injection skipped: {_tmpl_err}")
+
             # 话题上下文注入（最高优先级的上下文信号）
             if topic_context:
                 system_prompt += f"\n\n# 当前对话话题\n{topic_context}"
