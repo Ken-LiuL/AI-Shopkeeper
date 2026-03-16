@@ -107,6 +107,42 @@ def _fast_path_reply(session_id: str, message: str) -> dict | None:
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# P1-1: 合规过滤层（医疗器械红线）
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+# 医疗器械合规词替换表（顺序敏感：长词优先）
+_COMPLIANCE_MAP: list[tuple[str, str]] = [
+    ("100%有效", "效果显著"),
+    ("100%治好", "有效辅助改善"),
+    ("100%治愈", "有效辅助改善"),
+    ("彻底治好", "有效辅助改善"),
+    ("彻底治愈", "有效辅助改善"),
+    ("根治", "有效辅助改善"),
+    ("治愈", "辅助改善"),
+    ("保证疗效", "有助于改善"),
+    ("代替就医", "辅助居家健康管理"),
+    ("替代就医", "辅助居家健康管理"),
+    ("包治百病", "广泛适用"),
+    ("药到病除", "效果显著"),
+]
+
+
+def _compliance_filter(reply_text: str) -> str:
+    """
+    P1-1 合规过滤层（额外安全层，不替代 prompt 引导）。
+    过滤医疗器械禁用词，替换为合规表述。
+    """
+    filtered = reply_text
+    for forbidden, replacement in _COMPLIANCE_MAP:
+        if forbidden in filtered:
+            new_text = filtered.replace(forbidden, replacement)
+            logger.info(f"[CS-COMPLIANCE] Filtered: {forbidden} -> {replacement}")
+            filtered = new_text
+    return filtered
+
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 快速意图预判 + 上下文预算器（不额外调 LLM）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1539,6 +1575,9 @@ async def chat(
         needs_human = result.get("requires_human_review", False)
         intent = result.get("intent", "other")
         suggested_action = result.get("action", {"type": "none"})
+
+        # P1-1: 合规过滤层（额外安全层）
+        reply_text = _compliance_filter(reply_text)
 
         # 如果 action 要求转人工，自动设置 needs_human
         if isinstance(suggested_action, dict) and suggested_action.get("type") == "transfer_human":
