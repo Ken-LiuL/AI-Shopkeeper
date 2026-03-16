@@ -234,7 +234,7 @@
   /* ═══════════════════ Backend Communication ═══════════════════ */
   function sendToBackend(msg) {
     if (!msg.text) return;
-    updatePanel('thinking', `处理中: "${msg.text.slice(0, 30)}..."`);
+    updatePanel('thinking', `🤔 AI正在分析: "${msg.text.slice(0, 25)}..."`);
     chrome.runtime.sendMessage(
       {
         type: 'CUSTOMER_MESSAGE',
@@ -247,13 +247,14 @@
       (response) => {
         if (chrome.runtime.lastError) {
           console.error('[AI店长] 连接后台失败:', chrome.runtime.lastError.message);
-          updatePanel('error', '连接后台失败');
+          updatePanel('error', '后台连接中断，请检查网络');
           return;
         }
         if (response?.success && response.reply) {
           handleAIReply(response.reply, msg.sessionId, msg.id);
         } else {
-          updatePanel('error', response?.error || '未知错误');
+          const errMsg = response?.error || '未知错误';
+          updatePanel('error', errMsg);
         }
       }
     );

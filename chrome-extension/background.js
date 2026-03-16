@@ -5,7 +5,8 @@
 
 const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
 const MAX_RETRIES = 2;
-const RETRY_DELAY_MS = 1000;
+const RETRY_DELAY_MS = 1500;
+const REQUEST_TIMEOUT_MS = 30000; // 30s 超时
 const debugLogs = [];
 
 function addLog(level, msg, detail = '') {
@@ -96,35 +97,58 @@ async function handleCustomerMessage(payload) {
 
   let lastError;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
     try {
+      const t0 = Date.now();
       const response = await fetch(settings.apiUrl, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
+
       if (!response.ok) {
         const errText = await response.text().catch(() => '');
         throw new Error(`HTTP ${response.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`);
       }
       const data = await response.json();
       const reply = data.reply || data.message || data.response || data.data?.reply || '';
+      const elapsed = Date.now() - t0;
+
       if (!reply) {
         addLog('error', '后台返回空回复');
-        return { success: false, error: '后台返回空回复' };
+        return { success: false, error: '后台返回空回复，请稍后重试' };
       }
-      addLog('success', '客服回复生成成功', reply.slice(0, 60));
-      return { success: true, reply };
+      addLog('success', `客服回复生成成功 (${elapsed}ms)`, reply.slice(0, 60));
+      return { success: true, reply, product_cards: data.data?.product_cards || [] };
     } catch (err) {
+      clearTimeout(timeoutId);
       lastError = err;
-      addLog('error', `请求失败 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`, err.message);
+
+      const isTimeout = err.name === 'AbortError';
+      const friendlyMsg = isTimeout
+        ? `AI思考超时 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`
+        : `请求异常 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`;
+      addLog('error', friendlyMsg, err.message);
+
       if (attempt < MAX_RETRIES) {
+        // 指数退避：1.5s, 3s
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
       }
     }
   }
 
   addLog('error', '客服回复生成失败', lastError?.message || 'unknown');
-  return { success: false, error: lastError?.message || '请求失败' };
+  const isTimeout = lastError?.name === 'AbortError';
+  return {
+    success: false,
+    error: isTimeout
+      ? 'AI正在思考中，请稍候重试~'
+      : `服务暂时繁忙，请稍后重试 (${lastError?.message || '未知错误'})`,
+  };
 }
 
 /* ═══════════════════ Feedback API ═══════════════════ */

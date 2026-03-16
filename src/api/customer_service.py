@@ -592,6 +592,32 @@ async def get_stats() -> APIResponse[dict]:
 
     saved_cost = round((total_today - human_transfers_today) * 5, 2)
 
+    # ── Intent distribution from cs_conversation_log ─────────────────
+    intent_distribution: dict[str, int] = {}
+    try:
+        rows = await pool.fetch(
+            "SELECT intent, COUNT(*) as cnt FROM cs_conversation_log"
+            " WHERE created_at >= $1 AND intent IS NOT NULL"
+            " GROUP BY intent ORDER BY cnt DESC LIMIT 10",
+            today_start,
+        )
+        intent_distribution = {row["intent"]: int(row["cnt"]) for row in rows}
+    except Exception as e:
+        logger.debug("Intent distribution query skipped: %s", e)
+
+    # ── Average response time (from cs_conversation_log duration or estimate) ──
+    avg_response_ms: float = 0.0
+    try:
+        fetched = await pool.fetchval(
+            "SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at)) * 1000)"
+            " FROM cs_conversation_log WHERE created_at >= $1",
+            today_start,
+        )
+        if fetched is not None:
+            avg_response_ms = round(float(fetched), 0)
+    except Exception as e:
+        logger.debug("Avg response time query skipped: %s", e)
+
     return APIResponse(
         data={
             # ── Legacy snake_case fields (keep for backward compat) ──
@@ -608,6 +634,9 @@ async def get_stats() -> APIResponse[dict]:
             "avgScore": avg_score,
             "humanTransfer": human_transfers_today,
             "savedCost": saved_cost,
+            # ── P1-2: 新增看板字段 ──
+            "intentDistribution": intent_distribution,
+            "avgResponseMs": avg_response_ms,
         }
     )
 

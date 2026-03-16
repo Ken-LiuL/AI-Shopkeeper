@@ -1045,7 +1045,7 @@ async def chat(
             logger.info(f"[CS-PERF] Fast-path total: {(_t_fast - _t0)*1000:.0f}ms")
             return _fast
 
-                # 1. 加载知识库（带缓存）
+        # 1. 加载知识库（带缓存）
         if not _cache_loaded:
             _knowledge_base_cache = await load_knowledge_base(pool)
             _cache_loaded = True
