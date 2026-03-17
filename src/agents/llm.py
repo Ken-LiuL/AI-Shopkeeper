@@ -16,7 +16,7 @@ from src.config import get_settings
 logger = logging.getLogger(__name__)
 
 # LLM 提供商配置
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "deepseek")  # "deepseek" | "openrouter" | "anthropic"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "deepseek" | "anthropic"
 
 # OpenRouter 模型映射（按任务复杂度分层，优化成本）
 _OPENROUTER_MODELS = {
