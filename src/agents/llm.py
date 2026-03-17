@@ -173,8 +173,8 @@ async def _call_openrouter(
     """通过 OpenRouter (OpenAI SDK) 调用，支持 tool_choice 和 JSON mode 两种模式"""
     client = _get_openai_client()
 
-    # 判断是否使用 JSON mode（更快，无 function calling 开销）
-    use_json = LLM_USE_JSON_MODE and "deepseek" in model.lower()
+    # JSON mode: 仅直连 DeepSeek 时启用（OpenRouter 对 response_format 支持不稳定）
+    use_json = LLM_USE_JSON_MODE and LLM_PROVIDER == "deepseek"
 
     messages: list[dict] = []
 
