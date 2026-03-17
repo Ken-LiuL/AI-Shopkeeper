@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 # LLM 提供商配置
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openrouter")  # "openrouter" | "deepseek" | "anthropic"
 
+# JSON mode: 用 response_format=json_object 替代 tool_choice，DeepSeek 系模型更快
+LLM_USE_JSON_MODE = os.environ.get("LLM_USE_JSON_MODE", "true").lower() in ("1", "true", "yes")
+
 # OpenRouter 模型映射（按任务复杂度分层，优化成本）
 _OPENROUTER_MODELS = {
     "flash": "google/gemini-2.0-flash-001",  # 意图识别、FAQ匹配、简单分类（最便宜）
@@ -137,6 +140,29 @@ def _anthropic_tool_to_openai_function(tool: dict) -> dict:
     }
 
 
+def _tool_schema_to_json_instruction(tool: dict) -> str:
+    """将 tool schema 转成 JSON mode 的 prompt 指令"""
+    schema = tool.get("input_schema", {})
+    props = schema.get("properties", {})
+    required = schema.get("required", [])
+
+    lines = ["请严格按以下 JSON 格式回复（不要输出任何其他内容）："]
+    lines.append("{")
+    for key, val in props.items():
+        desc = val.get("description", "")
+        typ = val.get("type", "string")
+        enum_vals = val.get("enum")
+        req_mark = " (必填)" if key in required else " (可选)"
+        if enum_vals:
+            lines.append(f'  "{key}": {typ}, // {desc}{req_mark}, 可选值: {enum_vals}')
+        elif typ == "object":
+            lines.append(f'  "{key}": {{...}}, // {desc}{req_mark}')
+        else:
+            lines.append(f'  "{key}": {typ}, // {desc}{req_mark}')
+    lines.append("}")
+    return "\n".join(lines)
+
+
 async def _call_openrouter(
     prompt: str | list[dict],
     tool: dict,
@@ -144,19 +170,83 @@ async def _call_openrouter(
     max_tokens: int,
     system: str | None,
 ) -> tuple[dict[str, Any], int, int]:
-    """通过 OpenRouter (OpenAI SDK) 调用"""
+    """通过 OpenRouter (OpenAI SDK) 调用，支持 tool_choice 和 JSON mode 两种模式"""
+    client = _get_openai_client()
+
+    # 判断是否使用 JSON mode（更快，无 function calling 开销）
+    use_json = LLM_USE_JSON_MODE and "deepseek" in model.lower()
+
+    messages: list[dict] = []
+
+    if use_json:
+        # JSON mode: 把 tool schema 转成 system prompt 指令
+        json_instruction = _tool_schema_to_json_instruction(tool)
+        sys_content = (system or "") + "\n\n" + json_instruction
+        messages.append({"role": "system", "content": sys_content.strip()})
+    elif system:
+        messages.append({"role": "system", "content": system})
+
+    # Support both single prompt string and multi-turn messages list
+    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+        messages.extend(prompt)
+    else:
+        messages.append({"role": "user", "content": prompt})
+
+    if use_json:
+        # JSON mode 路径：response_format + 无 tool_choice
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                ),
+                timeout=120.0,
+            )
+        except TimeoutError:
+            raise ValueError(f"LLM call timeout after 120s (model={model}, json_mode)") from None
+
+        choice = response.choices[0]
+        raw_content = choice.message.content or "{}"
+        # 容错：去掉可能的 markdown 包裹
+        raw_content = raw_content.strip()
+        if raw_content.startswith("```"):
+            raw_content = raw_content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+
+        try:
+            result = json.loads(raw_content)
+        except json.JSONDecodeError:
+            logger.warning(f"JSON mode parse failed, falling back to tool_choice. Raw: {raw_content[:200]}")
+            # fallback 到 tool_choice 模式
+            return await _call_openrouter_tool_choice(prompt, tool, model, max_tokens, system)
+
+        input_tokens = response.usage.prompt_tokens if response.usage else 0
+        output_tokens = response.usage.completion_tokens if response.usage else 0
+        logger.info(f"[LLM] JSON mode success: model={model}, in={input_tokens}, out={output_tokens}")
+        return result, input_tokens, output_tokens
+    else:
+        # tool_choice 路径（原逻辑，Gemini 等非 DeepSeek 模型）
+        return await _call_openrouter_tool_choice(prompt, tool, model, max_tokens, system)
+
+
+async def _call_openrouter_tool_choice(
+    prompt: str | list[dict],
+    tool: dict,
+    model: str,
+    max_tokens: int,
+    system: str | None,
+) -> tuple[dict[str, Any], int, int]:
+    """tool_choice 模式调用（原逻辑）"""
     client = _get_openai_client()
 
     messages: list[dict] = []
     if system:
         messages.append({"role": "system", "content": system})
 
-    # Support both single prompt string and multi-turn messages list
     if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
-        # Multi-turn messages: append each as-is
         messages.extend(prompt)
     else:
-        # Single prompt (string or multimodal content list)
         messages.append({"role": "user", "content": prompt})
 
     openai_tool = _anthropic_tool_to_openai_function(tool)
@@ -185,7 +275,6 @@ async def _call_openrouter(
             output_tokens = response.usage.completion_tokens if response.usage else 0
             return result, input_tokens, output_tokens
 
-        # Empty tool_call — known issue with Gemini 2.5 Pro, retry
         if attempt < max_retries:
             logger.warning(
                 f"OpenRouter empty tool_call (attempt {attempt}/{max_retries}), "
