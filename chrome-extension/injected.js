@@ -23,6 +23,26 @@
             if (arg.includes('接收到消息')) {
               const obj = findObjectArg(args, i + 1);
               if (obj && obj.sessionId) {
+                // 打出所有 key 和值类型，找出消息内容字段
+                const keys = [];
+                try {
+                  for (const k in obj) {
+                    try {
+                      const v = obj[k];
+                      const t = typeof v;
+                      if (t === 'string' && v.length > 0 && v.length < 500) {
+                        keys.push(`${k}="${v.substring(0,30)}"`);
+                      } else if (t === 'number' || t === 'boolean') {
+                        keys.push(`${k}=${v}`);
+                      } else if (t === 'object' && v !== null) {
+                        keys.push(`${k}={obj}`);
+                      } else {
+                        keys.push(`${k}:${t}`);
+                      }
+                    } catch(_) { keys.push(`${k}:?`); }
+                  }
+                } catch(_) {}
+                dbg('🔍 消息字段:', keys.join(' | '));
                 dbg('✅ 捕获[接收消息]', obj.sessionId, getContent(obj));
                 emitMessage('customer_message', obj);
               }
@@ -84,21 +104,28 @@
 
   function getContent(obj) {
     if (!obj) return '';
-    if (typeof obj.content === 'string' && obj.content.trim()) return obj.content.substring(0, 50);
-    if (typeof obj.text === 'string' && obj.text.trim()) return obj.text.substring(0, 50);
-    if (typeof obj.body === 'string' && obj.body.trim()) return obj.body.substring(0, 50);
-    if (obj.content && typeof obj.content === 'object') {
-      return JSON.stringify(obj.content).substring(0, 50);
-    }
-    // 卡片消息：从 data 字段尝试
-    if (typeof obj.data === 'string') {
+    // 尝试所有可能的文本字段
+    for (const key of ['content', 'text', 'body', 'msg', 'message', 'data', 'summary']) {
       try {
-        const d = JSON.parse(obj.data);
-        return (d.summary || d.content || d.text || JSON.stringify(d)).substring(0, 50);
+        const val = obj[key];
+        if (typeof val === 'string' && val.trim()) return val.substring(0, 80);
+        if (val && typeof val === 'object') {
+          const s = JSON.stringify(val);
+          if (s.length > 5) return s.substring(0, 80);
+        }
       } catch (_) {}
-      return obj.data.substring(0, 50);
     }
-    return `(type:${obj.type||'?'})`;
+    // 暴力搜索：找第一个看起来像消息内容的字符串属性
+    try {
+      for (const key of Object.getOwnPropertyNames(obj)) {
+        const val = obj[key];
+        if (typeof val === 'string' && val.length > 1 && val.length < 500 &&
+            !key.startsWith('_') && key !== 'sessionId' && key !== 'uuid' && key !== 'mid') {
+          return `[${key}]${val.substring(0, 60)}`;
+        }
+      }
+    } catch (_) {}
+    return `(type:${obj.type||'?'} keys:${Object.getOwnPropertyNames(obj).slice(0,8).join(',')})`;
   }
 
   console.log = interceptConsole(origLog);
@@ -122,29 +149,60 @@
     const result = {};
     const keys = [
       'sessionId', 'channelId', 'type', 'uuid', 'mid', 'appId',
-      'content', 'text', 'body', 'data', 'summary',
+      'content', 'text', 'body', 'data', 'summary', 'msg', 'message',
       'poiId', 'pubId', 'bizChatId', 'dialogStatus',
       'nickname', 'name'
     ];
+
+    // 1. 尝试所有已知 key（包括原型链上的 getter）
     for (const key of keys) {
       try {
-        if (key in obj) {
-          const val = obj[key];
-          if (val === null || val === undefined) continue;
-          if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
-            result[key] = val;
-          }
+        const val = obj[key]; // 不用 'in' 检查，直接访问（兼容 getter）
+        if (val === null || val === undefined) continue;
+        if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+          result[key] = val;
+        } else if (typeof val === 'object' && key !== 'customerInfo') {
+          // 对象值尝试 JSON 序列化
+          try { result[key] = JSON.stringify(val).substring(0, 500); } catch (_) {}
         }
       } catch (_) {}
     }
+
+    // 2. 暴力遍历所有自有属性（SDK 可能用了非标准属性名）
     try {
-      if (obj.customerInfo && typeof obj.customerInfo === 'object') {
+      const allKeys = Object.getOwnPropertyNames(obj);
+      for (const key of allKeys) {
+        if (result[key] !== undefined) continue; // 已提取
+        try {
+          const val = obj[key];
+          if (typeof val === 'string' && val.length > 0 && val.length < 2000) {
+            result[key] = val;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    // 3. customerInfo 特殊处理
+    try {
+      const ci = obj.customerInfo || obj.customer_info || obj.userInfo;
+      if (ci && typeof ci === 'object') {
         result.customerInfo = {};
-        for (const k of ['nickname', 'name', 'avatar', 'userId', 'customerId', 'uid']) {
-          try { if (k in obj.customerInfo) result.customerInfo[k] = obj.customerInfo[k]; } catch (_) {}
+        for (const k of ['nickname', 'name', 'avatar', 'userId', 'customerId', 'uid', 'userName']) {
+          try { const v = ci[k]; if (v) result.customerInfo[k] = v; } catch (_) {}
         }
       }
     } catch (_) {}
+
+    // 4. Debug: 列出所有属性名（帮助定位 content 字段）
+    try {
+      result.__keys = Object.getOwnPropertyNames(obj).join(',');
+      // 也看原型链
+      const proto = Object.getPrototypeOf(obj);
+      if (proto && proto !== Object.prototype) {
+        result.__protoKeys = Object.getOwnPropertyNames(proto).filter(k => k !== 'constructor').join(',');
+      }
+    } catch (_) {}
+
     return result;
   }
 
