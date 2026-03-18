@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 客服助手",
-  "version": "3.0.1",
+  "version": "3.0.2",
   "description": "AI店长客服助手 v3 — 数据驱动多会话、全量聊天记录采集、建议/半自动/全自动三种模式",
   "permissions": ["storage"],
   "host_permissions": [
