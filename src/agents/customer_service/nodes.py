@@ -15,7 +15,7 @@ import random
 import re
 import time
 
-from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_chat, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, call_chat, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
