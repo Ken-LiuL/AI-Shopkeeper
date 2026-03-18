@@ -1634,7 +1634,6 @@ action.type 可选: none, check_order, check_logistics, initiate_refund, initiat
                 model=MODEL_FLASH,
                 max_tokens=max_reply_tokens,
                 system=_full_system,
-                response_format={"type": "json_object"},
                 trace_name="customer_service_chat",
             )
 
