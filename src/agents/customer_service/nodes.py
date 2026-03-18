@@ -1197,9 +1197,9 @@ async def chat(
             memory_task = asyncio.create_task(_safe_load_memory())
 
         # ── 话题管理器（原来串行等待，现在并行） ──────────────────
-        from .conversation_manager import load_conversation_manager, save_conversation_manager
-
         from src.db import redis as redis_db
+
+        from .conversation_manager import load_conversation_manager, save_conversation_manager
 
         _redis = redis_db.get_redis()
         if _redis:
