@@ -54,6 +54,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async
   }
 
+  if (message.type === 'LOG_CHAT') {
+    handleLogChat(message.payload)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (message.type === 'GET_SYNC_STATS') {
     sendResponse({ success: true, stats: {}, errors: {}, debugLogs });
     return false;
@@ -149,6 +156,41 @@ async function handleCustomerMessage(payload) {
       ? 'AI正在思考中，请稍候重试~'
       : `服务暂时繁忙，请稍后重试 (${lastError?.message || '未知错误'})`,
   };
+}
+
+/* ═══════════════════ Chat Log Collection ═══════════════════ */
+async function handleLogChat(payload) {
+  const settings = await getApiSettings();
+  const logUrl = `${settings.chatBase}/api/customer-service/log-chat`;
+
+  const body = {
+    session_id: payload.session_id || '',
+    role: payload.role || 'agent',
+    content: payload.content || '',
+    timestamp: payload.timestamp || new Date().toISOString(),
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+
+  try {
+    const response = await fetch(logUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      // Non-critical: just log
+      addLog('error', `聊天记录上报失败: HTTP ${response.status}`);
+      return { success: false };
+    }
+    return { success: true };
+  } catch (err) {
+    // Silent fail — chat log is best-effort
+    addLog('error', `聊天记录上报异常: ${err.message}`);
+    return { success: false, error: err.message };
+  }
 }
 
 /* ═══════════════════ Feedback API ═══════════════════ */

@@ -1,7 +1,7 @@
 /**
  * content_script.js — AI店长 Chrome Extension
  * 完美客服助手：建议模式 / 半自动模式 / 全自动模式
- * 支持采纳/编辑/忽略反馈，回复对比追踪
+ * 支持多客户会话、采纳/编辑/忽略反馈、回复对比追踪、聊天记录采集
  */
 (function () {
   'use strict';
@@ -9,39 +9,80 @@
   /* ═══════════════════ State ═══════════════════ */
   let enabled = true;
   let mode = 'suggest'; // 'suggest' | 'auto-fill' | 'auto-send'
-  let recentReplies = []; // { id, text, time, sessionId, messageId, status, editedText }
   const processedMessages = new Set();
-  let pendingSuggestions = 0; // unread count for suggest mode badge
-  let lastAISuggestion = null; // for reply comparison tracking
+  let pendingSuggestions = 0;
 
-  /* ═══════════════════ Session ID Management ═══════════════════ */
-  // 确保每个页面会话有稳定的 session_id，避免 DOM fallback 时丢失上下文
-  let _pageSessionId = null;
+  // ── 多 Session 管理 ──────────────────────────────────────────────
+  // sessionReplies: { [sessionId]: [{ id, text, time, ... }] }
+  const sessionReplies = {};
+  // 当前活跃 session（从 WS 消息或 DOM 检测）
+  let activeSessionId = null;
+  // 最近一次 AI 建议（按 session）
+  const lastAISuggestions = {}; // { [sessionId]: { text, messageId } }
 
-  function getOrCreateSessionId(extractedId) {
-    // 优先用从 WS/DOM 提取到的真实 session_id
-    if (extractedId && extractedId !== '') return extractedId;
-    // 否则用页面级持久化的 session_id（同一个客服对话页面保持一致）
-    if (!_pageSessionId) {
-      // 尝试从 URL 提取会话标识
-      const urlMatch = location.href.match(/(?:session|conversation|chat)[_-]?(?:id)?[=\/]([a-zA-Z0-9_-]+)/i);
-      if (urlMatch) {
-        _pageSessionId = `ext-${urlMatch[1]}`;
-      } else {
-        // 用 tab + URL 生成稳定 ID（同一页面刷新后恢复）
-        _pageSessionId = `ext-${hashCode(location.origin + location.pathname)}-${Date.now().toString(36)}`;
+  /* ═══════════════════ Active Session Detection ═══════════════════ */
+  /**
+   * 从牵牛花客服工作台 DOM 检测当前选中的客户会话。
+   * 逻辑：找到左侧会话列表中高亮/选中的那个，提取用户名或 ID。
+   */
+  function detectActiveSession() {
+    // 牵牛花工作台常见选中态 class
+    const ACTIVE_SELECTORS = [
+      '.session-item.active', '.session-item.selected',
+      '.conversation-item.active', '.conversation-item.selected',
+      '[class*="sessionItem"][class*="active"]',
+      '[class*="session"][class*="selected"]',
+      '[class*="chat-item"][class*="active"]',
+      'li.active[class*="session"]',
+      '.im-session-list .active',
+    ];
+
+    for (const sel of ACTIVE_SELECTORS) {
+      const el = document.querySelector(sel);
+      if (el) {
+        // 从元素属性或内容提取 session 标识
+        const dataId = el.dataset?.sessionId || el.dataset?.conversationId
+          || el.dataset?.id || el.getAttribute('data-session-id')
+          || el.getAttribute('data-conversation-id');
+        if (dataId) return `mt-${dataId}`;
+
+        // fallback: 用客户名字做 key
+        const nameEl = el.querySelector('[class*="name"], [class*="nick"], [class*="title"]');
+        const name = nameEl?.textContent?.trim();
+        if (name) return `mt-name-${hashCode(name)}`;
       }
-      // 持久化到 sessionStorage（页面刷新后恢复，tab 关闭后清除）
-      try {
-        const stored = sessionStorage.getItem('__aidz_session_id__');
-        if (stored) {
-          _pageSessionId = stored;
-        } else {
-          sessionStorage.setItem('__aidz_session_id__', _pageSessionId);
-        }
-      } catch (_) {}
     }
-    return _pageSessionId;
+
+    // 再 fallback: 从聊天窗口标题提取
+    const headerSelectors = [
+      '.chat-header [class*="name"]', '.im-chat-header [class*="title"]',
+      '[class*="chatHeader"] [class*="userName"]',
+    ];
+    for (const sel of headerSelectors) {
+      const el = document.querySelector(sel);
+      const name = el?.textContent?.trim();
+      if (name && name.length > 0 && name.length < 50) {
+        return `mt-header-${hashCode(name)}`;
+      }
+    }
+
+    return null;
+  }
+
+  // 定期检测活跃 session（处理用户切换客户的情况）
+  setInterval(() => {
+    const detected = detectActiveSession();
+    if (detected && detected !== activeSessionId) {
+      activeSessionId = detected;
+      renderReplies(); // 切换客户时刷新面板
+    }
+  }, 1000);
+
+  function getCurrentSessionId(extractedId) {
+    if (extractedId && extractedId.trim() !== '') return extractedId;
+    if (activeSessionId) return activeSessionId;
+    // 最终 fallback
+    return `ext-fallback-${hashCode(location.origin + location.pathname)}`;
   }
 
   function hashCode(str) {
@@ -50,6 +91,23 @@
       hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
     }
     return Math.abs(hash).toString(36);
+  }
+
+  /* ═══════════════════ Reply Management (per-session) ═══════════════════ */
+  function getSessionReplies(sessionId) {
+    if (!sessionReplies[sessionId]) sessionReplies[sessionId] = [];
+    return sessionReplies[sessionId];
+  }
+
+  function addReply(sessionId, replyObj) {
+    const replies = getSessionReplies(sessionId);
+    replies.unshift(replyObj);
+    if (replies.length > 20) replies.pop();
+    // 清理旧 session（超过 50 个 session 时清理最老的）
+    const keys = Object.keys(sessionReplies);
+    if (keys.length > 50) {
+      delete sessionReplies[keys[0]];
+    }
   }
 
   /* ═══════════════════ Inject ═══════════════════ */
@@ -78,25 +136,33 @@
         const first = processedMessages.values().next().value;
         processedMessages.delete(first);
       }
+      // 更新活跃 session
+      if (msg.sessionId) activeSessionId = msg.sessionId;
       sendToBackend(msg);
+    }
+
+    // 采集客服发出的消息（用于学习）
+    const agentMsg = extractAgentMessage(data);
+    if (agentMsg && !processedMessages.has(agentMsg.id)) {
+      processedMessages.add(agentMsg.id);
+      logAgentReply(agentMsg);
     }
   }
 
   function extractCustomerMessage(data) {
-    // 辅助：从各种字段名提取 session/conversation ID
     function pickSessionId(...candidates) {
       for (const c of candidates) {
         if (c && typeof c === 'string' && c.trim() !== '') return c;
       }
-      return ''; // 空字符串 → getOrCreateSessionId 会兜底
+      return '';
     }
 
-    // Pattern 1: top-level message
+    // Pattern 1: top-level message (incoming from customer)
     if (data.type === 'message' && data.direction === 'in') {
       return {
         id: data.msgId || data.id || `${Date.now()}`,
         text: data.content || data.text || data.body,
-        sessionId: getOrCreateSessionId(pickSessionId(
+        sessionId: getCurrentSessionId(pickSessionId(
           data.sessionId, data.conversationId, data.session_id, data.conversation_id, data.chatId, data.chat_id
         )),
         customerInfo: data.customer || data.sender || {},
@@ -108,7 +174,7 @@
       return {
         id: inner.msgId || inner.id || `${Date.now()}`,
         text: inner.content || inner.text || '',
-        sessionId: getOrCreateSessionId(pickSessionId(
+        sessionId: getCurrentSessionId(pickSessionId(
           inner.sessionId, inner.conversationId, inner.session_id, inner.conversation_id, inner.chatId, inner.chat_id
         )),
         customerInfo: inner.customer || inner.sender || {},
@@ -121,7 +187,7 @@
         return {
           id: payload.msgId || payload.id || `${Date.now()}`,
           text: payload.content,
-          sessionId: getOrCreateSessionId(pickSessionId(
+          sessionId: getCurrentSessionId(pickSessionId(
             payload.sessionId, payload.conversationId, payload.session_id, payload.conversation_id, payload.chatId, payload.chat_id
           )),
           customerInfo: payload.customer || {},
@@ -131,7 +197,61 @@
     return null;
   }
 
-  /* ═══════════════════ DOM Observer (fallback) ═══════════════════ */
+  /**
+   * 提取客服发出的消息（direction=out 或 role=merchant/agent）
+   */
+  function extractAgentMessage(data) {
+    function pickSessionId(...candidates) {
+      for (const c of candidates) {
+        if (c && typeof c === 'string' && c.trim() !== '') return c;
+      }
+      return '';
+    }
+
+    // Pattern 1: outgoing message
+    if (data.type === 'message' && data.direction === 'out') {
+      return {
+        id: data.msgId || data.id || `agent-${Date.now()}`,
+        text: data.content || data.text || data.body,
+        sessionId: getCurrentSessionId(pickSessionId(
+          data.sessionId, data.conversationId, data.session_id, data.conversation_id
+        )),
+        role: 'agent',
+      };
+    }
+    // Pattern 2: nested outgoing
+    const inner = data.data || data.body || {};
+    if (inner.fromCustomer === false || inner.role === 'merchant' || inner.role === 'agent') {
+      const text = inner.content || inner.text || '';
+      if (text) {
+        return {
+          id: inner.msgId || inner.id || `agent-${Date.now()}`,
+          text,
+          sessionId: getCurrentSessionId(pickSessionId(
+            inner.sessionId, inner.conversationId, inner.session_id, inner.conversation_id
+          )),
+          role: 'agent',
+        };
+      }
+    }
+    // Pattern 3: chat command from agent
+    if (data.cmd === 'chat' || data.action === 'newMessage') {
+      const payload = data.payload || data.data || data;
+      if (payload.content && (payload.role === 'merchant' || payload.role === 'agent')) {
+        return {
+          id: payload.msgId || payload.id || `agent-${Date.now()}`,
+          text: payload.content,
+          sessionId: getCurrentSessionId(pickSessionId(
+            payload.sessionId, payload.conversationId, payload.session_id, payload.conversation_id
+          )),
+          role: 'agent',
+        };
+      }
+    }
+    return null;
+  }
+
+  /* ═══════════════════ DOM Observer (fallback for customer messages) ═══════════════════ */
   function startDOMObserver() {
     const CONTAINER_SELECTORS = [
       '.chat-message-list', '.message-list', '[class*="messageList"]',
@@ -155,14 +275,36 @@
         for (const mutation of mutations) {
           for (const node of mutation.addedNodes) {
             if (node.nodeType !== Node.ELEMENT_NODE) continue;
-            const bubble = node.matches?.('[class*="customer"], [class*="receive"], [class*="left"]')
+
+            // 客户消息（incoming）
+            const customerBubble = node.matches?.('[class*="customer"], [class*="receive"], [class*="left"]')
               ? node : node.querySelector?.('[class*="customer"], [class*="receive"], [class*="left"]');
-            if (bubble) {
-              const textEl = bubble.querySelector('[class*="text"], [class*="content"], p, span');
+            if (customerBubble) {
+              const textEl = customerBubble.querySelector('[class*="text"], [class*="content"], p, span');
               const text = textEl?.textContent?.trim();
-              if (text && !processedMessages.has(text)) {
-                processedMessages.add(text);
-                sendToBackend({ id: `dom-${Date.now()}`, text, sessionId: getOrCreateSessionId(''), customerInfo: {} });
+              const sessionId = getCurrentSessionId(detectActiveSession() || '');
+              if (text && !processedMessages.has(`dom-cust-${sessionId}-${text}`)) {
+                processedMessages.add(`dom-cust-${sessionId}-${text}`);
+                sendToBackend({ id: `dom-${Date.now()}`, text, sessionId, customerInfo: {} });
+              }
+            }
+
+            // 客服消息（outgoing）— 用于学习采集
+            const agentBubble = node.matches?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]')
+              ? node : node.querySelector?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]');
+            if (agentBubble) {
+              const textEl = agentBubble.querySelector('[class*="text"], [class*="content"], p, span');
+              const text = textEl?.textContent?.trim();
+              const sessionId = getCurrentSessionId(detectActiveSession() || '');
+              if (text && !processedMessages.has(`dom-agent-${sessionId}-${text}`)) {
+                processedMessages.add(`dom-agent-${sessionId}-${text}`);
+                logAgentReply({ id: `dom-agent-${Date.now()}`, text, sessionId, role: 'agent' });
+                // 对比 AI 建议
+                const suggestion = lastAISuggestions[sessionId];
+                if (suggestion && suggestion.text !== text) {
+                  trackReplyComparison(suggestion, text, sessionId);
+                  delete lastAISuggestions[sessionId];
+                }
               }
             }
           }
@@ -173,61 +315,34 @@
   }
   startDOMObserver();
 
-  /* ═══════════════════ Send-message Observer (reply comparison) ═══════════════════ */
-  function startSendObserver() {
-    // Watch for outgoing messages in DOM to compare with AI suggestion
-    const CONTAINER_SELECTORS = [
-      '.chat-message-list', '.message-list', '[class*="messageList"]',
-      '[class*="chat-content"]', '.im-message-list',
-    ];
-
-    function findContainer() {
-      for (const sel of CONTAINER_SELECTORS) {
-        const el = document.querySelector(sel);
-        if (el) return el;
-      }
-      return null;
-    }
-
-    function observeSent() {
-      const container = findContainer();
-      if (!container) { setTimeout(observeSent, 3000); return; }
-
-      new MutationObserver((mutations) => {
-        if (mode === 'auto-send') return; // no comparison needed in auto-send
-        for (const mutation of mutations) {
-          for (const node of mutation.addedNodes) {
-            if (node.nodeType !== Node.ELEMENT_NODE) continue;
-            // Look for outgoing (agent/merchant) messages
-            const bubble = node.matches?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]')
-              ? node : node.querySelector?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]');
-            if (bubble) {
-              const textEl = bubble.querySelector('[class*="text"], [class*="content"], p, span');
-              const actualText = textEl?.textContent?.trim();
-              if (actualText && lastAISuggestion) {
-                trackReplyComparison(lastAISuggestion, actualText);
-                lastAISuggestion = null;
-              }
-            }
-          }
-        }
-      }).observe(container, { childList: true, subtree: true });
-    }
-    observeSent();
-  }
-  startSendObserver();
-
-  function trackReplyComparison(suggestion, actual) {
-    if (suggestion.text === actual) return; // identical, no need to track
-    console.log('[AI店长] 回复对比 — AI建议 vs 实际发送', { ai: suggestion.text, actual });
+  function trackReplyComparison(suggestion, actual, sessionId) {
+    console.log('[AI店长] 回复对比 — AI建议 vs 实际发送', { ai: suggestion.text, actual, session: sessionId });
     sendFeedback({
-      session_id: suggestion.sessionId || '',
+      session_id: sessionId || '',
       message_id: suggestion.messageId || '',
       feedback: 'neutral',
       action: 'edited',
       original_reply: suggestion.text,
       edited_reply: '',
       actual_reply: actual,
+    });
+  }
+
+  /* ═══════════════════ Chat Log Collection (聊天记录采集) ═══════════════════ */
+  /**
+   * 把客服真实回复发到后端，用于学习和对比分析。
+   * 后端接口: POST /api/customer-service/log-chat
+   */
+  function logAgentReply(msg) {
+    if (!msg.text) return;
+    chrome.runtime.sendMessage({
+      type: 'LOG_CHAT',
+      payload: {
+        session_id: msg.sessionId || '',
+        role: msg.role || 'agent',
+        content: msg.text,
+        timestamp: new Date().toISOString(),
+      },
     });
   }
 
@@ -264,11 +379,8 @@
     chrome.runtime.sendMessage({ type: 'SEND_FEEDBACK', payload: data }, (resp) => {
       if (chrome.runtime.lastError) {
         console.error('[AI店长] 反馈发送失败:', chrome.runtime.lastError.message);
-      } else if (resp?.success) {
-        console.log('[AI店长] 反馈已记录');
       }
     });
-    // Update local stats
     updateFeedbackStats(data.action, data.feedback);
   }
 
@@ -291,36 +403,31 @@
       time: new Date().toLocaleTimeString(),
       sessionId: sessionId || '',
       messageId: messageId || '',
-      status: 'pending', // pending | adopted | edited | ignored
+      status: 'pending',
       editedText: '',
     };
 
-    recentReplies.unshift(replyObj);
-    if (recentReplies.length > 20) recentReplies.pop();
+    addReply(sessionId, replyObj);
 
-    // Store for reply comparison
-    lastAISuggestion = { text: reply, sessionId, messageId };
+    // 记录 AI 建议用于后续对比
+    lastAISuggestions[sessionId] = { text: reply, messageId };
 
     if (mode === 'suggest') {
-      // Suggest mode: just show in panel, highlight
       pendingSuggestions++;
       updatePanel('connected', `新建议: "${reply.slice(0, 40)}..."`);
       renderReplies();
       expandPanel();
       flashPanel();
     } else if (mode === 'auto-fill') {
-      // Auto-fill: fill input but don't send
       updatePanel('connected', `已填充: "${reply.slice(0, 40)}..."`);
       renderReplies();
       fillReplyInput(reply);
     } else if (mode === 'auto-send') {
-      // Auto-send: fill and send
       updatePanel('connected', `已发送: "${reply.slice(0, 40)}..."`);
       replyObj.status = 'adopted';
       renderReplies();
       fillReplyInput(reply);
       setTimeout(() => clickSendButton(), 300);
-      // Auto-feedback for auto-send
       sendFeedback({
         session_id: sessionId || '',
         message_id: messageId || '',
@@ -393,6 +500,7 @@
       <div class="aidz-header">
         <span class="aidz-title">🤖 AI客服助手</span>
         <span class="aidz-badge" id="aidz-mode-badge">建议</span>
+        <span class="aidz-session-indicator" id="aidz-session-indicator" title="当前会话"></span>
         <span class="aidz-status" id="aidz-status">●</span>
         <button class="aidz-minimize" id="aidz-minimize" title="最小化/展开">─</button>
       </div>
@@ -504,6 +612,7 @@
     if (!panel) return;
     const statusEl = document.getElementById('aidz-status');
     const infoEl = document.getElementById('aidz-info');
+    const sessionEl = document.getElementById('aidz-session-indicator');
     const colors = {
       connected: '#4caf50',
       thinking: '#ff9800',
@@ -512,6 +621,11 @@
     };
     if (statusEl) statusEl.style.color = colors[status] || '#4caf50';
     if (message && infoEl) infoEl.textContent = message;
+    // 更新 session 指示器
+    if (sessionEl && activeSessionId) {
+      sessionEl.textContent = `📋 ${activeSessionId.slice(0, 12)}...`;
+      sessionEl.title = `当前会话: ${activeSessionId}`;
+    }
   }
 
   function updateNotifyBadge() {
@@ -520,7 +634,6 @@
       if (!badge) {
         badge = document.createElement('span');
         badge.className = 'aidz-notify-badge';
-        panel.style.position = 'fixed'; // ensure relative for badge
         panel.appendChild(badge);
       }
       badge.textContent = pendingSuggestions > 9 ? '9+' : pendingSuggestions;
@@ -531,7 +644,6 @@
 
   function expandPanel() {
     if (isMinimized) {
-      // Don't auto-expand, but show badge
       updateNotifyBadge();
     }
   }
@@ -540,32 +652,34 @@
     if (!panel) return;
     panel.style.transition = 'box-shadow 0.3s';
     panel.style.boxShadow = '0 0 20px rgba(255, 149, 0, 0.6)';
-    setTimeout(() => {
-      panel.style.boxShadow = '';
-    }, 1500);
+    setTimeout(() => { panel.style.boxShadow = ''; }, 1500);
   }
 
-  /* ═══════════════════ Render Reply Cards ═══════════════════ */
+  /* ═══════════════════ Render Reply Cards (per-session) ═══════════════════ */
   function renderReplies() {
     const container = document.getElementById('aidz-replies');
     if (!container) return;
 
-    if (recentReplies.length === 0) {
+    // 只显示当前活跃 session 的回复
+    const currentReplies = activeSessionId ? (sessionReplies[activeSessionId] || []) : [];
+
+    if (currentReplies.length === 0) {
       container.innerHTML = '<div class="aidz-empty">暂无 AI 建议</div>';
       return;
     }
 
-    container.innerHTML = recentReplies.slice(0, 10).map((r) => {
+    container.innerHTML = currentReplies.slice(0, 10).map((r) => {
       const statusClass = r.status === 'adopted' ? 'aidz-adopted'
         : r.status === 'ignored' ? 'aidz-ignored' : '';
       const isActioned = r.status !== 'pending';
+      const statusColors = { adopted: '#4caf50', edited: '#1976d2', ignored: '#999' };
 
       return `
-        <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}">
+        <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
           <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
           <div class="aidz-reply-meta">
             <span>⏱ ${r.time}</span>
-            ${r.status !== 'pending' ? `<span style="color: ${r.status === 'adopted' ? '#4caf50' : r.status === 'edited' ? '#1976d2' : '#999'}">● ${statusLabel(r.status)}</span>` : ''}
+            ${r.status !== 'pending' ? `<span style="color: ${statusColors[r.status] || '#999'}">● ${statusLabel(r.status)}</span>` : ''}
           </div>
           <div class="aidz-reply-actions">
             <button class="aidz-action-btn aidz-btn-adopt ${isActioned ? 'aidz-btn-disabled' : ''}"
@@ -598,55 +712,36 @@
   function handleReplyAction(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
-
     const action = btn.dataset.action;
     const id = btn.dataset.id;
-    const reply = recentReplies.find((r) => r.id === id);
+    // 在所有 session 中查找 reply
+    let reply = null;
+    for (const sid of Object.keys(sessionReplies)) {
+      reply = sessionReplies[sid].find((r) => r.id === id);
+      if (reply) break;
+    }
     if (!reply) return;
 
     switch (action) {
-      case 'adopt':
-        adoptReply(reply);
-        break;
-      case 'edit':
-        toggleEditArea(reply);
-        break;
-      case 'ignore':
-        ignoreReply(reply);
-        break;
-      case 'feedback-good':
-        sendReplyFeedback(reply, 'good', btn);
-        break;
-      case 'feedback-bad':
-        sendReplyFeedback(reply, 'bad', btn);
-        break;
-      case 'edit-cancel':
-        closeEditArea(reply);
-        break;
-      case 'edit-confirm':
-        confirmEdit(reply);
-        break;
+      case 'adopt': adoptReply(reply); break;
+      case 'edit': toggleEditArea(reply); break;
+      case 'ignore': ignoreReply(reply); break;
+      case 'feedback-good': sendReplyFeedback(reply, 'good', btn); break;
+      case 'feedback-bad': sendReplyFeedback(reply, 'bad', btn); break;
+      case 'edit-cancel': closeEditArea(reply); break;
+      case 'edit-confirm': confirmEdit(reply); break;
     }
   }
 
   function adoptReply(reply) {
     reply.status = 'adopted';
     const text = reply.editedText || reply.text;
-
-    if (mode === 'suggest' || mode === 'auto-fill') {
-      fillReplyInput(text);
-    }
-    if (mode === 'auto-send' || mode === 'suggest') {
-      // In suggest mode, adopt = fill; user sends manually
-      // Actually in suggest mode, let's just fill. In auto-send we also send.
-    }
+    fillReplyInput(text);
     if (mode === 'auto-send') {
       setTimeout(() => clickSendButton(), 300);
     }
-
     pendingSuggestions = Math.max(0, pendingSuggestions - 1);
     renderReplies();
-
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
@@ -679,18 +774,14 @@
     if (!textarea) return;
     const editedText = textarea.value.trim();
     if (!editedText) return;
-
     reply.editedText = editedText;
     reply.status = 'edited';
-
     fillReplyInput(editedText);
     if (mode === 'auto-send') {
       setTimeout(() => clickSendButton(), 300);
     }
-
     pendingSuggestions = Math.max(0, pendingSuggestions - 1);
     renderReplies();
-
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
@@ -706,7 +797,6 @@
     reply.status = 'ignored';
     pendingSuggestions = Math.max(0, pendingSuggestions - 1);
     renderReplies();
-
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
@@ -719,21 +809,14 @@
   }
 
   function sendReplyFeedback(reply, type, btn) {
-    // Visual feedback
     btn.classList.add('active');
     btn.disabled = true;
-
-    // Disable the other feedback button
     const card = btn.closest('.aidz-reply-card');
     if (card) {
       const otherType = type === 'good' ? 'bad' : 'good';
       const otherBtn = card.querySelector(`[data-action="feedback-${otherType}"]`);
-      if (otherBtn) {
-        otherBtn.disabled = true;
-        otherBtn.classList.add('aidz-btn-disabled');
-      }
+      if (otherBtn) { otherBtn.disabled = true; otherBtn.classList.add('aidz-btn-disabled'); }
     }
-
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
@@ -746,8 +829,7 @@
   }
 
   function statusLabel(status) {
-    const labels = { adopted: '已采纳', edited: '已编辑', ignored: '已忽略' };
-    return labels[status] || status;
+    return { adopted: '已采纳', edited: '已编辑', ignored: '已忽略' }[status] || status;
   }
 
   function escapeHtml(text) {
@@ -758,5 +840,4 @@
 
   /* ═══════════════════ Init ═══════════════════ */
   createPanel();
-  console.log('[AI店长] 客服助手已加载 — 支持建议/半自动/全自动模式');
-})();
+  console.log('[AI店长] 客服助手已加载 — 多会话支持 + 聊天记录采集');

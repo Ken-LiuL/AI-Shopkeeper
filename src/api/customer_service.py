@@ -476,6 +476,65 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
         raise AppError("Failed to submit feedback", status_code=500) from e
 
 
+# ── Chat Log Collection (聊天记录采集) ────────────────────
+
+
+from pydantic import BaseModel
+
+
+class LogChatRequest(BaseModel):
+    session_id: str = ""
+    role: str = "agent"  # "agent" | "customer"
+    content: str = ""
+    timestamp: str = ""
+
+
+@router.post("/log-chat", response_model=APIResponse[dict])
+async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
+    """
+    接收扩展采集的聊天记录（客服真实回复 + 客户消息）。
+    用于学习系统分析和优化。
+    """
+    from src.db import postgres as pg_db
+
+    pool = pg_db.get_pool()
+    if not pool:
+        # 静默失败 — 聊天记录采集是 best-effort
+        return APIResponse(data={"logged": False, "reason": "no_db"})
+
+    try:
+        # 确保表存在
+        await pool.execute("""
+            CREATE TABLE IF NOT EXISTS cs_chat_log (
+                id SERIAL PRIMARY KEY,
+                session_id VARCHAR(200),
+                role VARCHAR(20) NOT NULL DEFAULT 'agent',
+                content TEXT NOT NULL,
+                source_timestamp TIMESTAMPTZ,
+                created_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+
+        await pool.execute(
+            """
+            INSERT INTO cs_chat_log (session_id, role, content, source_timestamp, created_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            """,
+            request.session_id or "",
+            request.role or "agent",
+            (request.content or "")[:2000],
+            request.timestamp or None,
+        )
+
+        logger.debug(f"Chat log recorded: session={request.session_id}, role={request.role}")
+        return APIResponse(data={"logged": True})
+
+    except Exception as e:
+        logger.warning(f"Failed to log chat: {e}")
+        # 不抛异常 — best-effort
+        return APIResponse(data={"logged": False, "reason": str(e)[:100]})
+
+
 # ── Analytics ─────────────────────────────────────────────
 
 
