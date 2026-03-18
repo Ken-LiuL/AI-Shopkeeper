@@ -1197,11 +1197,10 @@ async def chat(
             memory_task = asyncio.create_task(_safe_load_memory())
 
         # ── 话题管理器（原来串行等待，现在并行） ──────────────────
+        from .conversation_manager import load_conversation_manager, save_conversation_manager
+
         from src.db import redis as redis_db
-        from .conversation_manager import (
-            load_conversation_manager,
-            save_conversation_manager,
-        )
+
         _redis = redis_db.get_redis()
         if _redis:
             cm_task = asyncio.create_task(load_conversation_manager(_redis, session_id))
@@ -1358,8 +1357,6 @@ async def chat(
                 review_sentiment_context = []
 
         # ── 话题管理器（已在第一轮并行加载） ──────────────────────
-        from .conversation_manager import save_conversation_manager
-
         cm = _consume_task_result(cm_task)
         if cm is None:
             from .conversation_manager import load_conversation_manager
