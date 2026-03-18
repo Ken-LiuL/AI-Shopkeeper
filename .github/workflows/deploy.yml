@@ -71,11 +71,17 @@ jobs:
             echo "=== Syncing docker-compose.yml ==="
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
 
-            echo "=== Building Docker image (BuildKit + layer cache) ==="
-            DOCKER_BUILDKIT=1 docker build \
-              --build-arg BUILDKIT_INLINE_CACHE=1 \
-              --cache-from aishop-app:latest \
-              -t aishop-app:latest /opt/aishop/repo/
+            echo "=== Building Docker image ==="
+            # Try BuildKit first, fallback to legacy builder
+            if docker buildx version &>/dev/null; then
+              DOCKER_BUILDKIT=1 docker build \
+                --build-arg BUILDKIT_INLINE_CACHE=1 \
+                --cache-from aishop-app:latest \
+                -t aishop-app:latest /opt/aishop/repo/
+            else
+              echo "(BuildKit unavailable, using legacy builder)"
+              docker build -t aishop-app:latest /opt/aishop/repo/
+            fi
             echo "✅ Build done"
 
             echo "=== Starting infra (no-recreate) ==="
