@@ -1,11 +1,13 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 客服助手",
-  "version": "2.1.0",
-  "description": "AI店长客服助手 — 建议/半自动/全自动三种模式，支持反馈与回复对比追踪",
+  "version": "3.0.0",
+  "description": "AI店长客服助手 v3 — 数据驱动多会话、全量聊天记录采集、建议/半自动/全自动三种模式",
   "permissions": ["storage"],
   "host_permissions": [
     "https://yiyao.meituan.com/*",
+    "https://qnh.meituan.com/*",
+    "https://*.meituan.com/*",
     "http://192.144.227.205:8000/*"
   ],
   "background": {
@@ -14,7 +16,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://yiyao.meituan.com/*"
+        "https://yiyao.meituan.com/*",
+        "https://qnh.meituan.com/*"
       ],
       "js": ["content_script.js"],
       "css": ["panel.css"],
@@ -25,7 +28,8 @@
     {
       "resources": ["injected.js"],
       "matches": [
-        "https://yiyao.meituan.com/*"
+        "https://yiyao.meituan.com/*",
+        "https://qnh.meituan.com/*"
       ]
     }
   ],
