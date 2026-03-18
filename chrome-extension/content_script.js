@@ -1,7 +1,11 @@
 /**
- * content_script.js — AI店长 Chrome Extension
- * 完美客服助手：建议模式 / 半自动模式 / 全自动模式
- * 支持多客户会话、采纳/编辑/忽略反馈、回复对比追踪、聊天记录采集
+ * content_script.js — AI店长 Chrome Extension v3
+ * 
+ * 核心改进：完全数据驱动的多会话管理
+ * - WS 消息自带 sessionId → 直接用，不依赖 DOM 猜测
+ * - 所有会话并行处理，AI 建议按 session 隔离
+ * - 面板显示所有待处理建议，标注会话来源
+ * - 聊天记录全量采集（客户 + 客服），后端去重
  */
 (function () {
   'use strict';
@@ -10,79 +14,74 @@
   let enabled = true;
   let mode = 'suggest'; // 'suggest' | 'auto-fill' | 'auto-send'
   const processedMessages = new Set();
-  let pendingSuggestions = 0;
 
-  // ── 多 Session 管理 ──────────────────────────────────────────────
-  // sessionReplies: { [sessionId]: [{ id, text, time, ... }] }
-  const sessionReplies = {};
-  // 当前活跃 session（从 WS 消息或 DOM 检测）
-  let activeSessionId = null;
-  // 最近一次 AI 建议（按 session）
-  const lastAISuggestions = {}; // { [sessionId]: { text, messageId } }
+  // ── 多 Session 管理（纯数据驱动）─────────────────────────────
+  // sessionData: { [sessionId]: { replies: [], customerName: '', lastActivity: Date, pendingCount: 0 } }
+  const sessionData = {};
+  // 所有待处理建议（跨 session 的优先队列）
+  const pendingQueue = []; // [{ id, text, time, sessionId, customerName, ... }]
 
-  /* ═══════════════════ Active Session Detection ═══════════════════ */
-  /**
-   * 从牵牛花客服工作台 DOM 检测当前选中的客户会话。
-   * 逻辑：找到左侧会话列表中高亮/选中的那个，提取用户名或 ID。
-   */
-  function detectActiveSession() {
-    // 牵牛花工作台常见选中态 class
-    const ACTIVE_SELECTORS = [
-      '.session-item.active', '.session-item.selected',
-      '.conversation-item.active', '.conversation-item.selected',
-      '[class*="sessionItem"][class*="active"]',
-      '[class*="session"][class*="selected"]',
-      '[class*="chat-item"][class*="active"]',
-      'li.active[class*="session"]',
-      '.im-session-list .active',
-    ];
+  /* ═══════════════════ Session Helpers ═══════════════════ */
+  function getSession(sessionId) {
+    if (!sessionData[sessionId]) {
+      sessionData[sessionId] = {
+        replies: [],
+        customerName: '',
+        lastActivity: Date.now(),
+        pendingCount: 0,
+      };
+    }
+    sessionData[sessionId].lastActivity = Date.now();
+    return sessionData[sessionId];
+  }
 
-    for (const sel of ACTIVE_SELECTORS) {
-      const el = document.querySelector(sel);
-      if (el) {
-        // 从元素属性或内容提取 session 标识
-        const dataId = el.dataset?.sessionId || el.dataset?.conversationId
-          || el.dataset?.id || el.getAttribute('data-session-id')
-          || el.getAttribute('data-conversation-id');
-        if (dataId) return `mt-${dataId}`;
-
-        // fallback: 用客户名字做 key
-        const nameEl = el.querySelector('[class*="name"], [class*="nick"], [class*="title"]');
-        const name = nameEl?.textContent?.trim();
-        if (name) return `mt-name-${hashCode(name)}`;
+  function addReplyToSession(sessionId, replyObj) {
+    const session = getSession(sessionId);
+    session.replies.unshift(replyObj);
+    if (session.replies.length > 20) session.replies.pop();
+    if (replyObj.status === 'pending') {
+      session.pendingCount++;
+      pendingQueue.unshift(replyObj);
+      if (pendingQueue.length > 50) pendingQueue.pop();
+    }
+    // 清理超过 1 小时不活跃的 session
+    const cutoff = Date.now() - 3600000;
+    for (const sid of Object.keys(sessionData)) {
+      if (sessionData[sid].lastActivity < cutoff && sessionData[sid].pendingCount === 0) {
+        delete sessionData[sid];
       }
     }
+  }
 
-    // 再 fallback: 从聊天窗口标题提取
-    const headerSelectors = [
-      '.chat-header [class*="name"]', '.im-chat-header [class*="title"]',
-      '[class*="chatHeader"] [class*="userName"]',
+  function extractSessionId(data) {
+    // 从 WS 消息的各种字段名中提取 session ID
+    const candidates = [
+      data.sessionId, data.conversationId, data.session_id,
+      data.conversation_id, data.chatId, data.chat_id,
     ];
-    for (const sel of headerSelectors) {
-      const el = document.querySelector(sel);
-      const name = el?.textContent?.trim();
-      if (name && name.length > 0 && name.length < 50) {
-        return `mt-header-${hashCode(name)}`;
-      }
+    const inner = data.data || data.body || data.payload || {};
+    candidates.push(
+      inner.sessionId, inner.conversationId, inner.session_id,
+      inner.conversation_id, inner.chatId, inner.chat_id,
+    );
+    for (const c of candidates) {
+      if (c && typeof c === 'string' && c.trim() !== '') return c;
     }
-
     return null;
   }
 
-  // 定期检测活跃 session（处理用户切换客户的情况）
-  setInterval(() => {
-    const detected = detectActiveSession();
-    if (detected && detected !== activeSessionId) {
-      activeSessionId = detected;
-      renderReplies(); // 切换客户时刷新面板
+  function extractCustomerName(data) {
+    const sources = [
+      data.customer, data.sender, data.user,
+      data.data?.customer, data.data?.sender, data.data?.user,
+      data.payload?.customer, data.payload?.sender,
+    ];
+    for (const s of sources) {
+      if (!s) continue;
+      const name = s.name || s.nickname || s.nick || s.displayName || s.userName;
+      if (name && typeof name === 'string') return name;
     }
-  }, 1000);
-
-  function getCurrentSessionId(extractedId) {
-    if (extractedId && extractedId.trim() !== '') return extractedId;
-    if (activeSessionId) return activeSessionId;
-    // 最终 fallback
-    return `ext-fallback-${hashCode(location.origin + location.pathname)}`;
+    return '';
   }
 
   function hashCode(str) {
@@ -91,23 +90,6 @@
       hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
     }
     return Math.abs(hash).toString(36);
-  }
-
-  /* ═══════════════════ Reply Management (per-session) ═══════════════════ */
-  function getSessionReplies(sessionId) {
-    if (!sessionReplies[sessionId]) sessionReplies[sessionId] = [];
-    return sessionReplies[sessionId];
-  }
-
-  function addReply(sessionId, replyObj) {
-    const replies = getSessionReplies(sessionId);
-    replies.unshift(replyObj);
-    if (replies.length > 20) replies.pop();
-    // 清理旧 session（超过 50 个 session 时清理最老的）
-    const keys = Object.keys(sessionReplies);
-    if (keys.length > 50) {
-      delete sessionReplies[keys[0]];
-    }
   }
 
   /* ═══════════════════ Inject ═══════════════════ */
@@ -119,7 +101,7 @@
   }
   injectScript();
 
-  /* ═══════════════════ WS Listener ═══════════════════ */
+  /* ═══════════════════ WS Listener (主要数据源) ═══════════════════ */
   window.addEventListener('__AI_DIANZHANG_WS__', (e) => {
     if (!enabled) return;
     try {
@@ -129,67 +111,81 @@
   });
 
   function handleWSMessage(data) {
-    const msg = extractCustomerMessage(data);
-    if (msg && !processedMessages.has(msg.id)) {
-      processedMessages.add(msg.id);
-      if (processedMessages.size > 500) {
-        const first = processedMessages.values().next().value;
-        processedMessages.delete(first);
+    const sessionId = extractSessionId(data);
+
+    // 客户消息 → 触发 AI + 采集
+    const customerMsg = extractCustomerMessage(data, sessionId);
+    if (customerMsg && !processedMessages.has(customerMsg.id)) {
+      processedMessages.add(customerMsg.id);
+      trimProcessed();
+      // 记录客户名字
+      const name = extractCustomerName(data);
+      if (name && customerMsg.sessionId) {
+        getSession(customerMsg.sessionId).customerName = name;
       }
-      // 更新活跃 session
-      if (msg.sessionId) activeSessionId = msg.sessionId;
-      sendToBackend(msg);
+      // 采集客户消息
+      logChatMessage({ ...customerMsg, role: 'customer' });
+      // 触发 AI 建议
+      sendToBackend(customerMsg);
     }
 
-    // 采集客服发出的消息（用于学习）
-    const agentMsg = extractAgentMessage(data);
+    // 客服消息 → 仅采集
+    const agentMsg = extractAgentMessage(data, sessionId);
     if (agentMsg && !processedMessages.has(agentMsg.id)) {
       processedMessages.add(agentMsg.id);
+      trimProcessed();
       logChatMessage(agentMsg);
+      // 对比 AI 建议
+      const session = sessionData[agentMsg.sessionId];
+      if (session) {
+        const lastSuggestion = session.replies.find(r => r.status === 'pending');
+        if (lastSuggestion && lastSuggestion.text !== agentMsg.text) {
+          trackReplyComparison(lastSuggestion, agentMsg.text, agentMsg.sessionId);
+        }
+      }
     }
   }
 
-  function extractCustomerMessage(data) {
-    function pickSessionId(...candidates) {
-      for (const c of candidates) {
-        if (c && typeof c === 'string' && c.trim() !== '') return c;
+  function trimProcessed() {
+    if (processedMessages.size > 1000) {
+      const iter = processedMessages.values();
+      for (let i = 0; i < 200; i++) {
+        processedMessages.delete(iter.next().value);
       }
-      return '';
     }
+  }
 
-    // Pattern 1: top-level message (incoming from customer)
+  function extractCustomerMessage(data, fallbackSessionId) {
+    // Pattern 1: top-level incoming
     if (data.type === 'message' && data.direction === 'in') {
       return {
-        id: data.msgId || data.id || `${Date.now()}`,
-        text: data.content || data.text || data.body,
-        sessionId: getCurrentSessionId(pickSessionId(
-          data.sessionId, data.conversationId, data.session_id, data.conversation_id, data.chatId, data.chat_id
-        )),
+        id: data.msgId || data.id || `ws-cust-${Date.now()}`,
+        text: data.content || data.text || data.body || '',
+        sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
         customerInfo: data.customer || data.sender || {},
       };
     }
     // Pattern 2: nested
     const inner = data.data || data.body || {};
-    if (inner.msgType !== undefined && inner.fromCustomer !== false) {
-      return {
-        id: inner.msgId || inner.id || `${Date.now()}`,
-        text: inner.content || inner.text || '',
-        sessionId: getCurrentSessionId(pickSessionId(
-          inner.sessionId, inner.conversationId, inner.session_id, inner.conversation_id, inner.chatId, inner.chat_id
-        )),
-        customerInfo: inner.customer || inner.sender || {},
-      };
+    if (inner.msgType !== undefined && inner.fromCustomer !== false && inner.role !== 'merchant' && inner.role !== 'agent') {
+      const text = inner.content || inner.text || '';
+      if (text) {
+        return {
+          id: inner.msgId || inner.id || `ws-cust-${Date.now()}`,
+          text,
+          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
+          customerInfo: inner.customer || inner.sender || {},
+        };
+      }
     }
     // Pattern 3: chat command
     if (data.cmd === 'chat' || data.action === 'newMessage') {
       const payload = data.payload || data.data || data;
       if (payload.content && payload.role !== 'merchant' && payload.role !== 'agent') {
         return {
-          id: payload.msgId || payload.id || `${Date.now()}`,
+          id: payload.msgId || payload.id || `ws-cust-${Date.now()}`,
           text: payload.content,
-          sessionId: getCurrentSessionId(pickSessionId(
-            payload.sessionId, payload.conversationId, payload.session_id, payload.conversation_id, payload.chatId, payload.chat_id
-          )),
+          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
           customerInfo: payload.customer || {},
         };
       }
@@ -197,25 +193,13 @@
     return null;
   }
 
-  /**
-   * 提取客服发出的消息（direction=out 或 role=merchant/agent）
-   */
-  function extractAgentMessage(data) {
-    function pickSessionId(...candidates) {
-      for (const c of candidates) {
-        if (c && typeof c === 'string' && c.trim() !== '') return c;
-      }
-      return '';
-    }
-
-    // Pattern 1: outgoing message
+  function extractAgentMessage(data, fallbackSessionId) {
+    // Pattern 1: outgoing
     if (data.type === 'message' && data.direction === 'out') {
       return {
-        id: data.msgId || data.id || `agent-${Date.now()}`,
-        text: data.content || data.text || data.body,
-        sessionId: getCurrentSessionId(pickSessionId(
-          data.sessionId, data.conversationId, data.session_id, data.conversation_id
-        )),
+        id: data.msgId || data.id || `ws-agent-${Date.now()}`,
+        text: data.content || data.text || data.body || '',
+        sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
         role: 'agent',
       };
     }
@@ -225,25 +209,21 @@
       const text = inner.content || inner.text || '';
       if (text) {
         return {
-          id: inner.msgId || inner.id || `agent-${Date.now()}`,
+          id: inner.msgId || inner.id || `ws-agent-${Date.now()}`,
           text,
-          sessionId: getCurrentSessionId(pickSessionId(
-            inner.sessionId, inner.conversationId, inner.session_id, inner.conversation_id
-          )),
+          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
           role: 'agent',
         };
       }
     }
-    // Pattern 3: chat command from agent
+    // Pattern 3
     if (data.cmd === 'chat' || data.action === 'newMessage') {
       const payload = data.payload || data.data || data;
       if (payload.content && (payload.role === 'merchant' || payload.role === 'agent')) {
         return {
-          id: payload.msgId || payload.id || `agent-${Date.now()}`,
+          id: payload.msgId || payload.id || `ws-agent-${Date.now()}`,
           text: payload.content,
-          sessionId: getCurrentSessionId(pickSessionId(
-            payload.sessionId, payload.conversationId, payload.session_id, payload.conversation_id
-          )),
+          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
           role: 'agent',
         };
       }
@@ -251,7 +231,8 @@
     return null;
   }
 
-  /* ═══════════════════ DOM Observer (fallback for customer messages) ═══════════════════ */
+  /* ═══════════════════ DOM Observer (补充采集) ═══════════════════ */
+  // DOM 只作为 WS 的补充（某些消息可能不经过 WS）
   function startDOMObserver() {
     const CONTAINER_SELECTORS = [
       '.chat-message-list', '.message-list', '[class*="messageList"]',
@@ -276,35 +257,44 @@
           for (const node of mutation.addedNodes) {
             if (node.nodeType !== Node.ELEMENT_NODE) continue;
 
-            // 客户消息（incoming）
+            // 客户消息
             const customerBubble = node.matches?.('[class*="customer"], [class*="receive"], [class*="left"]')
               ? node : node.querySelector?.('[class*="customer"], [class*="receive"], [class*="left"]');
             if (customerBubble) {
               const textEl = customerBubble.querySelector('[class*="text"], [class*="content"], p, span');
               const text = textEl?.textContent?.trim();
-              const sessionId = getCurrentSessionId(detectActiveSession() || '');
-              if (text && !processedMessages.has(`dom-cust-${sessionId}-${text}`)) {
-                processedMessages.add(`dom-cust-${sessionId}-${text}`);
-                // sendToBackend 内部已调 logChatMessage，无需重复
-                sendToBackend({ id: `dom-${Date.now()}`, text, sessionId, customerInfo: {} });
+              if (text) {
+                // DOM 无法可靠获取 sessionId，用 content hash 去重（后端会处理）
+                const dedupKey = `dom-cust-${hashCode(text)}`;
+                if (!processedMessages.has(dedupKey)) {
+                  processedMessages.add(dedupKey);
+                  // 不触发 AI（WS 已触发），只做采集补充
+                  logChatMessage({
+                    id: `dom-${Date.now()}-${hashCode(text)}`,
+                    text,
+                    sessionId: findMostRecentActiveSession() || `dom-fallback-${Date.now()}`,
+                    role: 'customer',
+                  });
+                }
               }
             }
 
-            // 客服消息（outgoing）— 用于学习采集
+            // 客服消息
             const agentBubble = node.matches?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]')
               ? node : node.querySelector?.('[class*="merchant"], [class*="send"], [class*="right"], [class*="agent"]');
             if (agentBubble) {
               const textEl = agentBubble.querySelector('[class*="text"], [class*="content"], p, span');
               const text = textEl?.textContent?.trim();
-              const sessionId = getCurrentSessionId(detectActiveSession() || '');
-              if (text && !processedMessages.has(`dom-agent-${sessionId}-${text}`)) {
-                processedMessages.add(`dom-agent-${sessionId}-${text}`);
-                logChatMessage({ id: `dom-agent-${Date.now()}`, text, sessionId, role: 'agent' });
-                // 对比 AI 建议
-                const suggestion = lastAISuggestions[sessionId];
-                if (suggestion && suggestion.text !== text) {
-                  trackReplyComparison(suggestion, text, sessionId);
-                  delete lastAISuggestions[sessionId];
+              if (text) {
+                const dedupKey = `dom-agent-${hashCode(text)}`;
+                if (!processedMessages.has(dedupKey)) {
+                  processedMessages.add(dedupKey);
+                  logChatMessage({
+                    id: `dom-agent-${Date.now()}-${hashCode(text)}`,
+                    text,
+                    sessionId: findMostRecentActiveSession() || `dom-fallback-${Date.now()}`,
+                    role: 'agent',
+                  });
                 }
               }
             }
@@ -314,10 +304,23 @@
     }
     observe();
   }
+
+  function findMostRecentActiveSession() {
+    // 找最近有活动的 session（WS 数据驱动）
+    let latest = null;
+    let latestTime = 0;
+    for (const [sid, data] of Object.entries(sessionData)) {
+      if (data.lastActivity > latestTime) {
+        latestTime = data.lastActivity;
+        latest = sid;
+      }
+    }
+    return latest;
+  }
+
   startDOMObserver();
 
   function trackReplyComparison(suggestion, actual, sessionId) {
-    console.log('[AI店长] 回复对比 — AI建议 vs 实际发送', { ai: suggestion.text, actual, session: sessionId });
     sendFeedback({
       session_id: sessionId || '',
       message_id: suggestion.messageId || '',
@@ -329,13 +332,7 @@
     });
   }
 
-  /* ═══════════════════ Chat Log Collection (聊天记录采集) ═══════════════════ */
-  /**
-   * 把聊天消息发到后端，用于学习和对比分析。
-   * 后端接口: POST /api/customer-service/log-chat
-   * 支持 agent（客服）和 customer（客户）消息。
-   * 后端通过 content_hash 去重，所以 WS + DOM 双采集不会重复。
-   */
+  /* ═══════════════════ Chat Log Collection ═══════════════════ */
   function logChatMessage(msg) {
     if (!msg.text) return;
     chrome.runtime.sendMessage({
@@ -343,7 +340,7 @@
       payload: {
         session_id: msg.sessionId || '',
         message_id: msg.id || '',
-        role: msg.role || 'agent',
+        role: msg.role || 'unknown',
         content: msg.text,
         timestamp: new Date().toISOString(),
       },
@@ -353,9 +350,10 @@
   /* ═══════════════════ Backend Communication ═══════════════════ */
   function sendToBackend(msg) {
     if (!msg.text) return;
-    // 记录客户消息到 log-chat（用于完整对话采集）
-    logChatMessage({ id: msg.id, text: msg.text, sessionId: msg.sessionId, role: 'customer' });
-    updatePanel('thinking', `🤔 AI正在分析: "${msg.text.slice(0, 25)}..."`);
+    const session = getSession(msg.sessionId);
+    const customerLabel = session.customerName || msg.sessionId?.slice(0, 10) || '客户';
+    updatePanel('thinking', `🤔 [${customerLabel}] "${msg.text.slice(0, 20)}..."`);
+
     chrome.runtime.sendMessage(
       {
         type: 'CUSTOMER_MESSAGE',
@@ -367,22 +365,20 @@
       },
       (response) => {
         if (chrome.runtime.lastError) {
-          console.error('[AI店长] 连接后台失败:', chrome.runtime.lastError.message);
-          updatePanel('error', '后台连接中断，请检查网络');
+          updatePanel('error', '后台连接中断');
           return;
         }
         if (response?.success && response.reply) {
           handleAIReply(response.reply, msg.sessionId, msg.id);
         } else {
-          const errMsg = response?.error || '未知错误';
-          updatePanel('error', errMsg);
+          updatePanel('error', response?.error || '未知错误');
         }
       }
     );
   }
 
   function sendFeedback(data) {
-    chrome.runtime.sendMessage({ type: 'SEND_FEEDBACK', payload: data }, (resp) => {
+    chrome.runtime.sendMessage({ type: 'SEND_FEEDBACK', payload: data }, () => {
       if (chrome.runtime.lastError) {
         console.error('[AI店长] 反馈发送失败:', chrome.runtime.lastError.message);
       }
@@ -403,40 +399,39 @@
 
   /* ═══════════════════ AI Reply Handler ═══════════════════ */
   function handleAIReply(reply, sessionId, messageId) {
+    const session = getSession(sessionId);
+    const customerLabel = session.customerName || sessionId?.slice(0, 10) || '客户';
+
     const replyObj = {
       id: `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       text: reply,
       time: new Date().toLocaleTimeString(),
       sessionId: sessionId || '',
       messageId: messageId || '',
+      customerName: customerLabel,
       status: 'pending',
       editedText: '',
     };
 
-    addReply(sessionId, replyObj);
-
-    // 记录 AI 建议用于后续对比
-    lastAISuggestions[sessionId] = { text: reply, messageId };
+    addReplyToSession(sessionId, replyObj);
 
     if (mode === 'suggest') {
-      pendingSuggestions++;
-      updatePanel('connected', `新建议: "${reply.slice(0, 40)}..."`);
+      updatePanel('connected', `✨ [${customerLabel}] 新建议`);
       renderReplies();
-      expandPanel();
       flashPanel();
     } else if (mode === 'auto-fill') {
-      updatePanel('connected', `已填充: "${reply.slice(0, 40)}..."`);
+      updatePanel('connected', `✏️ [${customerLabel}] 已填充`);
       renderReplies();
       fillReplyInput(reply);
     } else if (mode === 'auto-send') {
-      updatePanel('connected', `已发送: "${reply.slice(0, 40)}..."`);
+      updatePanel('connected', `🚀 [${customerLabel}] 已发送`);
       replyObj.status = 'adopted';
       renderReplies();
       fillReplyInput(reply);
       setTimeout(() => clickSendButton(), 300);
       sendFeedback({
-        session_id: sessionId || '',
-        message_id: messageId || '',
+        session_id: sessionId,
+        message_id: messageId,
         feedback: 'good',
         action: 'adopted',
         original_reply: reply,
@@ -506,7 +501,7 @@
       <div class="aidz-header">
         <span class="aidz-title">🤖 AI客服助手</span>
         <span class="aidz-badge" id="aidz-mode-badge">建议</span>
-        <span class="aidz-session-indicator" id="aidz-session-indicator" title="当前会话"></span>
+        <span class="aidz-session-count" id="aidz-session-count" title="活跃会话数"></span>
         <span class="aidz-status" id="aidz-status">●</span>
         <button class="aidz-minimize" id="aidz-minimize" title="最小化/展开">─</button>
       </div>
@@ -562,7 +557,6 @@
       mode = e.target.value;
       chrome.storage.sync.set({ mode });
       updateModeBadge();
-      updatePanelModeStyle();
     });
 
     document.getElementById('aidz-minimize').addEventListener('click', () => {
@@ -577,12 +571,9 @@
         body.style.display = 'block';
         btn.textContent = '─';
         panel.classList.remove('aidz-minimized');
-        pendingSuggestions = 0;
-        updateNotifyBadge();
       }
     });
 
-    /* — Load saved state — */
     chrome.storage.sync.get(['enabled', 'mode'], (s) => {
       if (s.enabled === false) {
         enabled = false;
@@ -594,63 +585,28 @@
         document.getElementById('aidz-mode').value = mode;
       }
       updateModeBadge();
-      updatePanelModeStyle();
     });
   }
 
   function updateModeBadge() {
     const badge = document.getElementById('aidz-mode-badge');
     if (!badge) return;
-    const labels = { suggest: '建议', 'auto-fill': '半自动', 'auto-send': '全自动' };
-    badge.textContent = labels[mode] || mode;
-  }
-
-  function updatePanelModeStyle() {
-    if (!panel) return;
-    if (mode === 'suggest') {
-      panel.classList.add('aidz-suggest-mode');
-    } else {
-      panel.classList.remove('aidz-suggest-mode');
-    }
+    badge.textContent = { suggest: '建议', 'auto-fill': '半自动', 'auto-send': '全自动' }[mode] || mode;
   }
 
   function updatePanel(status, message) {
     if (!panel) return;
     const statusEl = document.getElementById('aidz-status');
     const infoEl = document.getElementById('aidz-info');
-    const sessionEl = document.getElementById('aidz-session-indicator');
-    const colors = {
-      connected: '#4caf50',
-      thinking: '#ff9800',
-      error: '#f44336',
-      disabled: '#999',
-    };
+    const countEl = document.getElementById('aidz-session-count');
+    const colors = { connected: '#4caf50', thinking: '#ff9800', error: '#f44336', disabled: '#999' };
     if (statusEl) statusEl.style.color = colors[status] || '#4caf50';
     if (message && infoEl) infoEl.textContent = message;
-    // 更新 session 指示器
-    if (sessionEl && activeSessionId) {
-      sessionEl.textContent = `📋 ${activeSessionId.slice(0, 12)}...`;
-      sessionEl.title = `当前会话: ${activeSessionId}`;
-    }
-  }
-
-  function updateNotifyBadge() {
-    let badge = panel.querySelector('.aidz-notify-badge');
-    if (pendingSuggestions > 0 && isMinimized) {
-      if (!badge) {
-        badge = document.createElement('span');
-        badge.className = 'aidz-notify-badge';
-        panel.appendChild(badge);
-      }
-      badge.textContent = pendingSuggestions > 9 ? '9+' : pendingSuggestions;
-    } else if (badge) {
-      badge.remove();
-    }
-  }
-
-  function expandPanel() {
-    if (isMinimized) {
-      updateNotifyBadge();
+    // 更新活跃会话数
+    if (countEl) {
+      const activeCount = Object.keys(sessionData).length;
+      const pendingTotal = Object.values(sessionData).reduce((sum, s) => sum + s.pendingCount, 0);
+      countEl.textContent = pendingTotal > 0 ? `📋 ${activeCount}会话 · ${pendingTotal}待处理` : `📋 ${activeCount}会话`;
     }
   }
 
@@ -661,27 +617,42 @@
     setTimeout(() => { panel.style.boxShadow = ''; }, 1500);
   }
 
-  /* ═══════════════════ Render Reply Cards (per-session) ═══════════════════ */
+  /* ═══════════════════ Render Reply Cards (跨 session) ═══════════════════ */
   function renderReplies() {
     const container = document.getElementById('aidz-replies');
     if (!container) return;
 
-    // 只显示当前活跃 session 的回复
-    const currentReplies = activeSessionId ? (sessionReplies[activeSessionId] || []) : [];
+    // 收集所有 session 的待处理 + 最近回复，按时间排序
+    const allReplies = [];
+    for (const [sid, data] of Object.entries(sessionData)) {
+      for (const r of data.replies.slice(0, 5)) {
+        allReplies.push(r);
+      }
+    }
+    // 按时间倒序（最新的在上面）
+    allReplies.sort((a, b) => {
+      const ta = new Date(`1970-01-01T${a.time}`).getTime() || 0;
+      const tb = new Date(`1970-01-01T${b.time}`).getTime() || 0;
+      return tb - ta;
+    });
 
-    if (currentReplies.length === 0) {
+    const display = allReplies.slice(0, 10);
+
+    if (display.length === 0) {
       container.innerHTML = '<div class="aidz-empty">暂无 AI 建议</div>';
       return;
     }
 
-    container.innerHTML = currentReplies.slice(0, 10).map((r) => {
+    container.innerHTML = display.map((r) => {
       const statusClass = r.status === 'adopted' ? 'aidz-adopted'
         : r.status === 'ignored' ? 'aidz-ignored' : '';
       const isActioned = r.status !== 'pending';
       const statusColors = { adopted: '#4caf50', edited: '#1976d2', ignored: '#999' };
+      const label = r.customerName || r.sessionId?.slice(0, 8) || '未知';
 
       return `
         <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
+          <div class="aidz-reply-session-tag" title="${r.sessionId}">👤 ${escapeHtml(label)}</div>
           <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
           <div class="aidz-reply-meta">
             <span>⏱ ${r.time}</span>
@@ -711,8 +682,8 @@
       `;
     }).join('');
 
-    // Bind events via delegation
     container.onclick = handleReplyAction;
+    updatePanel('connected', '');
   }
 
   function handleReplyAction(e) {
@@ -720,10 +691,9 @@
     if (!btn) return;
     const action = btn.dataset.action;
     const id = btn.dataset.id;
-    // 在所有 session 中查找 reply
     let reply = null;
-    for (const sid of Object.keys(sessionReplies)) {
-      reply = sessionReplies[sid].find((r) => r.id === id);
+    for (const sid of Object.keys(sessionData)) {
+      reply = sessionData[sid].replies.find((r) => r.id === id);
       if (reply) break;
     }
     if (!reply) return;
@@ -741,21 +711,18 @@
 
   function adoptReply(reply) {
     reply.status = 'adopted';
-    const text = reply.editedText || reply.text;
-    fillReplyInput(text);
-    if (mode === 'auto-send') {
-      setTimeout(() => clickSendButton(), 300);
-    }
-    pendingSuggestions = Math.max(0, pendingSuggestions - 1);
+    const session = sessionData[reply.sessionId];
+    if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
+    fillReplyInput(reply.editedText || reply.text);
+    if (mode === 'auto-send') setTimeout(() => clickSendButton(), 300);
     renderReplies();
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: 'good',
-      action: 'adopted',
+      feedback: 'good', action: 'adopted',
       original_reply: reply.text,
       edited_reply: reply.editedText || '',
-      actual_reply: text,
+      actual_reply: reply.editedText || reply.text,
     });
   }
 
@@ -764,8 +731,8 @@
     if (area) {
       area.classList.toggle('active');
       if (area.classList.contains('active')) {
-        const textarea = document.getElementById(`edit-text-${reply.id}`);
-        if (textarea) textarea.focus();
+        const ta = document.getElementById(`edit-text-${reply.id}`);
+        if (ta) ta.focus();
       }
     }
   }
@@ -776,23 +743,21 @@
   }
 
   function confirmEdit(reply) {
-    const textarea = document.getElementById(`edit-text-${reply.id}`);
-    if (!textarea) return;
-    const editedText = textarea.value.trim();
+    const ta = document.getElementById(`edit-text-${reply.id}`);
+    if (!ta) return;
+    const editedText = ta.value.trim();
     if (!editedText) return;
     reply.editedText = editedText;
     reply.status = 'edited';
+    const session = sessionData[reply.sessionId];
+    if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     fillReplyInput(editedText);
-    if (mode === 'auto-send') {
-      setTimeout(() => clickSendButton(), 300);
-    }
-    pendingSuggestions = Math.max(0, pendingSuggestions - 1);
+    if (mode === 'auto-send') setTimeout(() => clickSendButton(), 300);
     renderReplies();
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: 'good',
-      action: 'edited',
+      feedback: 'good', action: 'edited',
       original_reply: reply.text,
       edited_reply: editedText,
       actual_reply: editedText,
@@ -801,16 +766,15 @@
 
   function ignoreReply(reply) {
     reply.status = 'ignored';
-    pendingSuggestions = Math.max(0, pendingSuggestions - 1);
+    const session = sessionData[reply.sessionId];
+    if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     renderReplies();
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: 'bad',
-      action: 'ignored',
+      feedback: 'bad', action: 'ignored',
       original_reply: reply.text,
-      edited_reply: '',
-      actual_reply: '',
+      edited_reply: '', actual_reply: '',
     });
   }
 
@@ -846,4 +810,5 @@
 
   /* ═══════════════════ Init ═══════════════════ */
   createPanel();
-  console.log('[AI店长] 客服助手已加载 — 多会话支持 + 聊天记录采集');
+  console.log('[AI店长] v3 已加载 — 数据驱动多会话 + 全量聊天记录采集');
+})();
