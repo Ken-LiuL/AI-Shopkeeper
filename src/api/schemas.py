@@ -112,6 +112,14 @@ class FeedbackRequest(BaseModel):
     correction_text: str | None = None
 
 
+class LogChatRequest(BaseModel):
+    session_id: str = ""
+    message_id: str = ""
+    role: str = "agent"
+    content: str = ""
+    timestamp: str = ""
+
+
 # ── Alerts ───────────────────────────────────────────────────
 
 

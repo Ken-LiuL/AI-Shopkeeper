@@ -20,6 +20,7 @@ from .schemas import (
     CreateSessionRequest,
     CreateSessionResponse,
     FeedbackRequest,
+    LogChatRequest,
     SessionHistory,
     SessionListItem,
 )
@@ -479,17 +480,6 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
 
 
 # ── Chat Log Collection (聊天记录采集) ────────────────────
-
-
-from pydantic import BaseModel
-
-
-class LogChatRequest(BaseModel):
-    session_id: str = ""
-    message_id: str = ""  # 扩展端生成的消息 ID，用于去重
-    role: str = "agent"  # "agent" | "customer"
-    content: str = ""
-    timestamp: str = ""
 
 
 @router.post("/log-chat", response_model=APIResponse[dict])
