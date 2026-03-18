@@ -484,6 +484,7 @@ from pydantic import BaseModel
 
 class LogChatRequest(BaseModel):
     session_id: str = ""
+    message_id: str = ""  # 扩展端生成的消息 ID，用于去重
     role: str = "agent"  # "agent" | "customer"
     content: str = ""
     timestamp: str = ""
@@ -494,44 +495,70 @@ async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
     """
     接收扩展采集的聊天记录（客服真实回复 + 客户消息）。
     用于学习系统分析和优化。
+    通过 content_hash (session_id + role + content 前200字) 去重。
     """
+    import hashlib
+
     from src.db import postgres as pg_db
 
     pool = pg_db.get_pool()
     if not pool:
-        # 静默失败 — 聊天记录采集是 best-effort
         return APIResponse(data={"logged": False, "reason": "no_db"})
 
+    content_trimmed = (request.content or "")[:2000]
+    if not content_trimmed.strip():
+        return APIResponse(data={"logged": False, "reason": "empty_content"})
+
+    # 生成去重 hash：session_id + role + content 前 200 字
+    dedup_key = f"{request.session_id}|{request.role}|{content_trimmed[:200]}"
+    content_hash = hashlib.md5(dedup_key.encode()).hexdigest()
+
     try:
-        # 确保表存在
+        # 确保表存在（含唯一约束）
         await pool.execute("""
             CREATE TABLE IF NOT EXISTS cs_chat_log (
                 id SERIAL PRIMARY KEY,
                 session_id VARCHAR(200),
+                message_id VARCHAR(200),
                 role VARCHAR(20) NOT NULL DEFAULT 'agent',
                 content TEXT NOT NULL,
+                content_hash VARCHAR(32) UNIQUE,
                 source_timestamp TIMESTAMPTZ,
                 created_at TIMESTAMPTZ DEFAULT NOW()
             )
         """)
 
-        await pool.execute(
+        # 尝试添加 unique 约束（表已存在时幂等）
+        await pool.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_cs_chat_log_hash
+            ON cs_chat_log (content_hash)
+        """)
+
+        result = await pool.execute(
             """
-            INSERT INTO cs_chat_log (session_id, role, content, source_timestamp, created_at)
-            VALUES ($1, $2, $3, $4, NOW())
+            INSERT INTO cs_chat_log (session_id, message_id, role, content, content_hash, source_timestamp, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (content_hash) DO NOTHING
             """,
             request.session_id or "",
+            request.message_id or "",
             request.role or "agent",
-            (request.content or "")[:2000],
+            content_trimmed,
+            content_hash,
             request.timestamp or None,
         )
 
-        logger.debug(f"Chat log recorded: session={request.session_id}, role={request.role}")
-        return APIResponse(data={"logged": True})
+        # result = "INSERT 0 1" (inserted) or "INSERT 0 0" (duplicate skipped)
+        inserted = result.endswith("1")
+        if inserted:
+            logger.debug(f"Chat log recorded: session={request.session_id}, role={request.role}")
+        else:
+            logger.debug(f"Chat log deduplicated: hash={content_hash[:8]}")
+
+        return APIResponse(data={"logged": inserted, "deduplicated": not inserted})
 
     except Exception as e:
         logger.warning(f"Failed to log chat: {e}")
-        # 不抛异常 — best-effort
         return APIResponse(data={"logged": False, "reason": str(e)[:100]})
 
 

@@ -145,7 +145,7 @@
     const agentMsg = extractAgentMessage(data);
     if (agentMsg && !processedMessages.has(agentMsg.id)) {
       processedMessages.add(agentMsg.id);
-      logAgentReply(agentMsg);
+      logChatMessage(agentMsg);
     }
   }
 
@@ -285,6 +285,7 @@
               const sessionId = getCurrentSessionId(detectActiveSession() || '');
               if (text && !processedMessages.has(`dom-cust-${sessionId}-${text}`)) {
                 processedMessages.add(`dom-cust-${sessionId}-${text}`);
+                // sendToBackend 内部已调 logChatMessage，无需重复
                 sendToBackend({ id: `dom-${Date.now()}`, text, sessionId, customerInfo: {} });
               }
             }
@@ -298,7 +299,7 @@
               const sessionId = getCurrentSessionId(detectActiveSession() || '');
               if (text && !processedMessages.has(`dom-agent-${sessionId}-${text}`)) {
                 processedMessages.add(`dom-agent-${sessionId}-${text}`);
-                logAgentReply({ id: `dom-agent-${Date.now()}`, text, sessionId, role: 'agent' });
+                logChatMessage({ id: `dom-agent-${Date.now()}`, text, sessionId, role: 'agent' });
                 // 对比 AI 建议
                 const suggestion = lastAISuggestions[sessionId];
                 if (suggestion && suggestion.text !== text) {
@@ -330,15 +331,18 @@
 
   /* ═══════════════════ Chat Log Collection (聊天记录采集) ═══════════════════ */
   /**
-   * 把客服真实回复发到后端，用于学习和对比分析。
+   * 把聊天消息发到后端，用于学习和对比分析。
    * 后端接口: POST /api/customer-service/log-chat
+   * 支持 agent（客服）和 customer（客户）消息。
+   * 后端通过 content_hash 去重，所以 WS + DOM 双采集不会重复。
    */
-  function logAgentReply(msg) {
+  function logChatMessage(msg) {
     if (!msg.text) return;
     chrome.runtime.sendMessage({
       type: 'LOG_CHAT',
       payload: {
         session_id: msg.sessionId || '',
+        message_id: msg.id || '',
         role: msg.role || 'agent',
         content: msg.text,
         timestamp: new Date().toISOString(),
@@ -349,6 +353,8 @@
   /* ═══════════════════ Backend Communication ═══════════════════ */
   function sendToBackend(msg) {
     if (!msg.text) return;
+    // 记录客户消息到 log-chat（用于完整对话采集）
+    logChatMessage({ id: msg.id, text: msg.text, sessionId: msg.sessionId, role: 'customer' });
     updatePanel('thinking', `🤔 AI正在分析: "${msg.text.slice(0, 25)}..."`);
     chrome.runtime.sendMessage(
       {
