@@ -15,7 +15,7 @@ import random
 import re
 import time
 
-from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_chat, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -1631,7 +1631,7 @@ action.type 可选: none, check_order, check_logistics, initiate_refund, initiat
             # 纯文本模式：call_chat + JSON 解析（比 tool_choice 快 3-5 倍）
             raw_content, _, _ = await call_chat(
                 prompt=user_message_with_context,
-                model=MODEL_SONNET,
+                model=MODEL_FLASH,
                 max_tokens=max_reply_tokens,
                 system=_full_system,
                 response_format={"type": "json_object"},
