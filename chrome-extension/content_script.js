@@ -270,32 +270,66 @@
    * MTDX 消息 content 可能是字符串或 JSON 字符串
    */
   function extractMTDXContent(msg) {
-    // 直接文本
-    if (typeof msg.content === 'string' && msg.content.trim()) {
-      // 检查是否是 JSON 包裹的文本
-      try {
-        const parsed = JSON.parse(msg.content);
-        if (typeof parsed === 'string') return parsed;
-        if (parsed.text) return parsed.text;
-        if (parsed.content) return parsed.content;
-        if (parsed.msg) return parsed.msg;
-      } catch (_) {}
-      return msg.content.trim();
+    // ── 1. 直接文本字段 ──
+    for (const key of ['content', 'text', 'msg', 'message', 'plain']) {
+      if (typeof msg[key] === 'string' && msg[key].trim()) {
+        const val = msg[key].trim();
+        // 检查是否是 JSON 包裹
+        try {
+          const parsed = JSON.parse(val);
+          if (typeof parsed === 'string') return parsed;
+          if (parsed.text) return parsed.text;
+          if (parsed.content) return parsed.content;
+          if (parsed.msg) return parsed.msg;
+        } catch (_) {}
+        return val;
+      }
     }
-    if (typeof msg.text === 'string' && msg.text.trim()) return msg.text.trim();
-    if (typeof msg.body === 'string' && msg.body.trim()) return msg.body.trim();
-    // data 字段可能是 JSON
-    if (typeof msg.data === 'string') {
+
+    // ── 2. body 字段（MTDX 消息的主要内容载体）──
+    if (msg.body) {
+      let body = msg.body;
+      // body 可能被 stringify 过
+      if (typeof body === 'string') {
+        try { body = JSON.parse(body); } catch (_) {}
+      }
+      if (typeof body === 'string' && body.trim()) return body.trim();
+      if (typeof body === 'object') {
+        // 提取 body 内的文本
+        for (const key of ['text', 'content', 'msg', 'plain', 'richText', 'summary']) {
+          if (typeof body[key] === 'string' && body[key].trim()) return body[key].trim();
+        }
+        // 系统消息（状态变更等）跳过
+        if (body.eType || body.type === 'system') return '';
+      }
+    }
+
+    // ── 3. data 字段 ──
+    if (typeof msg.data === 'string' && msg.data.trim()) {
       try {
         const parsed = JSON.parse(msg.data);
         return parsed.content || parsed.text || parsed.msg || parsed.summary || '';
       } catch (_) {}
-      if (msg.data.trim()) return msg.data.trim();
+      return msg.data.trim();
     }
-    // 卡片/富文本消息 summary
+
+    // ── 4. extension 字段 ──
+    if (typeof msg.extension === 'string') {
+      try {
+        const ext = JSON.parse(msg.extension);
+        if (ext.text || ext.content) return ext.text || ext.content;
+      } catch (_) {}
+    }
+
+    // ── 5. summary ──
     if (typeof msg.summary === 'string' && msg.summary.trim()) return msg.summary.trim();
-    // type 12 = 卡片消息，用 type 标识让 AI 知道
-    if (msg.type === 12 || msg.type === 3) return '[卡片消息]';
+
+    // ── 6. 已知非文本消息类型 ──
+    // type 12 = 状态变更/卡片, type 3 = 图片
+    if (msg.type === 12) return ''; // 状态变更，不触发 AI
+    if (msg.type === 3) return '[图片消息]';
+    if (msg.type === 4) return '[图片消息]';
+
     return '';
   }
 
