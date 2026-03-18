@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 客服助手",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "AI店长客服助手 v3 — 数据驱动多会话、全量聊天记录采集、建议/半自动/全自动三种模式",
   "permissions": ["storage"],
   "host_permissions": [
-    "https://yiyao.meituan.com/*",
-    "https://qnh.meituan.com/*",
     "https://*.meituan.com/*",
+    "https://*.meituan.net/*",
+    "https://*.sankuai.com/*",
+    "https://*.dpfile.com/*",
     "http://192.144.227.205:8000/*"
   ],
   "background": {
@@ -16,20 +17,23 @@
   "content_scripts": [
     {
       "matches": [
-        "https://yiyao.meituan.com/*",
-        "https://qnh.meituan.com/*"
+        "https://*.meituan.com/*",
+        "https://*.meituan.net/*",
+        "https://*.sankuai.com/*"
       ],
       "js": ["content_script.js"],
       "css": ["panel.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": true
     }
   ],
   "web_accessible_resources": [
     {
       "resources": ["injected.js"],
       "matches": [
-        "https://yiyao.meituan.com/*",
-        "https://qnh.meituan.com/*"
+        "https://*.meituan.com/*",
+        "https://*.meituan.net/*",
+        "https://*.sankuai.com/*"
       ]
     }
   ],
