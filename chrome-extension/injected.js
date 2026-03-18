@@ -23,7 +23,7 @@
             if (arg.includes('接收到消息')) {
               const obj = findObjectArg(args, i + 1);
               if (obj && obj.sessionId) {
-                dbg('✅ 捕获[接收消息]', obj.sessionId, 'type:', obj.type, 'body:', getBodyText(obj));
+                dbg('✅ 捕获[接收消息]', obj.sessionId, 'type:', obj.type);
                 emitMessage('customer_message', obj);
               }
             }
