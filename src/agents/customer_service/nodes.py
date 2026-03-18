@@ -1088,12 +1088,18 @@ async def chat(
         fast_mode = os.getenv("CS_FAST_MODE", "1") == "1"
         pipeline_timeout = float(os.getenv("CS_PIPELINE_TIMEOUT", "4.0" if fast_mode else "10.0"))
         enable_intent_llm = os.getenv("CS_INTENT_LLM", "0") == "1" and not fast_mode
-        max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "2048"))
+        max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "512"))
 
         if history_to_summarize:
             summary_task = asyncio.create_task(
                 _summarize_conversation(history_to_summarize)
             )
+
+        # ── 额外并行任务（原来在第二轮 gather，现在合并到第一轮） ──
+        policy_task = None
+        few_shot_task = None
+        cm_task = None
+        memory_task = None
 
         if pool:
             faq_task = asyncio.create_task(_search_auto_faq_context(message, pool))
@@ -1145,6 +1151,61 @@ async def chat(
             except Exception as e:
                 logger.debug(f"[CS] Customer profile load failed (non-critical): {e}")
 
+            # ── 原第二轮 gather 的任务，提前启动 ──────────────────
+            async def _safe_load_policy():
+                global _policy_ctx_cache, _policy_ctx_ts
+                if _policy_ctx_cache is not None and (time.time() - _policy_ctx_ts) < _CACHE_TTL:
+                    return _policy_ctx_cache
+                try:
+                    result = await asyncio.wait_for(_load_policy_documents_context(pool), timeout=2.0)
+                    _policy_ctx_cache = result
+                    _policy_ctx_ts = time.time()
+                    return result
+                except Exception:
+                    return _policy_ctx_cache or []
+
+            async def _safe_load_dynamic_few_shots():
+                try:
+                    row = await asyncio.wait_for(
+                        pool.fetchrow("SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"),
+                        timeout=1.0,
+                    )
+                    if row:
+                        return json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                except Exception:
+                    pass
+                return {}
+
+            policy_task = asyncio.create_task(_safe_load_policy())
+            few_shot_task = asyncio.create_task(_safe_load_dynamic_few_shots())
+
+            # ── 记忆上下文（原来串行等待，现在并行） ──────────────
+            async def _safe_load_memory():
+                try:
+                    from src.agents.action_tracker import format_memory_context
+                    return await asyncio.wait_for(
+                        format_memory_context(
+                            pool=pool,
+                            agent_name="customer_service",
+                            context_type="inquiry",
+                        ),
+                        timeout=2.0,
+                    )
+                except Exception:
+                    return ""
+
+            memory_task = asyncio.create_task(_safe_load_memory())
+
+        # ── 话题管理器（原来串行等待，现在并行） ──────────────────
+        from src.db import redis as redis_db
+        from .conversation_manager import (
+            load_conversation_manager,
+            save_conversation_manager,
+        )
+        _redis = redis_db.get_redis()
+        if _redis:
+            cm_task = asyncio.create_task(load_conversation_manager(_redis, session_id))
+
         if enable_intent_llm:
             try:
                 from src.agents.customer_service.tracker import ConversationTracker
@@ -1165,6 +1226,10 @@ async def chat(
             id(order_task): "order",
             id(profile_task): "profile",
             id(intent_task): "intent",
+            id(policy_task): "policy",
+            id(few_shot_task): "few_shot",
+            id(cm_task): "conv_mgr",
+            id(memory_task): "memory",
         }
 
         first_batch_tasks = [
@@ -1177,6 +1242,10 @@ async def chat(
                 order_task,
                 profile_task,
                 intent_task,
+                policy_task,
+                few_shot_task,
+                cm_task,
+                memory_task,
             ]
             if task is not None
         ]
@@ -1192,7 +1261,7 @@ async def chat(
         _t_tasks_done = time.time()
         # 逐个任务报告耗时和状态
         _task_perf = []
-        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task]:
+        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task, policy_task, few_shot_task, cm_task, memory_task]:
             if task is None:
                 continue
             label = task_labels.get(id(task), "unknown")
@@ -1274,64 +1343,27 @@ async def chat(
             # Fallback：降级到纯向量检索
             product_results = await search_products_with_embedding(message, pool)
 
-        # 2.6 售后政策 + 评价情感 + 动态 few-shot 并行加载（不阻塞主流程）
-        policy_context = []
+        # 2.6 售后政策 + 动态 few-shot（已在第一轮并行加载，直接取结果）
+        policy_context = _consume_task_result(policy_task, [])
+        dynamic_few_shots = _consume_task_result(few_shot_task, {})
+
+        # review_sentiment 依赖 product_results，只能在此处加载（唯一的串行例外）
         review_sentiment_context = []
-        dynamic_few_shots = {}
-
-        async def _safe_load_policy():
-            global _policy_ctx_cache, _policy_ctx_ts
-            if _policy_ctx_cache is not None and (time.time() - _policy_ctx_ts) < _CACHE_TTL:
-                return _policy_ctx_cache
+        if pool and product_results:
             try:
-                result = await asyncio.wait_for(_load_policy_documents_context(pool), timeout=2.0)
-                _policy_ctx_cache = result
-                _policy_ctx_ts = time.time()
-                return result
-            except Exception:
-                return _policy_ctx_cache or []
-
-        async def _safe_load_review_sentiment():
-            try:
-                return await asyncio.wait_for(
+                review_sentiment_context = await asyncio.wait_for(
                     _load_review_sentiment_context(pool, product_results), timeout=2.0
                 )
             except Exception:
-                return []
+                review_sentiment_context = []
 
-        async def _safe_load_dynamic_few_shots():
-            try:
-                row = await asyncio.wait_for(
-                    pool.fetchrow("SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"),
-                    timeout=1.0,
-                )
-                if row:
-                    return json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
-            except Exception:
-                pass
-            return {}
+        # ── 话题管理器（已在第一轮并行加载） ──────────────────────
+        from .conversation_manager import save_conversation_manager
 
-        if pool:
-            _policy_r, _review_r, dynamic_few_shots = await asyncio.gather(
-                _safe_load_policy(),
-                _safe_load_review_sentiment(),
-                _safe_load_dynamic_few_shots(),
-                return_exceptions=True,
-            )
-            policy_context = _policy_r if isinstance(_policy_r, list) else []
-            review_sentiment_context = _review_r if isinstance(_review_r, list) else []
-            dynamic_few_shots = dynamic_few_shots if isinstance(dynamic_few_shots, dict) else {}
-
-        # ── 话题管理器（统一的上下文追踪） ──────────────────────
-        from src.db import redis as redis_db
-
-        from .conversation_manager import (
-            load_conversation_manager,
-            save_conversation_manager,
-        )
-
-        _redis = redis_db.get_redis()
-        cm = await load_conversation_manager(_redis, session_id)
+        cm = _consume_task_result(cm_task)
+        if cm is None:
+            from .conversation_manager import load_conversation_manager
+            cm = await load_conversation_manager(_redis, session_id)
         current_topic = cm.resolve_topic(message, conversation_history)
         topic_context = cm.build_topic_context(current_topic)
 
@@ -1420,43 +1452,25 @@ async def chat(
             use_optimized = False
             logger.warning("Using fallback prompts")
 
-        # 3.5 情感指令 + 记忆上下文 + 多轮追踪（并行化）
+        # 3.5 情感指令 + 记忆上下文 + 多轮追踪
         if emotion_instruction:
             system_prompt = f"{system_prompt}{emotion_instruction}"
 
-        # 并行：记忆上下文 + 多轮追踪（两个都是非关键，超时不阻塞）
-        memory_ctx = ""
+        # 记忆上下文（已在第一轮并行加载）
+        memory_ctx = _consume_task_result(memory_task, "")
+
+        # 多轮追踪（纯 CPU 计算，同步即可）
         conversation_context = ""
-
-        async def _safe_load_memory():
-            try:
-                from src.agents.action_tracker import format_memory_context
-                return await asyncio.wait_for(
-                    format_memory_context(
-                        pool=pool,
-                        agent_name="customer_service",
-                        context_type=intent_result.get("intent", "inquiry"),
-                    ),
-                    timeout=2.0,
-                )
-            except Exception:
-                return ""
-
-        def _safe_track_conversation():
-            try:
-                from .tracker import track_conversation
-                result = track_conversation(
-                    conversation_history=conversation_history or [],
-                    user_intent=intent_result.get("intent", ""),
-                    user_message=message,
-                )
-                return result.get("context_summary", "")
-            except Exception:
-                return ""
-
-        if pool:
-            memory_ctx = await _safe_load_memory()
-        conversation_context = _safe_track_conversation()
+        try:
+            from .tracker import track_conversation
+            _track_result = track_conversation(
+                conversation_history=conversation_history or [],
+                user_intent=intent_result.get("intent", ""),
+                user_message=message,
+            )
+            conversation_context = _track_result.get("context_summary", "")
+        except Exception:
+            pass
 
         if memory_ctx:
             system_prompt = f"{system_prompt}\n\n{memory_ctx}"
