@@ -594,3 +594,82 @@ async def call_tool_with_reflection(
     # 记录实际轮数，供调用方或日志参考（可选字段，不影响业务逻辑）
     current_result["_reflection_rounds"] = last_round
     return current_result
+
+
+async def call_chat(
+    prompt: str | list[dict],
+    model: str = MODEL_SONNET,
+    max_tokens: int = 512,
+    system: str | None = None,
+    response_format: dict | None = None,
+    trace_name: str | None = None,
+) -> tuple[str, int, int]:
+    """
+    轻量纯文本调用 — 不使用 tool_choice，直接返回文本。
+    比 call_tool 快得多（DeepSeek tool_choice 开销巨大）。
+
+    支持可选 response_format={"type":"json_object"} 让模型输出 JSON。
+
+    Returns:
+        (content_str, input_tokens, output_tokens)
+    """
+    client = _get_openai_client()
+    langfuse = _init_langfuse()
+    start_time = time.time()
+
+    trace = None
+    generation = None
+    if langfuse:
+        try:
+            trace = langfuse.trace(name=trace_name or "call_chat")
+            generation = trace.generation(
+                name="chat",
+                model=model,
+                input={"system": (system or "")[:200]},
+            )
+        except Exception:
+            pass
+
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+        messages.extend(prompt)
+    else:
+        messages.append({"role": "user", "content": prompt})
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+    }
+    if response_format:
+        kwargs["response_format"] = response_format
+
+    try:
+        response = await asyncio.wait_for(
+            client.chat.completions.create(**kwargs),
+            timeout=60.0,
+        )
+    except TimeoutError:
+        raise ValueError(f"call_chat timeout after 60s (model={model})") from None
+
+    choice = response.choices[0]
+    content = choice.message.content or ""
+    input_tokens = response.usage.prompt_tokens if response.usage else 0
+    output_tokens = response.usage.completion_tokens if response.usage else 0
+
+    elapsed = time.time() - start_time
+
+    if generation:
+        generation.end(
+            output=content[:500],
+            usage={"input": input_tokens, "output": output_tokens},
+            level="DEFAULT",
+        )
+
+    _record_llm_metrics(model, input_tokens, output_tokens, elapsed)
+    logger.info(f"[LLM] call_chat: model={model}, in={input_tokens}, out={output_tokens}, {elapsed:.2f}s")
+
+    return content, input_tokens, output_tokens

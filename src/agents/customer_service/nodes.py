@@ -15,7 +15,7 @@ import random
 import re
 import time
 
-from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -1585,82 +1585,75 @@ async def chat(
         _t_pre_llm = time.time()
         logger.info(f"[CS-PERF] Pre-LLM pipeline took {(_t_pre_llm - _t0)*1000:.0f}ms")
 
-        # 5. 调用LLM生成回复（支持图片）
-        tool_schema = {
-            "name": "output_reply",
-            "description": "输出客服回复",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "reply_text": {"type": "string", "maxLength": 200},
-                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-                    "requires_human_review": {"type": "boolean", "description": "是否需要转人工"},
-                    "intent": {
-                        "type": "string",
-                        "enum": [
-                            "product_inquiry",
-                            "usage_question",
-                            "recommendation",
-                            "comparison",
-                            "logistics",
-                            "after_sales",
-                            "complaint",
-                            "medical_advice",
-                            "greeting",
-                            "other",
-                        ],
-                    },
-                    "action": {
-                        "type": "object",
-                        "description": "AI 建议执行的操作（可选）",
-                        "properties": {
-                            "type": {
-                                "type": "string",
-                                "enum": [
-                                    "none",
-                                    "check_order",
-                                    "check_logistics",
-                                    "initiate_refund",
-                                    "initiate_exchange",
-                                    "apply_coupon",
-                                    "transfer_human",
-                                ],
-                                "description": "操作类型",
-                            },
-                            "order_id": {"type": "string", "description": "相关订单号"},
-                            "reason": {"type": "string", "description": "操作原因"},
-                            "amount": {"type": "number", "description": "退款金额（如适用）"},
-                            "urgency": {"type": "string", "enum": ["normal", "urgent"]},
-                        },
-                        "required": ["type"],
-                    },
-                },
-                "required": ["reply_text", "confidence", "requires_human_review"],
-            },
-        }
+        # 5. 调用 LLM 生成回复（纯文本模式，不用 tool_choice，速度快很多）
+        #
+        # 把 JSON 格式要求写进 system prompt，让模型直接输出 JSON 文本，
+        # 然后我们自己解析。避免 tool_choice 的巨大开销。
+
+        _json_instruction = """
+
+# 输出格式（严格 JSON，不要输出其他内容）
+{"reply_text":"你的回复(80-150字)","confidence":0.9,"requires_human_review":false,"intent":"product_inquiry","action":{"type":"none"}}
+
+intent 可选: product_inquiry, usage_question, recommendation, comparison, logistics, after_sales, complaint, medical_advice, greeting, other
+action.type 可选: none, check_order, check_logistics, initiate_refund, initiate_exchange, apply_coupon, transfer_human"""
+
+        _full_system = system_prompt + _json_instruction
 
         if images and len(images) > 0:
-            # Use vision model for image processing
+            # 图片场景仍用 tool_choice（call_vision 需要）
+            tool_schema = {
+                "name": "output_reply",
+                "description": "输出客服回复",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "reply_text": {"type": "string", "maxLength": 200},
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "requires_human_review": {"type": "boolean"},
+                        "intent": {"type": "string"},
+                        "action": {"type": "object", "properties": {"type": {"type": "string"}}, "required": ["type"]},
+                    },
+                    "required": ["reply_text", "confidence", "requires_human_review"],
+                },
+            }
             result = await call_vision(
                 text=user_message_with_context,
                 images=images,
                 tool=tool_schema,
                 model="google/gemini-2.0-flash-001",
                 max_tokens=max_reply_tokens,
-                system=system_prompt
+                system=_full_system
                 + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
                 trace_name="customer_service_vision_chat",
             )
         else:
-            # Use regular text model (Sonnet only)
-            result = await call_tool(
+            # 纯文本模式：call_chat + JSON 解析（比 tool_choice 快 3-5 倍）
+            raw_content, _, _ = await call_chat(
                 prompt=user_message_with_context,
-                tool=tool_schema,
                 model=MODEL_SONNET,
                 max_tokens=max_reply_tokens,
-                system=system_prompt,
+                system=_full_system,
+                response_format={"type": "json_object"},
                 trace_name="customer_service_chat",
             )
+
+            # 解析 JSON 回复
+            raw_content = raw_content.strip()
+            if raw_content.startswith("```"):
+                raw_content = raw_content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+            try:
+                result = json.loads(raw_content)
+            except json.JSONDecodeError:
+                logger.warning(f"[CS] JSON parse failed, extracting text. Raw: {raw_content[:200]}")
+                # fallback: 把整个回复当作 reply_text
+                result = {
+                    "reply_text": raw_content[:200] if raw_content else "亲，请稍后重试~",
+                    "confidence": 0.7,
+                    "requires_human_review": False,
+                    "intent": current_intent,
+                    "action": {"type": "none"},
+                }
 
         _t_post_llm = time.time()
         logger.info(f"[CS-PERF] LLM call took {(_t_post_llm - _t_pre_llm)*1000:.0f}ms | Total so far: {(_t_post_llm - _t0)*1000:.0f}ms")
