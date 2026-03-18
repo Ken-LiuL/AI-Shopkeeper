@@ -111,31 +111,33 @@
   });
 
   function handleWSMessage(data) {
+    // ── MTDX 美团大象 IM SDK 消息处理 ──────────────────────────
+    const mtdxType = data.__type;
+    if (mtdxType) {
+      handleMTDXMessage(mtdxType, data);
+      return;
+    }
+
+    // ── 原始 WebSocket 消息处理（后备）──────────────────────────
     const sessionId = extractSessionId(data);
 
-    // 客户消息 → 触发 AI + 采集
     const customerMsg = extractCustomerMessage(data, sessionId);
     if (customerMsg && !processedMessages.has(customerMsg.id)) {
       processedMessages.add(customerMsg.id);
       trimProcessed();
-      // 记录客户名字
       const name = extractCustomerName(data);
       if (name && customerMsg.sessionId) {
         getSession(customerMsg.sessionId).customerName = name;
       }
-      // 采集客户消息
       logChatMessage({ ...customerMsg, role: 'customer' });
-      // 触发 AI 建议
       sendToBackend(customerMsg);
     }
 
-    // 客服消息 → 仅采集
     const agentMsg = extractAgentMessage(data, sessionId);
     if (agentMsg && !processedMessages.has(agentMsg.id)) {
       processedMessages.add(agentMsg.id);
       trimProcessed();
       logChatMessage(agentMsg);
-      // 对比 AI 建议
       const session = sessionData[agentMsg.sessionId];
       if (session) {
         const lastSuggestion = session.replies.find(r => r.status === 'pending');
@@ -144,6 +146,110 @@
         }
       }
     }
+  }
+
+  /* ═══════════════════ MTDX 大象 IM 消息处理 ═══════════════════ */
+  /**
+   * 美团大象 IM SDK 消息格式：
+   * - sessionId: '1001-138635781398_3997859410'  (channelId-storeId_customerId)
+   * - channelId: 1001
+   * - type: 19 (文本消息)
+   * - uuid: 'biz-kf-...'
+   * - content / text / data: 消息内容
+   * - customerInfo: { nickname, ... }
+   */
+  function handleMTDXMessage(type, data) {
+    if (type === 'customer_message') {
+      // [MTDX] 接收到消息 — 客户发的
+      const sid = data.sessionId || '';
+      const msgId = data.uuid || data.mid || `mtdx-${Date.now()}`;
+      const text = extractMTDXContent(data);
+
+      if (!text || processedMessages.has(msgId)) return;
+      processedMessages.add(msgId);
+      trimProcessed();
+
+      // 记录客户名
+      const session = getSession(sid);
+      if (data.customerInfo?.nickname) {
+        session.customerName = data.customerInfo.nickname;
+      }
+
+      const msg = { id: msgId, text, sessionId: sid, customerInfo: data.customerInfo || {} };
+      logChatMessage({ ...msg, role: 'customer' });
+      sendToBackend(msg);
+    }
+
+    if (type === 'agent_message') {
+      // 客服发送的消息
+      const sid = data.sessionId || '';
+      const msgId = data.uuid || data.mid || `mtdx-agent-${Date.now()}`;
+      const text = extractMTDXContent(data);
+
+      if (!text || processedMessages.has(msgId)) return;
+      processedMessages.add(msgId);
+      trimProcessed();
+
+      logChatMessage({ id: msgId, text, sessionId: sid, role: 'agent' });
+
+      // 对比 AI 建议
+      const session = sessionData[sid];
+      if (session) {
+        const lastSuggestion = session.replies.find(r => r.status === 'pending');
+        if (lastSuggestion && lastSuggestion.text !== text) {
+          trackReplyComparison(lastSuggestion, text, sid);
+        }
+      }
+    }
+
+    if (type === 'session_item') {
+      // session-item 包含 customerInfo
+      const sid = data.sessionId || '';
+      if (sid && data.customerInfo) {
+        const session = getSession(sid);
+        const name = data.customerInfo.nickname || data.customerInfo.name || '';
+        if (name) session.customerName = name;
+      }
+    }
+
+    if (type === 'passthrough') {
+      // 大象透传消息 — 可能包含用户消息通知
+      try {
+        const inner = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
+        if (inner && inner.content && inner.bizData) {
+          // 这是通知类消息，不需要触发 AI，但可以做预加载
+        }
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * 从 MTDX 消息对象中提取文本内容
+   * MTDX 消息 content 可能是字符串或 JSON 字符串
+   */
+  function extractMTDXContent(msg) {
+    // 直接文本
+    if (typeof msg.content === 'string' && msg.content.trim()) {
+      // 检查是否是 JSON 包裹的文本
+      try {
+        const parsed = JSON.parse(msg.content);
+        if (typeof parsed === 'string') return parsed;
+        if (parsed.text) return parsed.text;
+        if (parsed.content) return parsed.content;
+        if (parsed.msg) return parsed.msg;
+      } catch (_) {}
+      return msg.content.trim();
+    }
+    if (typeof msg.text === 'string' && msg.text.trim()) return msg.text.trim();
+    if (typeof msg.body === 'string' && msg.body.trim()) return msg.body.trim();
+    // data 字段可能是 JSON
+    if (typeof msg.data === 'string') {
+      try {
+        const parsed = JSON.parse(msg.data);
+        return parsed.content || parsed.text || parsed.msg || '';
+      } catch (_) {}
+    }
+    return '';
   }
 
   function trimProcessed() {
