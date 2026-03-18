@@ -58,13 +58,21 @@
 
   function getContent(obj) {
     if (!obj) return '';
-    if (typeof obj.content === 'string') return obj.content.substring(0, 50);
-    if (typeof obj.text === 'string') return obj.text.substring(0, 50);
-    if (typeof obj.body === 'string') return obj.body.substring(0, 50);
+    if (typeof obj.content === 'string' && obj.content.trim()) return obj.content.substring(0, 50);
+    if (typeof obj.text === 'string' && obj.text.trim()) return obj.text.substring(0, 50);
+    if (typeof obj.body === 'string' && obj.body.trim()) return obj.body.substring(0, 50);
     if (obj.content && typeof obj.content === 'object') {
       return JSON.stringify(obj.content).substring(0, 50);
     }
-    return '(no content)';
+    // 卡片消息：从 data 字段尝试
+    if (typeof obj.data === 'string') {
+      try {
+        const d = JSON.parse(obj.data);
+        return (d.summary || d.content || d.text || JSON.stringify(d)).substring(0, 50);
+      } catch (_) {}
+      return obj.data.substring(0, 50);
+    }
+    return `(type:${obj.type||'?'})`;
   }
 
   console.log = interceptConsole(origLog);
@@ -88,7 +96,7 @@
     const result = {};
     const keys = [
       'sessionId', 'channelId', 'type', 'uuid', 'mid', 'appId',
-      'content', 'text', 'body', 'data',
+      'content', 'text', 'body', 'data', 'summary',
       'poiId', 'pubId', 'bizChatId', 'dialogStatus',
       'nickname', 'name'
     ];

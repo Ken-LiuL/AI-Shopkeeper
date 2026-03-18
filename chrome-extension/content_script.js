@@ -246,9 +246,14 @@
     if (typeof msg.data === 'string') {
       try {
         const parsed = JSON.parse(msg.data);
-        return parsed.content || parsed.text || parsed.msg || '';
+        return parsed.content || parsed.text || parsed.msg || parsed.summary || '';
       } catch (_) {}
+      if (msg.data.trim()) return msg.data.trim();
     }
+    // 卡片/富文本消息 summary
+    if (typeof msg.summary === 'string' && msg.summary.trim()) return msg.summary.trim();
+    // type 12 = 卡片消息，用 type 标识让 AI 知道
+    if (msg.type === 12 || msg.type === 3) return '[卡片消息]';
     return '';
   }
 
