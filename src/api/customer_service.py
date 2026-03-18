@@ -138,7 +138,7 @@ async def chat(
             logger.info(f"[CS] Auto-creating Redis session for {request.session_id}")
             await sm.create_session_with_id(request.session_id)
         if request.session_id:
-            if not await sm.acquire_lock(request.session_id, timeout=30):
+            if not await sm.acquire_lock(request.session_id, timeout=30, wait=8):
                 raise AppError("Session is busy, please retry", status_code=429)
             use_redis = True
             history = await sm.get_history(request.session_id, limit=20)

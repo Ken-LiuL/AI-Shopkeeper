@@ -159,11 +159,28 @@ class SessionManager:
 
     # ── Locking ───────────────────────────────────────────────
 
-    async def acquire_lock(self, session_id: str, timeout: int = 30) -> bool:
-        """Acquire a distributed lock for a session via SETNX. Returns True if acquired."""
+    async def acquire_lock(self, session_id: str, timeout: int = 30, wait: float = 0) -> bool:
+        """Acquire a distributed lock for a session via SETNX.
+
+        Args:
+            session_id: Session to lock.
+            timeout: Lock TTL in seconds.
+            wait: Max seconds to wait for lock (0 = no wait, return immediately).
+        Returns True if acquired."""
+        import asyncio
         key = f"{_SESSION_LOCK}{session_id}"
         acquired = await self._r.set(key, "1", nx=True, ex=timeout)
-        return bool(acquired)
+        if acquired or wait <= 0:
+            return bool(acquired)
+        # Poll until lock is free or wait expires
+        deadline = asyncio.get_event_loop().time() + wait
+        interval = 0.3
+        while asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(interval)
+            acquired = await self._r.set(key, "1", nx=True, ex=timeout)
+            if acquired:
+                return True
+        return False
 
     async def release_lock(self, session_id: str) -> None:
         """Release the session lock."""

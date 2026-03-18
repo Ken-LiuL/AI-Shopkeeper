@@ -142,8 +142,11 @@ async function handleCustomerMessage(payload) {
       addLog('error', friendlyMsg, err.message);
 
       if (attempt < MAX_RETRIES) {
-        // 指数退避：1.5s, 3s
-        await new Promise((r) => setTimeout(r, RETRY_DELAY_MS * (attempt + 1)));
+        // 429 (session busy) → 等更久让前一个请求完成
+        const is429 = err.message && err.message.includes('429');
+        const delay = is429 ? 10000 : RETRY_DELAY_MS * (attempt + 1);
+        addLog('info', `等待 ${delay}ms 后重试...`);
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }
