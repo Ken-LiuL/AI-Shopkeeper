@@ -42,6 +42,32 @@
                 emitMessage('agent_message', obj);
               }
             }
+            // ─── 历史消息采集 ───────────────────────────────────────────
+            // "[dev] 单个会话初次历史消息查询结果 {lastMsgId} [{...}×N] {sessionId}"
+            // args: [tag, lastMsgId, arrayOfMessages, sessionId]
+            if (arg.includes('单个会话初次历史消息查询结果')) {
+              // 找 sessionId（最后一个字符串参数）
+              let histSessionId = '';
+              let histMsgs = null;
+              for (let j = i + 1; j < args.length; j++) {
+                if (Array.isArray(args[j])) histMsgs = args[j];
+                if (typeof args[j] === 'string' && args[j].includes('_')) histSessionId = args[j];
+              }
+              if (histSessionId && histMsgs && histMsgs.length > 0) {
+                dbg('📚 历史消息', histSessionId, histMsgs.length, '条');
+                // 序列化每条历史消息
+                const safeMessages = histMsgs.slice(0, 50).map(m => {
+                  try { return extractFields(m); } catch (_) { return null; }
+                }).filter(Boolean);
+                window.dispatchEvent(new CustomEvent(CHANNEL, {
+                  detail: JSON.stringify({
+                    __type: 'history_messages',
+                    sessionId: histSessionId,
+                    messages: safeMessages
+                  })
+                }));
+              }
+            }
           }
         }
       } catch (_) {}

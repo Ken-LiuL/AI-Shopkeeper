@@ -213,13 +213,55 @@
     }
 
     if (type === 'passthrough') {
-      // 大象透传消息 — 可能包含用户消息通知
-      try {
-        const inner = typeof data.data === 'string' ? JSON.parse(data.data) : data.data;
-        if (inner && inner.content && inner.bizData) {
-          // 这是通知类消息，不需要触发 AI，但可以做预加载
-        }
-      } catch (_) {}
+      // 大象透传消息 — 通知类，无需触发 AI
+    }
+
+    if (type === 'history_messages') {
+      // 会话历史消息批量采集
+      // data.sessionId: 会话ID, data.messages: 历史消息数组
+      const sid = data.sessionId || '';
+      const msgs = data.messages;
+      if (!sid || !Array.isArray(msgs) || msgs.length === 0) return;
+
+      console.log(`[AI店长] 📚 采集历史消息 ${sid}: ${msgs.length} 条`);
+
+      // 逐条上报（后端有 content_hash 去重，重复不会入库）
+      let queued = 0;
+      for (const msg of msgs) {
+        try {
+          const text = extractMTDXContent(msg);
+          if (!text) continue;
+
+          // role 推断：MTDX 消息 type 奇数=客服/系统，偶数=客户（不准确）
+          // 更可靠：看 sender 或 direction 字段
+          const isAgent = msg.direction === 'out'
+            || msg.sender === 'agent'
+            || msg.senderType === 2
+            || msg.fromMe === true
+            || (msg.uuid && msg.uuid.includes('kf-sys'));
+          const role = isAgent ? 'agent' : 'customer';
+
+          const msgId = msg.uuid || msg.mid || msg.id || `hist-${sid}-${queued}`;
+          if (processedMessages.has(msgId)) continue;
+          processedMessages.add(msgId);
+
+          // 延迟上报，避免页面加载时大量并发请求
+          const delay = queued * 80; // 每条间隔 80ms
+          queued++;
+          setTimeout(() => {
+            logChatMessage({
+              id: msgId,
+              text,
+              sessionId: sid,
+              role,
+              messageId: msgId,
+            });
+          }, delay);
+        } catch (_) {}
+      }
+      if (queued > 0) {
+        console.log(`[AI店长] 📤 排队上报 ${queued} 条历史消息（间隔80ms）`);
+      }
     }
   }
 
