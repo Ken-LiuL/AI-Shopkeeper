@@ -23,7 +23,7 @@
       ],
       "js": ["content_script.js"],
       "css": ["panel.css"],
-      "run_at": "document_idle",
+      "run_at": "document_start",
       "all_frames": true
     }
   ],

@@ -915,6 +915,17 @@
   }
 
   /* ═══════════════════ Init ═══════════════════ */
-  createPanel();
-  console.log('[AI店长] v3 已加载 — 数据驱动多会话 + 全量聊天记录采集');
+  // document_start 时 body 可能还不存在，等 DOM 就绪再创建面板
+  function initPanel() {
+    if (document.body) {
+      createPanel();
+      console.log('[AI店长] v3 已加载 — 数据驱动多会话 + 全量聊天记录采集');
+    } else {
+      document.addEventListener('DOMContentLoaded', () => {
+        createPanel();
+        console.log('[AI店长] v3 已加载 — 数据驱动多会话 + 全量聊天记录采集');
+      });
+    }
+  }
+  initPanel();
 })();

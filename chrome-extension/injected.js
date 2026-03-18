@@ -1,5 +1,5 @@
 /**
- * injected.js — Hook MTDX SDK 消息 (debug v2)
+ * injected.js — Hook MTDX SDK 消息 (v3 — 修复 prototype 错误 + 时序问题)
  */
 (function () {
   'use strict';
@@ -7,49 +7,44 @@
   const CHANNEL = '__AI_DIANZHANG_WS__';
   const origLog = console.log;
 
-  // Debug helper — 用原始 console.log 输出，不会被自己 hook
   function dbg(...args) {
     origLog.apply(console, ['[AI店长-hook]', ...args]);
   }
 
   dbg('injected.js 开始加载...');
 
-  function interceptConsole(origFn, fnName) {
+  // ═══════════════════ Console Hook ═══════════════════
+  function interceptConsole(origFn) {
     return function (...args) {
       try {
-        // 遍历所有参数，找包含 sessionId 的对象
         for (let i = 0; i < args.length; i++) {
           const arg = args[i];
-
-          // 字符串参数：检查 MTDX 标签
           if (typeof arg === 'string') {
             if (arg.includes('接收到消息')) {
-              // 找后面的对象参数
               const obj = findObjectArg(args, i + 1);
               if (obj && obj.sessionId) {
-                dbg('✅ 捕获到[接收消息]', 'sessionId:', obj.sessionId, 'content:', getContent(obj));
+                dbg('✅ 捕获[接收消息]', obj.sessionId, getContent(obj));
                 emitMessage('customer_message', obj);
               }
             }
             if (arg.includes('session-item')) {
               const obj = findObjectArg(args, i + 1);
               if (obj) {
-                dbg('✅ 捕获到[session-item]', 'poiId:', obj.poiId, 'customerInfo:', obj.customerInfo);
+                dbg('✅ 捕获[session-item]', obj.poiId);
                 emitMessage('session_item', obj);
               }
             }
-          }
-
-          // 对象参数：直接检查是否有 sessionId（兜底）
-          if (arg && typeof arg === 'object' && arg.sessionId && !arg.__emitted) {
-            // 标记防重复
-            try { arg.__emitted = true; } catch(_) {}
+            // 捕获客服发送
+            if (arg.includes('sendMessage') || arg.includes('发送消息成功')) {
+              const obj = findObjectArg(args, i + 1);
+              if (obj && obj.sessionId) {
+                dbg('✅ 捕获[发送消息]', obj.sessionId, getContent(obj));
+                emitMessage('agent_message', obj);
+              }
+            }
           }
         }
-      } catch (e) {
-        // 静默
-      }
-
+      } catch (_) {}
       return origFn.apply(this, args);
     };
   }
@@ -63,38 +58,32 @@
 
   function getContent(obj) {
     if (!obj) return '';
-    // MTDX 消息的 content 可能在不同位置
     if (typeof obj.content === 'string') return obj.content.substring(0, 50);
     if (typeof obj.text === 'string') return obj.text.substring(0, 50);
     if (typeof obj.body === 'string') return obj.body.substring(0, 50);
-    // content 可能是对象
     if (obj.content && typeof obj.content === 'object') {
       return JSON.stringify(obj.content).substring(0, 50);
     }
-    return '(no content field)';
+    return '(no content)';
   }
 
-  console.log = interceptConsole(origLog, 'log');
-  console.warn = interceptConsole(console.warn, 'warn');
-  console.info = interceptConsole(console.info, 'info');
+  console.log = interceptConsole(origLog);
+  console.warn = interceptConsole(console.warn);
+  console.info = interceptConsole(console.info);
 
-  // ═══════════════════ Emit to content_script ═══════════════════
+  // ═══════════════════ Emit ═══════════════════
   function emitMessage(type, data) {
     try {
       const payload = extractFields(data);
       payload.__type = type;
       const json = JSON.stringify(payload);
-      dbg('📤 发送 CustomEvent:', type, 'payload大小:', json.length);
+      dbg('📤 CustomEvent:', type, json.length, 'bytes');
       window.dispatchEvent(new CustomEvent(CHANNEL, { detail: json }));
     } catch (e) {
-      dbg('❌ emitMessage 失败:', e.message);
+      dbg('❌ emit失败:', e.message);
     }
   }
 
-  /**
-   * 从 MTDX SDK 对象中安全提取字段
-   * SDK 对象是类实例，可能有 getter/循环引用，所以只取已知字段
-   */
   function extractFields(obj) {
     const result = {};
     const keys = [
@@ -103,7 +92,6 @@
       'poiId', 'pubId', 'bizChatId', 'dialogStatus',
       'nickname', 'name'
     ];
-
     for (const key of keys) {
       try {
         if (key in obj) {
@@ -115,43 +103,58 @@
         }
       } catch (_) {}
     }
-
-    // customerInfo 特殊处理
     try {
       if (obj.customerInfo && typeof obj.customerInfo === 'object') {
         result.customerInfo = {};
-        for (const k of ['nickname', 'name', 'avatar', 'userId', 'customerId']) {
-          try {
-            if (k in obj.customerInfo) {
-              result.customerInfo[k] = obj.customerInfo[k];
-            }
-          } catch (_) {}
+        for (const k of ['nickname', 'name', 'avatar', 'userId', 'customerId', 'uid']) {
+          try { if (k in obj.customerInfo) result.customerInfo[k] = obj.customerInfo[k]; } catch (_) {}
         }
       }
     } catch (_) {}
-
     return result;
   }
 
-  // ═══════════════════ WebSocket hook (后备) ═══════════════════
-  const OrigWS = window.WebSocket;
-  class HookedWS extends OrigWS {
-    constructor(url, protocols) {
-      super(url, protocols);
-      dbg('🔌 WebSocket 连接:', url);
-      this.addEventListener('message', (event) => {
-        try {
-          const parsed = typeof event.data === 'string' ? JSON.parse(event.data) : null;
-          if (parsed && parsed.sessionId) {
-            dbg('📨 WS 消息:', parsed.sessionId);
-            emitMessage('ws_message', parsed);
-          }
-        } catch (_) {}
-      });
-    }
-  }
-  HookedWS.prototype = OrigWS.prototype;
-  Object.defineProperty(window, 'WebSocket', { value: HookedWS, writable: true, configurable: true });
+  // ═══════════════════ WebSocket hook (安全版) ═══════════════════
+  try {
+    const OrigWS = window.WebSocket;
+    const origAddEventListener = OrigWS.prototype.addEventListener;
 
-  dbg('✅ 安装完成 — console.log hook + WebSocket hook');
+    // 不替换 WebSocket 类，只 patch prototype.addEventListener
+    const origSend = OrigWS.prototype.send;
+    OrigWS.prototype.send = function (data) {
+      // 可选：捕获发送的消息
+      return origSend.call(this, data);
+    };
+
+    // 用 MutationObserver-style 的方式 hook 新创建的 WS
+    const origWSConstructor = window.WebSocket;
+    window.WebSocket = function (url, protocols) {
+      dbg('🔌 WS连接:', typeof url === 'string' ? url.substring(0, 80) : url);
+      const ws = protocols !== undefined
+        ? new origWSConstructor(url, protocols)
+        : new origWSConstructor(url);
+      try {
+        ws.addEventListener('message', function (event) {
+          try {
+            if (typeof event.data === 'string') {
+              const parsed = JSON.parse(event.data);
+              if (parsed && parsed.sessionId) {
+                emitMessage('ws_message', parsed);
+              }
+            }
+          } catch (_) {}
+        });
+      } catch (_) {}
+      return ws;
+    };
+    window.WebSocket.prototype = origWSConstructor.prototype;
+    window.WebSocket.CONNECTING = origWSConstructor.CONNECTING;
+    window.WebSocket.OPEN = origWSConstructor.OPEN;
+    window.WebSocket.CLOSING = origWSConstructor.CLOSING;
+    window.WebSocket.CLOSED = origWSConstructor.CLOSED;
+  } catch (e) {
+    dbg('⚠️ WebSocket hook 跳过:', e.message);
+  }
+
+  dbg('✅ 安装完成');
 })();
