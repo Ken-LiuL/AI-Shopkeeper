@@ -3,7 +3,7 @@
  * 处理客服消息转发 + 反馈接口
  */
 
-const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
+const DEFAULT_API_BASE = 'http://192.144.227.205:8000';
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 const REQUEST_TIMEOUT_MS = 30000; // 30s 超时

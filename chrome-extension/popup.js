@@ -1,6 +1,6 @@
 /** popup.js — AI店长 Extension Popup v2 */
 
-const DEFAULT_API_BASE = 'https://ai-shopkeeper-kk.fly.dev';
+const DEFAULT_API_BASE = 'http://192.144.227.205:8000';
 
 const MODE_DESCRIPTIONS = {
   suggest: 'AI 生成建议显示在面板，客服手动决定是否使用',
