@@ -1098,6 +1098,7 @@ async def chat(
         # ── 额外并行任务（原来在第二轮 gather，现在合并到第一轮） ──
         policy_task = None
         few_shot_task = None
+        negative_task = None
         cm_task = None
         memory_task = None
 
@@ -1176,8 +1177,21 @@ async def chat(
                     pass
                 return {}
 
+            async def _safe_load_negative_examples():
+                try:
+                    row = await asyncio.wait_for(
+                        pool.fetchrow("SELECT value FROM system_config WHERE key = 'cs_negative_examples'"),
+                        timeout=1.0,
+                    )
+                    if row:
+                        return json.loads(row["value"]) if isinstance(row["value"], str) else row["value"]
+                except Exception:
+                    pass
+                return {}
+
             policy_task = asyncio.create_task(_safe_load_policy())
             few_shot_task = asyncio.create_task(_safe_load_dynamic_few_shots())
+            negative_task = asyncio.create_task(_safe_load_negative_examples())
 
             # ── 记忆上下文（原来串行等待，现在并行） ──────────────
             async def _safe_load_memory():
@@ -1227,6 +1241,7 @@ async def chat(
             id(intent_task): "intent",
             id(policy_task): "policy",
             id(few_shot_task): "few_shot",
+            id(negative_task): "negative",
             id(cm_task): "conv_mgr",
             id(memory_task): "memory",
         }
@@ -1243,6 +1258,7 @@ async def chat(
                 intent_task,
                 policy_task,
                 few_shot_task,
+                negative_task,
                 cm_task,
                 memory_task,
             ]
@@ -1260,7 +1276,7 @@ async def chat(
         _t_tasks_done = time.time()
         # 逐个任务报告耗时和状态
         _task_perf = []
-        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task, policy_task, few_shot_task, cm_task, memory_task]:
+        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task, policy_task, few_shot_task, negative_task, cm_task, memory_task]:
             if task is None:
                 continue
             label = task_labels.get(id(task), "unknown")
@@ -1345,6 +1361,7 @@ async def chat(
         # 2.6 售后政策 + 动态 few-shot（已在第一轮并行加载，直接取结果）
         policy_context = _consume_task_result(policy_task, [])
         dynamic_few_shots = _consume_task_result(few_shot_task, {})
+        negative_examples = _consume_task_result(negative_task, {})
 
         # review_sentiment 依赖 product_results，只能在此处加载（唯一的串行例外）
         review_sentiment_context = []
@@ -1411,6 +1428,7 @@ async def chat(
                 after_sales_scripts=AFTER_SALES_SCRIPTS,
                 customer_profile_str=customer_profile_str if customer_profile_str else None,
                 dynamic_few_shots=dynamic_few_shots if dynamic_few_shots else None,
+                negative_examples=negative_examples if negative_examples else None,
             )
 
             # 场景指引注入到 system prompt（按当前意图）

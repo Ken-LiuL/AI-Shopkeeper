@@ -356,19 +356,230 @@ async def get_analytics_summary(pool) -> dict:
         }
 
 
+async def update_negative_examples(pool) -> None:
+    """从 cs_feedback 中提取差评+纠正案例，存入 system_config.cs_negative_examples"""
+    try:
+        # 确保 correction_text 列存在
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            await pool.execute(
+                "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS correction_text TEXT;"
+            )
+
+        # 查询有 correction_text 的差评，关联对话日志取 intent
+        rows = await pool.fetch(
+            """
+            SELECT f.session_id, f.comment, f.correction_text,
+                   l.intent, l.user_message, l.ai_response
+            FROM cs_feedback f
+            LEFT JOIN cs_conversation_log l ON f.session_id = l.session_id
+            WHERE f.rating = 'bad'
+              AND f.correction_text IS NOT NULL
+              AND f.correction_text != ''
+            ORDER BY f.created_at DESC
+            LIMIT 100
+            """
+        )
+
+        # 按 intent 分组，每个 intent 保留最多 3 条
+        intent_map: dict[str, list[dict]] = {}
+        for row in rows:
+            intent = row.get("intent") or "other"
+            if intent not in intent_map:
+                intent_map[intent] = []
+            if len(intent_map[intent]) >= 3:
+                continue
+            intent_map[intent].append(
+                {
+                    "user_message": (row.get("user_message") or "")[:200],
+                    "bad_response": (row.get("ai_response") or "")[:200],
+                    "correction": (row.get("correction_text") or "")[:200],
+                    "reason": (row.get("comment") or "")[:100],
+                }
+            )
+
+        # 确保 system_config 表存在
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+        )
+
+        await pool.execute(
+            """
+            INSERT INTO system_config (key, value, updated_at)
+            VALUES ('cs_negative_examples', $1, NOW())
+            ON CONFLICT (key)
+            DO UPDATE SET value = $1, updated_at = NOW()
+            """,
+            json.dumps(intent_map, ensure_ascii=False),
+        )
+        logger.info(f"Updated negative examples for {len(intent_map)} intents")
+
+    except Exception as e:
+        logger.error(f"Failed to update negative examples: {e}")
+
+
+async def learn_from_chat_log(pool) -> None:
+    """从 cs_chat_log 读取真实对话，用 LLM 打分，挖掘正/负面案例"""
+    try:
+        from ..llm import MODEL_DEEPSEEK, call_chat
+
+        # 读取最近未评分的 agent 回复（每次最多处理 30 条）
+        rows = await pool.fetch(
+            """
+            SELECT c.session_id, c.content AS ai_reply,
+                   u.content AS user_message,
+                   c.created_at
+            FROM cs_chat_log c
+            JOIN cs_chat_log u ON c.session_id = u.session_id
+            WHERE c.role = 'agent'
+              AND u.role = 'customer'
+              AND u.created_at < c.created_at
+            ORDER BY c.created_at DESC
+            LIMIT 30
+            """
+        )
+
+        if not rows:
+            logger.info("No chat log entries to learn from")
+            return
+
+        # 加载现有 few-shot / 负面案例
+        try:
+            row = await pool.fetchrow(
+                "SELECT value FROM system_config WHERE key = 'cs_few_shot_examples'"
+            )
+            few_shots: dict = (
+                json.loads(row["value"]) if row and isinstance(row["value"], str) else (row["value"] if row else {})
+            ) or {}
+        except Exception:
+            few_shots = {}
+
+        try:
+            row = await pool.fetchrow(
+                "SELECT value FROM system_config WHERE key = 'cs_negative_examples'"
+            )
+            neg_examples: dict = (
+                json.loads(row["value"]) if row and isinstance(row["value"], str) else (row["value"] if row else {})
+            ) or {}
+        except Exception:
+            neg_examples = {}
+
+        new_positive = 0
+        new_negative = 0
+
+        for rec in rows:
+            user_msg = (rec.get("user_message") or "")[:300]
+            ai_reply = (rec.get("ai_reply") or "")[:300]
+            if not user_msg or not ai_reply:
+                continue
+
+            score_prompt = (
+                f"用户消息：{user_msg}\n客服回复：{ai_reply}\n\n"
+                "请评估上述客服回复的质量，输出一个0到1之间的小数（保留2位），"
+                "仅输出数字，不要任何解释。"
+                "评分标准：1=完美解决问题，0=完全无用或有害。"
+            )
+            try:
+                score_text, _, _ = await call_chat(
+                    prompt=score_prompt,
+                    model=MODEL_DEEPSEEK,
+                    max_tokens=10,
+                    system="你是客服质量评估员，只输出0到1之间的数字。",
+                    trace_name="cs_chat_log_scoring",
+                )
+                score = float(score_text.strip())
+            except Exception:
+                continue
+
+            intent = "other"
+
+            if score >= 0.8:
+                # 正面 few-shot
+                if intent not in few_shots:
+                    few_shots[intent] = []
+                if len(few_shots[intent]) < 3:
+                    few_shots[intent].append(
+                        {
+                            "user": user_msg[:150],
+                            "assistant": ai_reply[:150],
+                            "source": "chat_log",
+                            "score": score,
+                        }
+                    )
+                    new_positive += 1
+            elif score < 0.4:
+                # 负面案例
+                if intent not in neg_examples:
+                    neg_examples[intent] = []
+                if len(neg_examples[intent]) < 3:
+                    neg_examples[intent].append(
+                        {
+                            "user_message": user_msg[:150],
+                            "bad_response": ai_reply[:150],
+                            "correction": "",
+                            "reason": f"LLM评分{score:.2f}，质量不达标",
+                        }
+                    )
+                    new_negative += 1
+
+        # 保存结果
+        await pool.execute(
+            """
+            CREATE TABLE IF NOT EXISTS system_config (
+                key TEXT PRIMARY KEY,
+                value JSONB NOT NULL,
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+            """
+        )
+        await pool.execute(
+            """
+            INSERT INTO system_config (key, value, updated_at) VALUES ('cs_few_shot_examples', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
+            """,
+            json.dumps(few_shots, ensure_ascii=False),
+        )
+        await pool.execute(
+            """
+            INSERT INTO system_config (key, value, updated_at) VALUES ('cs_negative_examples', $1, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()
+            """,
+            json.dumps(neg_examples, ensure_ascii=False),
+        )
+        logger.info(
+            f"learn_from_chat_log: +{new_positive} positive, +{new_negative} negative examples"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to learn from chat log: {e}")
+
+
 # 定时任务：自动学习（可以通过scheduler调用）
 async def run_automatic_learning(pool) -> None:
     """执行自动学习流程"""
     try:
         logger.info("Starting automatic learning process...")
 
-        # 1. 更新 few-shot 示例
+        # 1. 更新 few-shot 示例（正面学习）
         await update_few_shot_examples(pool)
 
-        # 2. 生成学习洞察
+        # 2. 负面纠正
+        await update_negative_examples(pool)
+
+        # 3. 从真实对话中挖掘正/负面案例
+        await learn_from_chat_log(pool)
+
+        # 4. 生成学习洞察
         insights = await extract_learning_insights(pool)
 
-        # 3. 记录学习日志
+        # 5. 记录学习日志
         await pool.execute(
             """
             INSERT INTO system_log (module, level, message, data, created_at)

@@ -432,6 +432,7 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
                 ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS original_reply TEXT;
                 ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS edited_reply TEXT;
                 ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS actual_reply TEXT;
+                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS correction_text TEXT;
                 """
             )
         except Exception:
@@ -443,8 +444,8 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
                 """
                 INSERT INTO cs_feedback (session_id, message_id, rating, comment,
                                          action, original_reply, edited_reply, actual_reply,
-                                         created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                                         correction_text, created_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
                 """,
                 request.session_id,
                 request.message_id,
@@ -454,6 +455,7 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
                 request.original_reply,
                 request.edited_reply,
                 request.actual_reply,
+                request.correction_text,
             )
         except Exception:
             # Fallback: store basic fields only (columns may not exist yet)

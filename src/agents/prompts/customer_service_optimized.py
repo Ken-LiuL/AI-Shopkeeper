@@ -115,6 +115,7 @@ def build_optimized_system_prompt(
     after_sales_scripts: dict | None = None,
     customer_profile_str: str | None = None,
     dynamic_few_shots: dict | None = None,
+    negative_examples: dict | None = None,
 ) -> str:
     """构建优化版系统提示词 - 精简核心 + 按需注入"""
     parts = [CORE_SYSTEM_PROMPT]
@@ -133,6 +134,27 @@ def build_optimized_system_prompt(
                 kb_lines.append(f"Q: {q} → {a}")
         if kb_lines:
             parts.append("\n# 知识库参考\n" + "\n".join(kb_lines))
+
+    # 负面纠正示例（总共不超过 500 字）
+    if negative_examples:
+        neg_lines: list[str] = []
+        char_budget = 500
+        for intent, cases in negative_examples.items():
+            if not isinstance(cases, list):
+                continue
+            for case in cases[:2]:  # 每个 intent 最多 2 条
+                user_msg = (case.get("user_message") or "")[:60]
+                bad = (case.get("bad_response") or "")[:60]
+                corr = (case.get("correction") or "")[:60]
+                reason = (case.get("reason") or "")[:40]
+                line = f"· [{intent}] 用户:「{user_msg}」→ ❌「{bad}」→ ✅「{corr}」"
+                if reason:
+                    line += f"（{reason}）"
+                if sum(len(ln) for ln in neg_lines) + len(line) > char_budget:
+                    break
+                neg_lines.append(line)
+        if neg_lines:
+            parts.append("\n# ⚠️ 避免以下错误\n" + "\n".join(neg_lines))
 
     return "\n".join(parts)
 

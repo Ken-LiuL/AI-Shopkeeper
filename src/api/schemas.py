@@ -109,6 +109,7 @@ class FeedbackRequest(BaseModel):
     original_reply: str | None = None
     edited_reply: str | None = None
     actual_reply: str | None = None
+    correction_text: str | None = None
 
 
 # ── Alerts ───────────────────────────────────────────────────
