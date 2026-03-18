@@ -71,8 +71,11 @@ jobs:
             echo "=== Syncing docker-compose.yml ==="
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
 
-            echo "=== Building Docker image (with cache) ==="
-            docker build --cache-from aishop-app:latest -t aishop-app:latest /opt/aishop/repo/
+            echo "=== Building Docker image (BuildKit + layer cache) ==="
+            DOCKER_BUILDKIT=1 docker build \
+              --build-arg BUILDKIT_INLINE_CACHE=1 \
+              --cache-from aishop-app:latest \
+              -t aishop-app:latest /opt/aishop/repo/
             echo "✅ Build done"
 
             echo "=== Starting infra (no-recreate) ==="

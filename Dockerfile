@@ -1,10 +1,11 @@
+# syntax=docker/dockerfile:1
 # ---- Frontend build stage ----
 FROM node:20-slim AS frontend-builder
 
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
-RUN npm ci
-
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --prefer-offline
 COPY frontend/ ./
 RUN npm run build
 
@@ -12,9 +13,15 @@ RUN npm run build
 FROM python:3.11-slim AS python-builder
 
 WORKDIR /app
+
+# 1) 先装 torch (最大依赖，单独一层缓存)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# 2) 再装项目依赖（只要 pyproject.toml 没变就命中缓存）
 COPY pyproject.toml .
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
-    && pip install --no-cache-dir . psycopg2-binary
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install . psycopg2-binary
 
 # ---- Runtime stage ----
 FROM python:3.11-slim
