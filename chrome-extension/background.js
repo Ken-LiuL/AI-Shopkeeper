@@ -177,11 +177,15 @@ async function handleLogChat(payload) {
   if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(logUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       // Non-critical: just log
@@ -216,11 +220,15 @@ async function handleFeedback(payload) {
   if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
 
   try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
     const response = await fetch(feedbackUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(body),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errText = await response.text().catch(() => '');

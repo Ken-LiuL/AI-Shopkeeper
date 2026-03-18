@@ -921,14 +921,17 @@
     reply.status = 'ignored';
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
-    renderReplies();
-    sendFeedback({
-      session_id: reply.sessionId,
-      message_id: reply.messageId,
-      feedback: 'bad', action: 'ignored',
-      original_reply: reply.text,
-      edited_reply: '', actual_reply: '',
-    });
+    renderReplies(); // UI 立刻更新，不等 feedback
+    // feedback 异步发送，失败不影响 UI
+    try {
+      sendFeedback({
+        session_id: reply.sessionId,
+        message_id: reply.messageId,
+        feedback: 'bad', action: 'ignored',
+        original_reply: reply.text,
+        edited_reply: '', actual_reply: '',
+      });
+    } catch (_) {}
   }
 
   function sendReplyFeedback(reply, type, btn) {
