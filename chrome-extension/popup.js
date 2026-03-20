@@ -1,6 +1,10 @@
 /** popup.js — AI店长 Extension Popup v2 */
 
 const DEFAULT_API_BASE = 'http://192.144.227.205:8000';
+const LEGACY_API_BASES = new Set([
+  'https://ai-shopkeeper-kk.fly.dev',
+  'https://ai-shopkeeper-kk.fly.dev/',
+]);
 
 const MODE_DESCRIPTIONS = {
   suggest: 'AI 生成建议显示在面板，客服手动决定是否使用',
@@ -17,6 +21,21 @@ function showStatus(id, msg, isError = false, ms = 2500) {
   if (ms > 0) {
     setTimeout(() => { el.textContent = ''; el.className = 'status'; }, ms);
   }
+}
+
+function normalizeBaseUrl(baseUrl) {
+  const raw = (baseUrl || '').trim();
+  if (!raw || LEGACY_API_BASES.has(raw)) return DEFAULT_API_BASE;
+  return raw.replace(/\/+$/, '');
+}
+
+function normalizeApiUrl(apiUrl, baseUrl, allowEmpty = false) {
+  const raw = (apiUrl || '').trim();
+  if (!raw) return allowEmpty ? '' : `${baseUrl}/api/customer-service/chat`;
+  if (raw.startsWith('https://ai-shopkeeper-kk.fly.dev')) {
+    return raw.replace('https://ai-shopkeeper-kk.fly.dev', baseUrl);
+  }
+  return raw;
 }
 
 function setConnDot(ok) {
@@ -128,25 +147,38 @@ document.getElementById('resetStats').addEventListener('click', () => {
 
 /* ═══════════════════ Load Settings ═══════════════════ */
 chrome.storage.sync.get(['enabled', 'mode', 'apiUrl', 'apiKey', 'storeId', 'chatApiBase'], (settings) => {
+  const chatApiBase = normalizeBaseUrl(settings.chatApiBase);
+  const normalizedApiUrl = normalizeApiUrl(settings.apiUrl, chatApiBase, true);
+  const defaultApiUrl = `${chatApiBase}/api/customer-service/chat`;
+  const apiUrl = normalizedApiUrl === defaultApiUrl ? '' : normalizedApiUrl;
+
+  if ((settings.chatApiBase || '') !== chatApiBase || ((settings.apiUrl || '').trim()) !== apiUrl) {
+    chrome.storage.sync.set({ chatApiBase, apiUrl });
+  }
+
   document.getElementById('enabled').checked = settings.enabled !== false;
   const modeVal = settings.mode || 'suggest';
   document.getElementById('mode').value = ['suggest', 'auto-fill', 'auto-send'].includes(modeVal) ? modeVal : 'suggest';
-  document.getElementById('apiUrl').value = settings.apiUrl || '';
-  document.getElementById('chatApiBase').value = settings.chatApiBase || DEFAULT_API_BASE;
+  document.getElementById('apiUrl').value = apiUrl;
+  document.getElementById('chatApiBase').value = chatApiBase;
   document.getElementById('storeId').value = settings.storeId || '';
   updateModeDesc();
 });
 
 /* ═══════════════════ Save Settings ═══════════════════ */
 document.getElementById('save').addEventListener('click', () => {
+  const chatApiBase = normalizeBaseUrl(document.getElementById('chatApiBase').value);
+  const apiUrl = normalizeApiUrl(document.getElementById('apiUrl').value, chatApiBase, true);
   const data = {
     enabled: document.getElementById('enabled').checked,
     mode: document.getElementById('mode').value,
-    apiUrl: document.getElementById('apiUrl').value.trim(),
-    chatApiBase: document.getElementById('chatApiBase').value.trim() || DEFAULT_API_BASE,
+    apiUrl,
+    chatApiBase,
     storeId: document.getElementById('storeId').value.trim(),
   };
   chrome.storage.sync.set(data, () => {
+    document.getElementById('apiUrl').value = apiUrl;
+    document.getElementById('chatApiBase').value = chatApiBase;
     showStatus('csStatus', '✅ 已保存');
   });
 });

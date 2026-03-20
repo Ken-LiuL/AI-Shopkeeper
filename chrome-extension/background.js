@@ -4,6 +4,10 @@
  */
 
 const DEFAULT_API_BASE = 'http://192.144.227.205:8000';
+const LEGACY_API_BASES = new Set([
+  'https://ai-shopkeeper-kk.fly.dev',
+  'https://ai-shopkeeper-kk.fly.dev/',
+]);
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 const REQUEST_TIMEOUT_MS = 30000; // 30s 超时
@@ -28,8 +32,31 @@ async function getApiSettings() {
     'apiKey',
     'storeId',
   ]);
-  const chatBase = settings.chatApiBase || DEFAULT_API_BASE;
-  const apiUrl = settings.apiUrl || `${chatBase}/api/customer-service/chat`;
+  const rawChatBase = (settings.chatApiBase || '').trim();
+  const rawApiUrl = (settings.apiUrl || '').trim();
+  const chatBase = !rawChatBase || LEGACY_API_BASES.has(rawChatBase)
+    ? DEFAULT_API_BASE
+    : rawChatBase.replace(/\/+$/, '');
+
+  let apiUrl = rawApiUrl;
+  if (!apiUrl) {
+    apiUrl = `${chatBase}/api/customer-service/chat`;
+  } else if (apiUrl.startsWith('https://ai-shopkeeper-kk.fly.dev')) {
+    apiUrl = apiUrl.replace('https://ai-shopkeeper-kk.fly.dev', chatBase);
+  }
+
+  const updates = {};
+  if (rawChatBase !== chatBase) {
+    updates.chatApiBase = chatBase;
+  }
+  if (rawApiUrl && rawApiUrl !== apiUrl) {
+    // 仅迁移显式配置（如 legacy fly URL），默认空值保持为空以便随 base 动态生效
+    updates.apiUrl = apiUrl;
+  }
+  if (Object.keys(updates).length > 0) {
+    chrome.storage.sync.set(updates);
+  }
+
   return {
     chatBase,
     apiUrl,
@@ -168,6 +195,7 @@ async function handleLogChat(payload) {
 
   const body = {
     session_id: payload.session_id || '',
+    message_id: payload.message_id || '',
     role: payload.role || 'agent',
     content: payload.content || '',
     timestamp: payload.timestamp || new Date().toISOString(),
@@ -205,16 +233,33 @@ async function handleFeedback(payload) {
   const settings = await getApiSettings();
   const feedbackUrl = `${settings.chatBase}/api/customer-service/feedback`;
 
+  const allowedActions = new Set(['adopted', 'edited', 'ignored']);
+  const requestedAction = (payload.action || '').trim();
+  const action = allowedActions.has(requestedAction) ? requestedAction : '';
+
+  let rating = (payload.rating || payload.feedback || '').toString().trim().toLowerCase();
+  if (!['good', 'bad'].includes(rating)) {
+    const actionToRating = { adopted: 'good', edited: 'bad', ignored: 'bad' };
+    rating = actionToRating[action] || '';
+  }
+  if (!['good', 'bad'].includes(rating)) {
+    const errMsg = '反馈缺少有效评分（rating: good/bad）';
+    addLog('error', errMsg, `session=${payload.session_id || ''}`);
+    return { success: false, error: errMsg };
+  }
+
   const body = {
     session_id: payload.session_id || '',
     message_id: payload.message_id || '',
-    feedback: payload.feedback || '',      // "good" | "bad" | "neutral"
-    action: payload.action || '',          // "adopted" | "edited" | "ignored"
+    rating,                                // "good" | "bad"
     original_reply: payload.original_reply || '',
     edited_reply: payload.edited_reply || '',
     actual_reply: payload.actual_reply || '',
     timestamp: new Date().toISOString(),
   };
+  if (action) {
+    body.action = action;                  // "adopted" | "edited" | "ignored"
+  }
 
   const headers = { 'Content-Type': 'application/json' };
   if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
@@ -238,8 +283,14 @@ async function handleFeedback(payload) {
       return { success: false, error: errMsg };
     }
 
-    addLog('info', `反馈已发送: ${body.action || body.feedback}`, `session=${body.session_id}`);
-    return { success: true };
+    addLog('info', `反馈已发送: ${body.action || body.rating}`, `session=${body.session_id}`);
+    return {
+      success: true,
+      stored: {
+        rating: body.rating,
+        action: body.action || '',
+      },
+    };
   } catch (err) {
     // Feedback failures are non-critical — log but don't block
     addLog('error', `反馈发送失败: ${err.message}`);

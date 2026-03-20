@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import os
 import random
 import re
 import time
+from collections.abc import Awaitable, Callable
 
-from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +127,8 @@ _COMPLIANCE_MAP: list[tuple[str, str]] = [
     ("包治百病", "广泛适用"),
     ("药到病除", "效果显著"),
 ]
+_MAX_REPLY_TEXT_LEN = 220
+_COMPLIANCE_STREAM_HOLDBACK_CHARS = max((len(forbidden) for forbidden, _ in _COMPLIANCE_MAP), default=1) - 1
 
 
 def _compliance_filter(reply_text: str) -> str:
@@ -139,6 +143,14 @@ def _compliance_filter(reply_text: str) -> str:
             logger.info(f"[CS-COMPLIANCE] Filtered: {forbidden} -> {replacement}")
             filtered = new_text
     return filtered
+
+
+def _postprocess_reply_text(reply_text: str) -> str:
+    """统一回复后处理：合规过滤 + 长度限制。"""
+    processed = _compliance_filter(reply_text or "")
+    if len(processed) > _MAX_REPLY_TEXT_LEN:
+        processed = processed[:_MAX_REPLY_TEXT_LEN].rstrip()
+    return processed
 
 
 
@@ -247,6 +259,150 @@ def _select_context_by_intent(intent: str, has_product_history: bool = False) ->
         result = result | {"products"}
 
     return result
+
+
+_PRODUCT_INTENTS = {"product_inquiry", "recommendation", "comparison", "usage_question", "medical_advice"}
+_ORDER_INTENTS = {"logistics", "after_sales", "complaint"}
+_POLICY_INTENTS = {"after_sales", "complaint", "medical_advice"}
+_PROFILE_INTENTS = {"after_sales", "complaint"}
+_PROMPT_ENHANCER_INTENTS = {
+    "product_inquiry",
+    "recommendation",
+    "comparison",
+    "usage_question",
+    "medical_advice",
+    "after_sales",
+    "complaint",
+}
+_RETRIEVAL_CACHE_TTL_SECONDS = 90
+_retrieval_inflight: dict[str, asyncio.Task[list[dict]]] = {}
+
+
+def _history_has_product_signals(conversation_history: list[dict] | None) -> bool:
+    if not conversation_history:
+        return False
+    product_signals = [
+        "推荐", "血压", "体温", "血糖", "口罩", "创可贴",
+        "型号", "库存", "价格", "欧姆龙", "鱼跃", "体重秤",
+        "轮椅", "拐杖", "雾化", "制氧", "呼吸机",
+    ]
+    for msg in reversed(conversation_history[-8:]):
+        content = (msg.get("content") or "").lower()
+        if any(sig in content for sig in product_signals):
+            return True
+    return False
+
+
+def _should_run_product_pipeline(quick_intent: str, conversation_history: list[dict] | None) -> bool:
+    if quick_intent in _PRODUCT_INTENTS:
+        return True
+    # "other" 是最常见的兜底分类，保留商品检索以避免漏召回
+    if quick_intent == "other":
+        return True
+    return _history_has_product_signals(conversation_history)
+
+
+def _build_retrieval_cache_key(
+    session_id: str,
+    message: str,
+    conversation_history: list[dict] | None = None,
+    quick_intent: str | None = None,
+) -> str | None:
+    sid = (session_id or "").strip()
+    normalized_message = re.sub(r"\s+", " ", (message or "").strip().lower())[:200]
+    if not sid or not normalized_message:
+        return None
+
+    context_parts: list[str] = []
+    if quick_intent:
+        context_parts.append(f"intent:{quick_intent.strip().lower()}")
+
+    if conversation_history:
+        for history_msg in conversation_history[-4:]:
+            role = (history_msg.get("role") or "").strip().lower()
+            if role == "system":
+                continue
+            content = re.sub(r"\s+", " ", (history_msg.get("content") or "").strip().lower())[:120]
+            if not content:
+                continue
+            context_parts.append(f"{role}:{content}")
+
+    digest_seed = f"{normalized_message}|{'|'.join(context_parts)}"
+    digest = hashlib.sha1(digest_seed.encode("utf-8")).hexdigest()[:20]
+    return f"cs:retrieval:{sid}:{digest}"
+
+
+async def _load_cached_retrieval(redis_client, cache_key: str) -> list[dict] | None:
+    if not redis_client or not cache_key:
+        return None
+    try:
+        raw = await redis_client.get(cache_key)
+        if not raw:
+            return None
+        data = json.loads(raw)
+        if isinstance(data, list):
+            logger.info("[CS] Retrieval cache hit: %s (%d items)", cache_key, len(data))
+            return data
+    except Exception as e:
+        logger.debug("[CS] Retrieval cache read failed: %s", e)
+    return None
+
+
+async def _store_cached_retrieval(redis_client, cache_key: str, results: list[dict]) -> None:
+    if not redis_client or not cache_key or not isinstance(results, list):
+        return
+    try:
+        payload = json.dumps(results, ensure_ascii=False)
+        await redis_client.set(cache_key, payload, ex=_RETRIEVAL_CACHE_TTL_SECONDS)
+    except Exception as e:
+        logger.debug("[CS] Retrieval cache write failed: %s", e)
+
+
+async def _run_product_pipeline_with_cache(
+    *,
+    message: str,
+    pool,
+    pipeline_timeout: float,
+    redis_client,
+    cache_key: str | None,
+) -> list[dict]:
+    async def _compute_results() -> list[dict]:
+        try:
+            results = await asyncio.wait_for(
+                _full_pipeline_search(message, pool),
+                timeout=pipeline_timeout,
+            )
+        except TimeoutError:
+            logger.warning("[CS] Pipeline timeout, falling back")
+            return []
+
+        if cache_key and results:
+            await _store_cached_retrieval(redis_client, cache_key, results)
+        return results
+
+    if cache_key:
+        cached_results = await _load_cached_retrieval(redis_client, cache_key)
+        if cached_results is not None:
+            return cached_results
+
+        inflight_task = _retrieval_inflight.get(cache_key)
+        if inflight_task is not None:
+            try:
+                logger.debug("[CS] Awaiting inflight retrieval: %s", cache_key)
+                return await inflight_task
+            except Exception:
+                # in-flight 失败时降级为重新计算
+                pass
+
+        task = asyncio.create_task(_compute_results())
+        _retrieval_inflight[cache_key] = task
+        try:
+            return await task
+        finally:
+            if _retrieval_inflight.get(cache_key) is task:
+                _retrieval_inflight.pop(cache_key, None)
+
+    return await _compute_results()
 
 
 
@@ -1014,6 +1170,8 @@ async def chat(
     pool=None,
     conversation_history: list[dict] | None = None,
     images: list[str] | None = None,
+    stream: bool = False,
+    token_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
     """
     新版客服聊天函数 - 单次LLM调用完成所有任务
@@ -1074,11 +1232,17 @@ async def chat(
         intent_result = {}
         sentiment = "neutral"
         emotion_instruction = ""
+        quick_intent_hint = _quick_intent_guess(message, conversation_history)
+        should_load_products = _should_run_product_pipeline(quick_intent_hint, conversation_history)
+        should_load_order_context = quick_intent_hint in _ORDER_INTENTS
+        should_load_profile_context = quick_intent_hint in _PROFILE_INTENTS
+        should_load_policy_context = quick_intent_hint in _POLICY_INTENTS
+        should_load_prompt_enhancers = quick_intent_hint in _PROMPT_ENHANCER_INTENTS
+        should_load_memory = should_load_prompt_enhancers or bool(conversation_history and len(conversation_history) >= 4)
 
         summary_task = None
         faq_task = None
         product_task = None
-        business_task = None
         order_task = None
         profile_task = None
         intent_task = None
@@ -1089,11 +1253,21 @@ async def chat(
         pipeline_timeout = float(os.getenv("CS_PIPELINE_TIMEOUT", "4.0" if fast_mode else "10.0"))
         enable_intent_llm = os.getenv("CS_INTENT_LLM", "0") == "1" and not fast_mode
         max_reply_tokens = int(os.getenv("CS_REPLY_MAX_TOKENS", "512"))
+        critical_wait_timeout = float(os.getenv("CS_CRITICAL_WAIT_TIMEOUT", "3.8" if stream else "4.6"))
+        optional_wait_timeout = float(os.getenv("CS_OPTIONAL_WAIT_TIMEOUT", "0.35" if stream else "0.8"))
+        stream_decision_timeout = float(os.getenv("CS_STREAM_DECISION_TIMEOUT", "1.2"))
 
         if history_to_summarize:
             summary_task = asyncio.create_task(
                 _summarize_conversation(history_to_summarize)
             )
+
+        # ── 话题管理器（原来串行等待，现在并行） ──────────────────
+        from src.db import redis as redis_db
+
+        from .conversation_manager import load_conversation_manager, save_conversation_manager
+
+        _redis = redis_db.get_redis()
 
         # ── 额外并行任务（原来在第二轮 gather，现在合并到第一轮） ──
         policy_task = None
@@ -1102,35 +1276,46 @@ async def chat(
         cm_task = None
         memory_task = None
 
+        logger.info(
+            "[CS] Intent pre-route: quick=%s product=%s order=%s profile=%s policy=%s few_shot=%s memory=%s",
+            quick_intent_hint,
+            should_load_products,
+            should_load_order_context,
+            should_load_profile_context,
+            should_load_policy_context,
+            should_load_prompt_enhancers,
+            should_load_memory,
+        )
+
         if pool:
             faq_task = asyncio.create_task(_search_auto_faq_context(message, pool))
 
-            async def _run_product_pipeline() -> list[dict]:
-                try:
-                    return await asyncio.wait_for(
-                        _full_pipeline_search(message, pool),
-                        timeout=pipeline_timeout,
+            if should_load_products:
+                async def _run_product_pipeline() -> list[dict]:
+                    cache_key = _build_retrieval_cache_key(
+                        session_id=session_id,
+                        message=message,
+                        conversation_history=conversation_history,
+                        quick_intent=quick_intent_hint,
                     )
-                except TimeoutError:
-                    logger.warning("[CS] Pipeline timeout, falling back")
-                    return []
+                    return await _run_product_pipeline_with_cache(
+                        message=message,
+                        pool=pool,
+                        pipeline_timeout=pipeline_timeout,
+                        redis_client=_redis,
+                        cache_key=cache_key,
+                    )
 
-            product_task = asyncio.create_task(_run_product_pipeline())
-            async def _cached_business_context():
-                global _business_ctx_cache, _business_ctx_ts
-                if _business_ctx_cache is not None and (time.time() - _business_ctx_ts) < _CACHE_TTL:
-                    return _business_ctx_cache
-                result = await _load_business_context(pool)
-                _business_ctx_cache = result
-                _business_ctx_ts = time.time()
-                return result
-
-            business_task = asyncio.create_task(_cached_business_context())
+                product_task = asyncio.create_task(_run_product_pipeline())
 
             try:
                 from .order_context import build_order_context_str, has_order_mention
 
+                should_lookup_order = should_load_order_context
                 if has_order_mention(message):
+                    should_lookup_order = True
+
+                if should_lookup_order:
                     order_task = asyncio.create_task(
                         build_order_context_str(
                             pool=pool,
@@ -1146,9 +1331,10 @@ async def chat(
                     get_customer_profile,
                 )
 
-                profile_task = asyncio.create_task(
-                    get_customer_profile(pool, session_id=session_id)
-                )
+                if should_load_profile_context:
+                    profile_task = asyncio.create_task(
+                        get_customer_profile(pool, session_id=session_id)
+                    )
             except Exception as e:
                 logger.debug(f"[CS] Customer profile load failed (non-critical): {e}")
 
@@ -1189,9 +1375,11 @@ async def chat(
                     pass
                 return {}
 
-            policy_task = asyncio.create_task(_safe_load_policy())
-            few_shot_task = asyncio.create_task(_safe_load_dynamic_few_shots())
-            negative_task = asyncio.create_task(_safe_load_negative_examples())
+            if should_load_policy_context:
+                policy_task = asyncio.create_task(_safe_load_policy())
+            if should_load_prompt_enhancers:
+                few_shot_task = asyncio.create_task(_safe_load_dynamic_few_shots())
+                negative_task = asyncio.create_task(_safe_load_negative_examples())
 
             # ── 记忆上下文（原来串行等待，现在并行） ──────────────
             async def _safe_load_memory():
@@ -1208,14 +1396,9 @@ async def chat(
                 except Exception:
                     return ""
 
-            memory_task = asyncio.create_task(_safe_load_memory())
+            if should_load_memory:
+                memory_task = asyncio.create_task(_safe_load_memory())
 
-        # ── 话题管理器（原来串行等待，现在并行） ──────────────────
-        from src.db import redis as redis_db
-
-        from .conversation_manager import load_conversation_manager, save_conversation_manager
-
-        _redis = redis_db.get_redis()
         if _redis:
             cm_task = asyncio.create_task(load_conversation_manager(_redis, session_id))
 
@@ -1231,52 +1414,62 @@ async def chat(
         _t_tasks_start = time.time()
         logger.info(f"[CS-PERF] Task setup took {(_t_tasks_start - _t0)*1000:.0f}ms")
 
-        task_labels = {
-            id(summary_task): "summary",
-            id(faq_task): "faq",
-            id(product_task): "product",
-            id(business_task): "business",
-            id(order_task): "order",
-            id(profile_task): "profile",
-            id(intent_task): "intent",
-            id(policy_task): "policy",
-            id(few_shot_task): "few_shot",
-            id(negative_task): "negative",
-            id(cm_task): "conv_mgr",
-            id(memory_task): "memory",
-        }
-
-        first_batch_tasks = [
-            task
-            for task in [
-                summary_task,
-                faq_task,
-                product_task,
-                business_task,
-                order_task,
-                profile_task,
-                intent_task,
-                policy_task,
-                few_shot_task,
-                negative_task,
-                cm_task,
-                memory_task,
-            ]
-            if task is not None
+        tracked_tasks = [
+            ("summary", summary_task),
+            ("faq", faq_task),
+            ("product", product_task),
+            ("order", order_task),
+            ("profile", profile_task),
+            ("intent", intent_task),
+            ("policy", policy_task),
+            ("few_shot", few_shot_task),
+            ("negative", negative_task),
+            ("conv_mgr", cm_task),
+            ("memory", memory_task),
         ]
-        if first_batch_tasks:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*first_batch_tasks, return_exceptions=True),
-                    timeout=5.0,  # 所有前置数据加载总共不超过5秒
+        task_labels = {id(task): label for label, task in tracked_tasks if task is not None}
+        critical_task_labels = {"faq", "product", "order", "profile", "policy", "conv_mgr"}
+        critical_tasks = [
+            task
+            for label, task in tracked_tasks
+            if task is not None and label in critical_task_labels
+        ]
+        optional_tasks = [
+            task
+            for label, task in tracked_tasks
+            if task is not None and label not in critical_task_labels
+        ]
+
+        if critical_tasks:
+            _, critical_pending = await asyncio.wait(
+                critical_tasks,
+                timeout=critical_wait_timeout,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+            if critical_pending:
+                logger.warning(
+                    "[CS] Critical tasks timeout at %.2fs, pending=%d",
+                    critical_wait_timeout,
+                    len(critical_pending),
                 )
-            except TimeoutError:
-                logger.warning("[CS] First batch tasks timed out at 5s, proceeding with available data")
+
+        if optional_tasks and optional_wait_timeout > 0:
+            _, optional_pending = await asyncio.wait(
+                optional_tasks,
+                timeout=optional_wait_timeout,
+                return_when=asyncio.ALL_COMPLETED,
+            )
+            if optional_pending:
+                logger.debug(
+                    "[CS] Optional tasks timeout at %.2fs, pending=%d",
+                    optional_wait_timeout,
+                    len(optional_pending),
+                )
 
         _t_tasks_done = time.time()
         # 逐个任务报告耗时和状态
         _task_perf = []
-        for task in [summary_task, faq_task, product_task, business_task, order_task, profile_task, intent_task, policy_task, few_shot_task, negative_task, cm_task, memory_task]:
+        for _, task in tracked_tasks:
             if task is None:
                 continue
             label = task_labels.get(id(task), "unknown")
@@ -1296,6 +1489,8 @@ async def chat(
 
         def _consume_task_result(task, default=None):
             if not task:
+                return default
+            if not task.done():
                 return default
             if task.cancelled():
                 return default
@@ -1318,9 +1513,6 @@ async def chat(
 
         if product_task:
             product_results = _consume_task_result(product_task, [])
-
-        if business_task:
-            _consume_task_result(business_task, {})
 
         if order_task:
             order_context_str = _consume_task_result(order_task, "")
@@ -1354,7 +1546,7 @@ async def chat(
                 knowledge_base, message, intent_result.get("intent", "")
             )
 
-        if pool and not product_results:
+        if pool and should_load_products and not product_results:
             # Fallback：降级到纯向量检索
             product_results = await search_products_with_embedding(message, pool)
 
@@ -1375,6 +1567,14 @@ async def chat(
 
         # ── 话题管理器（已在第一轮并行加载） ──────────────────────
         cm = _consume_task_result(cm_task)
+        if cm is None and cm_task and not cm_task.cancelled() and not cm_task.done():
+            try:
+                cm = await asyncio.wait_for(
+                    cm_task,
+                    timeout=0.15 if stream else 0.4,
+                )
+            except Exception:
+                cm = None
         if cm is None:
             from .conversation_manager import load_conversation_manager
             cm = await load_conversation_manager(_redis, session_id)
@@ -1396,8 +1596,18 @@ async def chat(
             f"stack_depth={len(cm.topic_stack)}"
         )
 
+        pending_tasks = [
+            task
+            for _, task in tracked_tasks
+            if task is not None and not task.done()
+        ]
+        if pending_tasks:
+            for task in pending_tasks:
+                task.cancel()
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
         # ── 快速意图预判（用于上下文路由，不依赖 LLM） ──────────────
-        quick_intent = _quick_intent_guess(message, conversation_history)
+        quick_intent = quick_intent_hint
         # 如果 intent_result 有 LLM 结果就用 LLM 的，否则用快速预判
         current_intent = intent_result.get("intent") if intent_result else quick_intent
         if current_intent == "other":
@@ -1657,39 +1867,238 @@ async def chat(
             },
         }
 
-        if images and len(images) > 0:
-            result = await call_vision(
-                text=user_message_with_context,
-                images=images,
-                tool=tool_schema,
-                model="google/gemini-2.0-flash-001",
-                max_tokens=max_reply_tokens,
-                system=system_prompt
-                + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
-                trace_name="customer_service_vision_chat",
+        async def _extract_stream_structured_result(stream_reply_text: str) -> dict:
+            """流式文本生成后补一轮轻量结构化判定，避免丢失转人工/动作建议。"""
+            decision_tool_schema = {
+                "name": "stream_decision",
+                "description": "基于客服回复输出结构化决策字段",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                        "requires_human_review": {"type": "boolean"},
+                        "intent": {
+                            "type": "string",
+                            "enum": [
+                                "product_inquiry",
+                                "usage_question",
+                                "recommendation",
+                                "comparison",
+                                "logistics",
+                                "after_sales",
+                                "complaint",
+                                "medical_advice",
+                                "greeting",
+                                "other",
+                            ],
+                        },
+                        "action": {
+                            "type": "object",
+                            "description": "AI 建议执行的操作（可选）",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "none",
+                                        "check_order",
+                                        "check_logistics",
+                                        "initiate_refund",
+                                        "initiate_exchange",
+                                        "apply_coupon",
+                                        "transfer_human",
+                                    ],
+                                },
+                                "order_id": {"type": "string"},
+                                "reason": {"type": "string"},
+                                "amount": {"type": "number"},
+                                "urgency": {"type": "string", "enum": ["normal", "urgent"]},
+                            },
+                            "required": ["type"],
+                        },
+                    },
+                    "required": ["confidence", "requires_human_review", "intent", "action"],
+                },
+            }
+            decision_prompt = (
+                "请根据用户问题与当前客服回复，输出结构化决策字段。\n"
+                "要求：\n"
+                "1) 不要改写回复文本，不要输出解释。\n"
+                "2) 若无需操作，action.type 必须为 none。\n"
+                f"用户消息：{message}\n"
+                f"快速意图：{current_intent}\n"
+                f"用户情绪：{sentiment}\n"
+                f"客服回复：{stream_reply_text}"
             )
-        else:
-            result = await call_tool(
-                prompt=user_message_with_context,
-                tool=tool_schema,
-                model=MODEL_SONNET,
-                max_tokens=max_reply_tokens,
-                system=system_prompt,
-                trace_name="customer_service_chat",
+            return await call_tool(
+                prompt=decision_prompt,
+                tool=decision_tool_schema,
+                model=MODEL_DEEPSEEK,
+                max_tokens=256,
+                trace_name="customer_service_stream_decision",
             )
+
+        async def _run_stream_structured_result(stream_reply_text: str) -> dict:
+            if not stream_reply_text or stream_decision_timeout <= 0:
+                return {}
+            try:
+                return await asyncio.wait_for(
+                    _extract_stream_structured_result(stream_reply_text),
+                    timeout=stream_decision_timeout,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "[CS] Stream structured decision timeout at %.2fs, fallback to heuristic",
+                    stream_decision_timeout,
+                )
+            except Exception as decision_err:
+                logger.warning(
+                    "[CS] Stream structured decision failed, fallback to heuristic: %s",
+                    decision_err,
+                )
+            return {}
+
+        stream_ready = bool(stream and token_callback and not images)
+        stream_structured_result: dict = {}
+        result: dict = {}
+        reply_text = ""
+        confidence = 0.8
+        needs_human = current_intent in {"complaint"}
+        intent = current_intent
+        suggested_action = {"type": "none"}
+
+        if stream_ready:
+            raw_stream_text = ""
+            emitted_stream_text = ""
+
+            async def _emit_stream_delta(force_flush: bool = False) -> None:
+                nonlocal emitted_stream_text
+                if not raw_stream_text:
+                    return
+
+                if force_flush or _COMPLIANCE_STREAM_HOLDBACK_CHARS <= 0:
+                    candidate_raw_text = raw_stream_text
+                else:
+                    if len(raw_stream_text) <= _COMPLIANCE_STREAM_HOLDBACK_CHARS:
+                        return
+                    candidate_raw_text = raw_stream_text[:-_COMPLIANCE_STREAM_HOLDBACK_CHARS]
+
+                candidate_processed_text = _postprocess_reply_text(candidate_raw_text)
+                if len(candidate_processed_text) <= len(emitted_stream_text):
+                    return
+
+                delta = candidate_processed_text[len(emitted_stream_text):]
+                if not delta:
+                    return
+
+                emitted_stream_text += delta
+                try:
+                    await token_callback(delta)
+                except Exception as cb_err:
+                    logger.debug("[CS] Stream token callback failed: %s", cb_err)
+
+            try:
+                async for chunk in call_chat_stream(
+                    prompt=user_message_with_context,
+                    model=MODEL_SONNET,
+                    max_tokens=max_reply_tokens,
+                    system=system_prompt,
+                    trace_name="customer_service_chat_stream",
+                ):
+                    if not chunk:
+                        continue
+                    raw_stream_text += chunk
+                    await _emit_stream_delta(force_flush=False)
+                    if len(emitted_stream_text) >= _MAX_REPLY_TEXT_LEN:
+                        break
+
+                await _emit_stream_delta(force_flush=True)
+
+                # 保证 done.reply 与已发 token 一致
+                final_processed_reply = _postprocess_reply_text(raw_stream_text)
+                if len(final_processed_reply) > len(emitted_stream_text):
+                    final_delta = final_processed_reply[len(emitted_stream_text):]
+                    if final_delta:
+                        emitted_stream_text += final_delta
+                        try:
+                            await token_callback(final_delta)
+                        except Exception as cb_err:
+                            logger.debug("[CS] Stream final callback failed: %s", cb_err)
+                reply_text = emitted_stream_text or final_processed_reply
+                if reply_text:
+                    intent = current_intent
+                    needs_human = current_intent in {"complaint"} or sentiment == "angry"
+                    stream_structured_result = await _run_stream_structured_result(reply_text)
+                else:
+                    stream_ready = False
+            except Exception as e:
+                if raw_stream_text:
+                    final_processed_reply = _postprocess_reply_text(raw_stream_text)
+                    if len(final_processed_reply) > len(emitted_stream_text):
+                        final_delta = final_processed_reply[len(emitted_stream_text):]
+                        if final_delta:
+                            emitted_stream_text += final_delta
+                            try:
+                                await token_callback(final_delta)
+                            except Exception as cb_err:
+                                logger.debug("[CS] Stream exception callback failed: %s", cb_err)
+                    reply_text = emitted_stream_text or final_processed_reply
+                    intent = current_intent
+                    needs_human = current_intent in {"complaint"} or sentiment == "angry"
+                    stream_structured_result = await _run_stream_structured_result(reply_text)
+                    logger.warning("[CS] Stream interrupted, using partial reply: %s", e)
+                else:
+                    logger.warning("[CS] Stream generation failed, fallback to tool mode: %s", e)
+                    stream_ready = False
+
+        if not stream_ready:
+            if images and len(images) > 0:
+                result = await call_vision(
+                    text=user_message_with_context,
+                    images=images,
+                    tool=tool_schema,
+                    model="google/gemini-2.0-flash-001",
+                    max_tokens=max_reply_tokens,
+                    system=system_prompt
+                    + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
+                    trace_name="customer_service_vision_chat",
+                )
+            else:
+                result = await call_tool(
+                    prompt=user_message_with_context,
+                    tool=tool_schema,
+                    model=MODEL_SONNET,
+                    max_tokens=max_reply_tokens,
+                    system=system_prompt,
+                    trace_name="customer_service_chat",
+                )
 
         _t_post_llm = time.time()
         logger.info(f"[CS-PERF] LLM call took {(_t_post_llm - _t_pre_llm)*1000:.0f}ms | Total so far: {(_t_post_llm - _t0)*1000:.0f}ms")
 
         # 6. 提取结果
-        reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
-        confidence = result.get("confidence", 0.8)
-        needs_human = result.get("requires_human_review", False)
-        intent = result.get("intent", "other")
-        suggested_action = result.get("action", {"type": "none"})
+        if not reply_text:
+            reply_text = result.get("reply_text", "亲，您的问题我已记录，稍后为您回复~")
+            confidence = result.get("confidence", 0.8)
+            needs_human = result.get("requires_human_review", False)
+            intent = result.get("intent", "other")
+            suggested_action = result.get("action", {"type": "none"})
+        elif stream_structured_result:
+            stream_confidence = stream_structured_result.get("confidence")
+            if isinstance(stream_confidence, (int, float)):
+                confidence = max(0.0, min(1.0, float(stream_confidence)))
+
+            needs_human = bool(stream_structured_result.get("requires_human_review", needs_human))
+
+            stream_intent = stream_structured_result.get("intent")
+            if isinstance(stream_intent, str) and stream_intent.strip():
+                intent = stream_intent.strip()
+
+            stream_action = stream_structured_result.get("action")
+            if isinstance(stream_action, dict) and stream_action:
+                suggested_action = stream_action
 
         # P1-1: 合规过滤层（额外安全层）
-        reply_text = _compliance_filter(reply_text)
+        reply_text = _postprocess_reply_text(reply_text)
 
 
         # P2-1: 商品卡片富媒体回复

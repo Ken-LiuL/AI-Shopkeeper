@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 from src.config import get_settings
@@ -673,3 +674,119 @@ async def call_chat(
     logger.info(f"[LLM] call_chat: model={model}, in={input_tokens}, out={output_tokens}, {elapsed:.2f}s")
 
     return content, input_tokens, output_tokens
+
+
+async def call_chat_stream(
+    prompt: str | list[dict],
+    model: str = MODEL_SONNET,
+    max_tokens: int = 512,
+    system: str | None = None,
+    trace_name: str | None = None,
+) -> AsyncIterator[str]:
+    """
+    轻量纯文本流式调用。
+    逐 token 返回文本片段，用于 SSE 首字加速。
+    """
+    client = _get_openai_client()
+    langfuse = _init_langfuse()
+    start_time = time.time()
+
+    trace = None
+    generation = None
+    if langfuse:
+        try:
+            trace = langfuse.trace(name=trace_name or "call_chat_stream")
+            generation = trace.generation(
+                name="chat_stream",
+                model=model,
+                input={"system": (system or "")[:200]},
+            )
+        except Exception:
+            pass
+
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    if isinstance(prompt, list) and prompt and isinstance(prompt[0], dict) and "role" in prompt[0]:
+        messages.extend(prompt)
+    else:
+        messages.append({"role": "user", "content": prompt})
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "max_tokens": max_tokens,
+        "messages": messages,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+    try:
+        stream = await asyncio.wait_for(
+            client.chat.completions.create(**kwargs),
+            timeout=60.0,
+        )
+    except TimeoutError:
+        raise ValueError(f"call_chat_stream timeout after 60s (model={model})") from None
+    except Exception as e:
+        # 某些网关不支持 stream_options，自动降级重试一次。
+        if "stream_options" in str(e):
+            kwargs.pop("stream_options", None)
+            stream = await asyncio.wait_for(
+                client.chat.completions.create(**kwargs),
+                timeout=60.0,
+            )
+        else:
+            raise
+
+    reply_parts: list[str] = []
+    input_tokens = 0
+    output_tokens = 0
+
+    async for chunk in stream:
+        usage = getattr(chunk, "usage", None)
+        if usage:
+            input_tokens = getattr(usage, "prompt_tokens", input_tokens) or input_tokens
+            output_tokens = getattr(usage, "completion_tokens", output_tokens) or output_tokens
+
+        choices = getattr(chunk, "choices", None) or []
+        if not choices:
+            continue
+
+        delta = getattr(choices[0], "delta", None)
+        if delta is None:
+            continue
+
+        content = getattr(delta, "content", "")
+        text = ""
+        if isinstance(content, str):
+            text = content
+        elif isinstance(content, list):
+            text = "".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict) and item.get("type") == "text"
+            )
+
+        if text:
+            reply_parts.append(text)
+            yield text
+
+    elapsed = time.time() - start_time
+    reply_text = "".join(reply_parts)
+
+    if generation:
+        generation.end(
+            output=reply_text[:500],
+            usage={"input": input_tokens, "output": output_tokens},
+            level="DEFAULT",
+        )
+
+    _record_llm_metrics(model, input_tokens, output_tokens, elapsed)
+    logger.info(
+        "[LLM] call_chat_stream: model=%s, in=%s, out=%s, %.2fs",
+        model,
+        input_tokens,
+        output_tokens,
+        elapsed,
+    )

@@ -84,12 +84,107 @@
     return '';
   }
 
+  function normalizeText(raw) {
+    if (typeof raw === 'string') return raw.trim();
+    if (typeof raw === 'number' || typeof raw === 'boolean') return String(raw);
+    if (raw && typeof raw === 'object') {
+      for (const key of ['text', 'content', 'msg', 'message', 'plain']) {
+        if (typeof raw[key] === 'string' && raw[key].trim()) {
+          return raw[key].trim();
+        }
+      }
+      try {
+        const serialized = JSON.stringify(raw);
+        return typeof serialized === 'string' ? serialized.slice(0, 500) : '';
+      } catch (_) {
+        return '';
+      }
+    }
+    return '';
+  }
+
+  function normalizeSessionId(rawSessionId, fallbackSeed = '') {
+    const sid = typeof rawSessionId === 'string' ? rawSessionId.trim() : '';
+    if (sid) return sid;
+
+    const seed = typeof fallbackSeed === 'string' ? fallbackSeed.trim() : '';
+    if (seed) return `mtdx-${hashCode(seed.toLowerCase())}`;
+
+    return `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function buildSessionSeed(...sources) {
+    const keys = [
+      'customerId',
+      'uid',
+      'userId',
+      'user_id',
+      'buyerId',
+      'accountId',
+      'openId',
+      'channelId',
+      'channel_id',
+      'storeId',
+      'shopId',
+      'poiId',
+      'tenantId',
+      'memberId',
+      'member_id',
+      'imUserId',
+      'im_user_id',
+      'senderId',
+      'sender_id',
+      'fromId',
+      'from_id',
+      'toId',
+      'to_id',
+      'nickname',
+      'name',
+      'displayName',
+      'userName',
+    ];
+    const parts = [];
+    const seen = new Set();
+
+    function addPart(key, value) {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (!normalized) return;
+      const part = `${key}:${normalized}`;
+      if (seen.has(part)) return;
+      seen.add(part);
+      parts.push(part);
+    }
+
+    for (const src of sources) {
+      if (!src) continue;
+      if (typeof src === 'string' && src.trim()) {
+        addPart('raw', src);
+        continue;
+      }
+      if (typeof src === 'object') {
+        for (const key of keys) {
+          if (typeof src[key] === 'string' && src[key].trim()) {
+            addPart(key, src[key]);
+          }
+          if (typeof src[key] === 'number') {
+            addPart(key, src[key]);
+          }
+        }
+      }
+    }
+    return parts.slice(0, 5).join('|');
+  }
+
   function hashCode(str) {
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0;
     }
     return Math.abs(hash).toString(36);
+  }
+
+  function generateLocalId(prefix) {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   /* ═══════════════════ Inject ═══════════════════ */
@@ -161,8 +256,15 @@
   function handleMTDXMessage(type, data) {
     if (type === 'customer_message') {
       // [MTDX] 接收到消息 — 客户发的
-      const sid = data.sessionId || '';
-      const msgId = data.uuid || data.mid || `mtdx-${Date.now()}`;
+      const fallbackSeed = buildSessionSeed(
+        data,
+        data.customerInfo,
+        data.customer,
+        data.sender,
+        data.user
+      );
+      const sid = normalizeSessionId(data.sessionId, fallbackSeed);
+      const msgId = data.uuid || data.mid || generateLocalId('mtdx');
       const text = extractMTDXContent(data);
 
       if (!text || processedMessages.has(msgId)) return;
@@ -182,8 +284,15 @@
 
     if (type === 'agent_message') {
       // 客服发送的消息
-      const sid = data.sessionId || '';
-      const msgId = data.uuid || data.mid || `mtdx-agent-${Date.now()}`;
+      const fallbackSeed = buildSessionSeed(
+        data,
+        data.customerInfo,
+        data.customer,
+        data.sender,
+        data.user
+      );
+      const sid = normalizeSessionId(data.sessionId, fallbackSeed);
+      const msgId = data.uuid || data.mid || generateLocalId('mtdx-agent');
       const text = extractMTDXContent(data);
 
       if (!text || processedMessages.has(msgId)) return;
@@ -345,35 +454,50 @@
   function extractCustomerMessage(data, fallbackSessionId) {
     // Pattern 1: top-level incoming
     if (data.type === 'message' && data.direction === 'in') {
+      const customerInfo = data.customer || data.sender || {};
+      const text = normalizeText(data.content || data.text || data.body);
+      if (!text) return null;
       return {
-        id: data.msgId || data.id || `ws-cust-${Date.now()}`,
-        text: data.content || data.text || data.body || '',
-        sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
-        customerInfo: data.customer || data.sender || {},
+        id: data.msgId || data.id || generateLocalId('ws-cust'),
+        text,
+        sessionId: normalizeSessionId(
+          extractSessionId(data) || fallbackSessionId || '',
+          buildSessionSeed(customerInfo, data)
+        ),
+        customerInfo,
       };
     }
     // Pattern 2: nested
     const inner = data.data || data.body || {};
     if (inner.msgType !== undefined && inner.fromCustomer !== false && inner.role !== 'merchant' && inner.role !== 'agent') {
-      const text = inner.content || inner.text || '';
+      const text = normalizeText(inner.content || inner.text || inner.body || '');
       if (text) {
+        const customerInfo = inner.customer || inner.sender || {};
         return {
-          id: inner.msgId || inner.id || `ws-cust-${Date.now()}`,
+          id: inner.msgId || inner.id || generateLocalId('ws-cust'),
           text,
-          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
-          customerInfo: inner.customer || inner.sender || {},
+          sessionId: normalizeSessionId(
+            extractSessionId(data) || fallbackSessionId || '',
+            buildSessionSeed(customerInfo, inner, data)
+          ),
+          customerInfo,
         };
       }
     }
     // Pattern 3: chat command
     if (data.cmd === 'chat' || data.action === 'newMessage') {
       const payload = data.payload || data.data || data;
-      if (payload.content && payload.role !== 'merchant' && payload.role !== 'agent') {
+      const text = normalizeText(payload.content || payload.text || payload.body || '');
+      if (text && payload.role !== 'merchant' && payload.role !== 'agent') {
+        const customerInfo = payload.customer || payload.sender || {};
         return {
-          id: payload.msgId || payload.id || `ws-cust-${Date.now()}`,
-          text: payload.content,
-          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
-          customerInfo: payload.customer || {},
+          id: payload.msgId || payload.id || generateLocalId('ws-cust'),
+          text,
+          sessionId: normalizeSessionId(
+            extractSessionId(data) || fallbackSessionId || '',
+            buildSessionSeed(customerInfo, payload, data)
+          ),
+          customerInfo,
         };
       }
     }
@@ -383,22 +507,30 @@
   function extractAgentMessage(data, fallbackSessionId) {
     // Pattern 1: outgoing
     if (data.type === 'message' && data.direction === 'out') {
+      const text = normalizeText(data.content || data.text || data.body);
+      if (!text) return null;
       return {
-        id: data.msgId || data.id || `ws-agent-${Date.now()}`,
-        text: data.content || data.text || data.body || '',
-        sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
+        id: data.msgId || data.id || generateLocalId('ws-agent'),
+        text,
+        sessionId: normalizeSessionId(
+          extractSessionId(data) || fallbackSessionId || '',
+          buildSessionSeed(data.customer, data.sender, data.user, data)
+        ),
         role: 'agent',
       };
     }
     // Pattern 2: nested outgoing
     const inner = data.data || data.body || {};
     if (inner.fromCustomer === false || inner.role === 'merchant' || inner.role === 'agent') {
-      const text = inner.content || inner.text || '';
+      const text = normalizeText(inner.content || inner.text || inner.body || '');
       if (text) {
         return {
-          id: inner.msgId || inner.id || `ws-agent-${Date.now()}`,
+          id: inner.msgId || inner.id || generateLocalId('ws-agent'),
           text,
-          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
+          sessionId: normalizeSessionId(
+            extractSessionId(data) || fallbackSessionId || '',
+            buildSessionSeed(inner.customer, inner.sender, inner.user, inner, data)
+          ),
           role: 'agent',
         };
       }
@@ -406,11 +538,15 @@
     // Pattern 3
     if (data.cmd === 'chat' || data.action === 'newMessage') {
       const payload = data.payload || data.data || data;
-      if (payload.content && (payload.role === 'merchant' || payload.role === 'agent')) {
+      const text = normalizeText(payload.content || payload.text || payload.body || '');
+      if (text && (payload.role === 'merchant' || payload.role === 'agent')) {
         return {
-          id: payload.msgId || payload.id || `ws-agent-${Date.now()}`,
-          text: payload.content,
-          sessionId: extractSessionId(data) || fallbackSessionId || `unknown-${Date.now()}`,
+          id: payload.msgId || payload.id || generateLocalId('ws-agent'),
+          text,
+          sessionId: normalizeSessionId(
+            extractSessionId(data) || fallbackSessionId || '',
+            buildSessionSeed(payload.customer, payload.sender, payload.user, payload, data)
+          ),
           role: 'agent',
         };
       }
@@ -432,6 +568,12 @@
         if (el) return el;
       }
       return null;
+    }
+
+    function getSafeDomSessionId() {
+      const active = Object.keys(sessionData);
+      if (active.length === 1) return active[0];
+      return '';
     }
 
     function observe() {
@@ -459,7 +601,7 @@
                   logChatMessage({
                     id: `dom-${Date.now()}-${hashCode(text)}`,
                     text,
-                    sessionId: findMostRecentActiveSession() || `dom-fallback-${Date.now()}`,
+                    sessionId: getSafeDomSessionId(),
                     role: 'customer',
                   });
                 }
@@ -479,7 +621,7 @@
                   logChatMessage({
                     id: `dom-agent-${Date.now()}-${hashCode(text)}`,
                     text,
-                    sessionId: findMostRecentActiveSession() || `dom-fallback-${Date.now()}`,
+                    sessionId: getSafeDomSessionId(),
                     role: 'agent',
                   });
                 }
@@ -492,26 +634,12 @@
     observe();
   }
 
-  function findMostRecentActiveSession() {
-    // 找最近有活动的 session（WS 数据驱动）
-    let latest = null;
-    let latestTime = 0;
-    for (const [sid, data] of Object.entries(sessionData)) {
-      if (data.lastActivity > latestTime) {
-        latestTime = data.lastActivity;
-        latest = sid;
-      }
-    }
-    return latest;
-  }
-
   startDOMObserver();
 
   function trackReplyComparison(suggestion, actual, sessionId) {
     sendFeedback({
       session_id: sessionId || '',
       message_id: suggestion.messageId || '',
-      feedback: 'neutral',
       action: 'edited',
       original_reply: suggestion.text,
       edited_reply: '',
@@ -521,14 +649,17 @@
 
   /* ═══════════════════ Chat Log Collection ═══════════════════ */
   function logChatMessage(msg) {
-    if (!msg.text) return;
+    const text = normalizeText(msg.text);
+    if (!text) return;
+    const sessionId = (msg.sessionId || '').trim();
+    if (!sessionId) return;
     chrome.runtime.sendMessage({
       type: 'LOG_CHAT',
       payload: {
-        session_id: msg.sessionId || '',
+        session_id: sessionId,
         message_id: msg.id || '',
         role: msg.role || 'unknown',
-        content: msg.text,
+        content: text,
         timestamp: new Date().toISOString(),
       },
     });
@@ -536,17 +667,23 @@
 
   /* ═══════════════════ Backend Communication ═══════════════════ */
   function sendToBackend(msg) {
-    if (!msg.text) return;
-    const session = getSession(msg.sessionId);
-    const customerLabel = session.customerName || msg.sessionId?.slice(0, 10) || '客户';
-    updatePanel('thinking', `🤔 [${customerLabel}] "${msg.text.slice(0, 20)}..."`);
+    const text = normalizeText(msg.text);
+    if (!text) return;
+    const sessionId = (msg.sessionId || '').trim();
+    if (!sessionId) {
+      updatePanel('error', '未识别会话ID，已跳过该消息');
+      return;
+    }
+    const session = getSession(sessionId);
+    const customerLabel = session.customerName || sessionId.slice(0, 10) || '客户';
+    updatePanel('thinking', `🤔 [${customerLabel}] "${text.slice(0, 20)}..."`);
 
     chrome.runtime.sendMessage(
       {
         type: 'CUSTOMER_MESSAGE',
         payload: {
-          message: msg.text,
-          session_id: msg.sessionId,
+          message: text,
+          session_id: sessionId,
           customer_info: msg.customerInfo,
         },
       },
@@ -556,7 +693,7 @@
           return;
         }
         if (response?.success && response.reply) {
-          handleAIReply(response.reply, msg.sessionId, msg.id);
+          handleAIReply(response.reply, sessionId, msg.id);
         } else {
           updatePanel('error', response?.error || '未知错误');
         }
@@ -565,20 +702,27 @@
   }
 
   function sendFeedback(data) {
-    chrome.runtime.sendMessage({ type: 'SEND_FEEDBACK', payload: data }, () => {
+    chrome.runtime.sendMessage({ type: 'SEND_FEEDBACK', payload: data }, (response) => {
       if (chrome.runtime.lastError) {
         console.error('[AI店长] 反馈发送失败:', chrome.runtime.lastError.message);
+        return;
       }
+      if (!response?.success) return;
+      updateFeedbackStats(
+        response.stored?.action || data.action,
+        response.stored?.rating || data.rating || data.feedback
+      );
     });
-    updateFeedbackStats(data.action, data.feedback);
   }
 
-  function updateFeedbackStats(action, feedback) {
+  function updateFeedbackStats(action, rating) {
     chrome.storage.sync.get(['feedbackStats'], (result) => {
       const stats = result.feedbackStats || { adopted: 0, edited: 0, ignored: 0, good: 0, bad: 0, total: 0 };
-      if (action) stats[action] = (stats[action] || 0) + 1;
-      if (feedback === 'good') stats.good = (stats.good || 0) + 1;
-      if (feedback === 'bad') stats.bad = (stats.bad || 0) + 1;
+      if (action && ['adopted', 'edited', 'ignored'].includes(action)) {
+        stats[action] = (stats[action] || 0) + 1;
+      }
+      if (rating === 'good') stats.good = (stats.good || 0) + 1;
+      if (rating === 'bad') stats.bad = (stats.bad || 0) + 1;
       stats.total = (stats.total || 0) + 1;
       chrome.storage.sync.set({ feedbackStats: stats });
     });
@@ -619,7 +763,7 @@
       sendFeedback({
         session_id: sessionId,
         message_id: messageId,
-        feedback: 'good',
+        rating: 'good',
         action: 'adopted',
         original_reply: reply,
         edited_reply: '',
@@ -906,7 +1050,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: 'good', action: 'adopted',
+      rating: 'good', action: 'adopted',
       original_reply: reply.text,
       edited_reply: reply.editedText || '',
       actual_reply: reply.editedText || reply.text,
@@ -944,7 +1088,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: 'good', action: 'edited',
+      rating: 'good', action: 'edited',
       original_reply: reply.text,
       edited_reply: editedText,
       actual_reply: editedText,
@@ -961,7 +1105,7 @@
       sendFeedback({
         session_id: reply.sessionId,
         message_id: reply.messageId,
-        feedback: 'bad', action: 'ignored',
+        rating: 'bad', action: 'ignored',
         original_reply: reply.text,
         edited_reply: '', actual_reply: '',
       });
@@ -980,7 +1124,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
-      feedback: type,
+      rating: type,
       action: reply.status === 'pending' ? '' : reply.status,
       original_reply: reply.text,
       edited_reply: reply.editedText || '',

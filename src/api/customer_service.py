@@ -124,6 +124,11 @@ async def chat(
 
     sm = _get_session_manager()
     pool = pg_db.get_pool()
+    session_id = (request.session_id or "").strip()
+    if not session_id:
+        raise AppError("session_id cannot be empty", status_code=400)
+    use_redis = False
+    lock_acquired = False
 
     # Determine history source: Redis (with auto-create) or in-memory fallback
     #
@@ -132,34 +137,31 @@ async def chat(
     # 就会走 in-memory fallback，导致每次重启/部署丢失所有上下文。
     #
     if sm is not None:
-        session_exists = await sm.session_exists(request.session_id)
-        if not session_exists and request.session_id:
+        session_exists = await sm.session_exists(session_id)
+        if not session_exists:
             # Auto-create session in Redis (idempotent)
-            logger.info(f"[CS] Auto-creating Redis session for {request.session_id}")
-            await sm.create_session_with_id(request.session_id)
-        if request.session_id:
-            if not await sm.acquire_lock(request.session_id, timeout=30, wait=8):
-                raise AppError("Session is busy, please retry", status_code=429)
-            use_redis = True
-            history = await sm.get_history(request.session_id, limit=20)
-            session_summary = await sm.get_summary(request.session_id)
-            await sm.add_message(request.session_id, "user", request.message)
-        else:
-            # session_id 为空 — 走内存 fallback（不应该发生，但兜底）
-            use_redis = False
-            logger.warning("[CS] Empty session_id received, using in-memory fallback")
-            history = _mem_ensure("__empty__")[-20:]
-            session_summary = _mem_summaries.get("__empty__", "")
-            _mem_add("__empty__", "user", request.message)
+            logger.info(f"[CS] Auto-creating Redis session for {session_id}")
+            await sm.create_session_with_id(session_id)
+        if not await sm.acquire_lock(session_id, timeout=30, wait=8):
+            raise AppError("Session is busy, please retry", status_code=429)
+        use_redis = True
+        lock_acquired = True
+        try:
+            history = await sm.get_history(session_id, limit=20)
+            session_summary = await sm.get_summary(session_id)
+            await sm.add_message(session_id, "user", request.message)
+        except Exception:
+            await sm.release_lock(session_id)
+            lock_acquired = False
+            raise
     else:
-        use_redis = False
-        history = _mem_ensure(request.session_id)[-20:]
-        session_summary = _mem_summaries.get(request.session_id, "")
-        _mem_add(request.session_id, "user", request.message)
+        history = _mem_ensure(session_id)[-20:]
+        session_summary = _mem_summaries.get(session_id, "")
+        _mem_add(session_id, "user", request.message)
 
     # 调试日志：记录传给 chat() 的 history 条数
     logger.info(
-        f"[CS-DEBUG] chat() called: session_id={request.session_id!r}, "
+        f"[CS-DEBUG] chat() called: session_id={session_id!r}, "
         f"use_redis={use_redis}, history_len={len(history)}, "
         f"has_summary={bool(session_summary)}"
     )
@@ -173,7 +175,7 @@ async def chat(
 
         # Call new simplified chat function
         result = await cs_chat(
-            session_id=request.session_id,
+            session_id=session_id,
             message=request.message,
             pool=pool,
             conversation_history=history,
@@ -192,9 +194,9 @@ async def chat(
 
         # Store assistant message
         if use_redis:
-            await sm.add_message(request.session_id, "assistant", reply)
+            await sm.add_message(session_id, "assistant", reply)
         else:
-            _mem_add(request.session_id, "assistant", reply)
+            _mem_add(session_id, "assistant", reply)
 
         _api_end = _time.time()
         logger.info(
@@ -205,7 +207,7 @@ async def chat(
         )
         return APIResponse(
             data=ChatResponse(
-                session_id=request.session_id,
+                session_id=session_id,
                 reply=reply,
                 intent=intent,
                 sources=sources,
@@ -215,8 +217,8 @@ async def chat(
             )
         )
     finally:
-        if use_redis:
-            await sm.release_lock(request.session_id)
+        if lock_acquired:
+            await sm.release_lock(session_id)
 
 
 # ── Quick auto-reply (stateless) ──────────────────────────────
@@ -300,6 +302,8 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """流式客服回复（SSE），提供更快的首字响应体验。"""
+    import asyncio
+    import contextlib
     import json as _json
 
     from src.agents.customer_service.nodes import chat as cs_chat
@@ -307,29 +311,39 @@ async def chat_stream(request: ChatRequest):
 
     sm = _get_session_manager()
     pool = pg_db.get_pool()
+    session_id = (request.session_id or "").strip()
+    if not session_id:
+        raise AppError("session_id cannot be empty", status_code=400)
+    use_redis = False
+    lock_acquired = False
 
     # 与 /chat 相同的 auto-create session 逻辑
-    if sm is not None and request.session_id:
-        if not await sm.session_exists(request.session_id):
-            logger.info(f"[CS] Stream: auto-creating Redis session for {request.session_id}")
-            await sm.create_session_with_id(request.session_id)
-        if not await sm.acquire_lock(request.session_id, timeout=30):
+    if sm is not None:
+        if not await sm.session_exists(session_id):
+            logger.info(f"[CS] Stream: auto-creating Redis session for {session_id}")
+            await sm.create_session_with_id(session_id)
+        if not await sm.acquire_lock(session_id, timeout=30):
             async def _busy():
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'Session is busy'})}\n\n"
 
             return StreamingResponse(_busy(), media_type="text/event-stream")
         use_redis = True
-        history = await sm.get_history(request.session_id, limit=20)
-        session_summary = await sm.get_summary(request.session_id)
-        await sm.add_message(request.session_id, "user", request.message)
+        lock_acquired = True
+        try:
+            history = await sm.get_history(session_id, limit=20)
+            session_summary = await sm.get_summary(session_id)
+            await sm.add_message(session_id, "user", request.message)
+        except Exception:
+            await sm.release_lock(session_id)
+            lock_acquired = False
+            raise
     else:
-        use_redis = False
-        history = _mem_ensure(request.session_id or "__empty__")[-20:]
-        session_summary = _mem_summaries.get(request.session_id or "__empty__", "")
-        _mem_add(request.session_id or "__empty__", "user", request.message)
+        history = _mem_ensure(session_id)[-20:]
+        session_summary = _mem_summaries.get(session_id, "")
+        _mem_add(session_id, "user", request.message)
 
     logger.info(
-        f"[CS-DEBUG] stream() called: session_id={request.session_id!r}, "
+        f"[CS-DEBUG] stream() called: session_id={session_id!r}, "
         f"use_redis={use_redis}, history_len={len(history)}"
     )
 
@@ -337,27 +351,52 @@ async def chat_stream(request: ChatRequest):
         history = [{"role": "system", "content": f"【早期对话摘要】{session_summary}"}] + history
 
     async def _stream():
-        try:
-            result = await cs_chat(
-                session_id=request.session_id,
-                message=request.message,
-                pool=pool,
-                conversation_history=history,
-                images=request.images,
-            )
+        nonlocal lock_acquired
+        token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        chat_result: dict | None = None
+        chat_error: Exception | None = None
 
-            reply = result.get("reply", "")
-            chunk_size = 10
-            for i in range(0, len(reply), chunk_size):
-                chunk = reply[i:i + chunk_size]
-                yield (
-                    f"data: {_json.dumps({'type': 'token', 'content': chunk}, ensure_ascii=False)}\n\n"
+        async def _on_token(token: str) -> None:
+            await token_queue.put(token)
+
+        async def _run_chat() -> None:
+            nonlocal chat_result, chat_error
+            try:
+                chat_result = await cs_chat(
+                    session_id=session_id,
+                    message=request.message,
+                    pool=pool,
+                    conversation_history=history,
+                    images=request.images,
+                    stream=True,
+                    token_callback=_on_token,
                 )
+            except Exception as e:
+                chat_error = e
+            finally:
+                await token_queue.put(None)
+
+        runner = asyncio.create_task(_run_chat())
+        streamed_parts: list[str] = []
+        try:
+            while True:
+                token = await token_queue.get()
+                if token is None:
+                    break
+                streamed_parts.append(token)
+                yield f"data: {_json.dumps({'type': 'token', 'content': token}, ensure_ascii=False)}\n\n"
+
+            await runner
+            if chat_error:
+                raise chat_error
+
+            result = chat_result or {}
+            reply = result.get("reply") or "".join(streamed_parts)
 
             if use_redis:
-                await sm.add_message(request.session_id, "assistant", reply)
+                await sm.add_message(session_id, "assistant", reply)
             else:
-                _mem_add(request.session_id, "assistant", reply)
+                _mem_add(session_id, "assistant", reply)
 
             yield (
                 "data: "
@@ -367,8 +406,13 @@ async def chat_stream(request: ChatRequest):
             logger.error("Stream chat failed: %s", e)
             yield f"data: {_json.dumps({'type': 'error', 'message': str(e)})}\n\n"
         finally:
-            if use_redis:
-                await sm.release_lock(request.session_id)
+            if not runner.done():
+                runner.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await runner
+            if lock_acquired:
+                await sm.release_lock(session_id)
+                lock_acquired = False
 
     return StreamingResponse(_stream(), media_type="text/event-stream")
 
@@ -425,20 +469,6 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
         raise AppError("Database connection unavailable", status_code=503)
 
     try:
-        # Ensure extended feedback columns exist (safe idempotent migration)
-        try:
-            await pool.execute(
-                """
-                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS action VARCHAR(20);
-                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS original_reply TEXT;
-                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS edited_reply TEXT;
-                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS actual_reply TEXT;
-                ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS correction_text TEXT;
-                """
-            )
-        except Exception:
-            logger.debug("Extended feedback columns may already exist or ALTER failed (non-critical)")
-
         # Store feedback with extended fields
         try:
             await pool.execute(
@@ -506,26 +536,6 @@ async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
     content_hash = hashlib.md5(dedup_key.encode()).hexdigest()
 
     try:
-        # 确保表存在（含唯一约束）
-        await pool.execute("""
-            CREATE TABLE IF NOT EXISTS cs_chat_log (
-                id SERIAL PRIMARY KEY,
-                session_id VARCHAR(200),
-                message_id VARCHAR(200),
-                role VARCHAR(20) NOT NULL DEFAULT 'agent',
-                content TEXT NOT NULL,
-                content_hash VARCHAR(32) UNIQUE,
-                source_timestamp TIMESTAMPTZ,
-                created_at TIMESTAMPTZ DEFAULT NOW()
-            )
-        """)
-
-        # 尝试添加 unique 约束（表已存在时幂等）
-        await pool.execute("""
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_cs_chat_log_hash
-            ON cs_chat_log (content_hash)
-        """)
-
         result = await pool.execute(
             """
             INSERT INTO cs_chat_log (session_id, message_id, role, content, content_hash, source_timestamp, created_at)
