@@ -7,7 +7,7 @@ from prometheus_client import Counter, Gauge, Histogram
 llm_tokens_total = Counter(
     "llm_tokens_total",
     "Total LLM tokens consumed",
-    ["model", "type"],  # type: input/output
+    ["model", "type"],  # token category: input/output
 )
 
 llm_request_duration = Histogram(

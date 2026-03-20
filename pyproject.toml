@@ -59,6 +59,11 @@ ignore = ["B008", "E501", "SIM102", "SIM108", "SIM117"]
 python_version = "3.11"
 strict = true
 
+[[tool.mypy.overrides]]
+module = ["nodriver", "nodriver.*"]
+follow_imports = "skip"
+ignore_errors = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
