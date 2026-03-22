@@ -60,6 +60,15 @@ python_version = "3.11"
 strict = true
 
 [[tool.mypy.overrides]]
+module = ["src", "src.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["src.metrics"]
+ignore_errors = false
+strict = true
+
+[[tool.mypy.overrides]]
 module = ["nodriver", "nodriver.*"]
 follow_imports = "skip"
 ignore_errors = true
