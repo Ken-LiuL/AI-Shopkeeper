@@ -149,15 +149,27 @@ async function handleCustomerMessage(payload) {
         throw new Error(`HTTP ${response.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`);
       }
       const data = await response.json();
-      const reply = data.reply || data.message || data.response || data.data?.reply || '';
+      const payload = (data && typeof data.data === 'object' && data.data) ? data.data : data;
+      const reply = payload.reply || data.reply || data.message || data.response || '';
+      const errorCode = payload.error_code || data.error_code || '';
+      const errorDetail = payload.error_detail || data.error_detail || '';
       const elapsed = Date.now() - t0;
+
+      if (errorCode) {
+        addLog(
+          'error',
+          `客服接口返回错误码: ${errorCode}`,
+          typeof errorDetail === 'string' ? errorDetail.slice(0, 120) : ''
+        );
+        return { success: false, error: `AI服务异常 (${errorCode})` };
+      }
 
       if (!reply) {
         addLog('error', '后台返回空回复');
         return { success: false, error: '后台返回空回复，请稍后重试' };
       }
       addLog('success', `客服回复生成成功 (${elapsed}ms)`, reply.slice(0, 60));
-      return { success: true, reply, product_cards: data.data?.product_cards || [] };
+      return { success: true, reply, product_cards: payload.product_cards || [] };
     } catch (err) {
       clearTimeout(timeoutId);
       lastError = err;

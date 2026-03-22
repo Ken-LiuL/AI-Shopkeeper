@@ -17,7 +17,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 
-from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat, call_chat_stream, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -2052,25 +2052,59 @@ async def chat(
 
         if not stream_ready:
             if images and len(images) > 0:
-                result = await call_vision(
-                    text=user_message_with_context,
-                    images=images,
-                    tool=tool_schema,
-                    model="google/gemini-2.0-flash-001",
-                    max_tokens=max_reply_tokens,
-                    system=system_prompt
-                    + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
-                    trace_name="customer_service_vision_chat",
-                )
+                try:
+                    result = await call_vision(
+                        text=user_message_with_context,
+                        images=images,
+                        tool=tool_schema,
+                        model="google/gemini-2.0-flash-001",
+                        max_tokens=max_reply_tokens,
+                        system=system_prompt
+                        + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
+                        trace_name="customer_service_vision_chat",
+                    )
+                except Exception as vision_err:
+                    logger.warning("[CS] Vision tool mode failed, fallback to text chat: %s", vision_err)
+                    plain_reply, _, _ = await call_chat(
+                        prompt=user_message_with_context,
+                        model=MODEL_SONNET,
+                        max_tokens=max_reply_tokens,
+                        system=system_prompt,
+                        trace_name="customer_service_vision_fallback_chat",
+                    )
+                    result = {
+                        "reply_text": plain_reply or "亲，您的问题我已记录，稍后为您回复~",
+                        "confidence": 0.55,
+                        "requires_human_review": current_intent in {"complaint"} or sentiment == "angry",
+                        "intent": current_intent or "other",
+                        "action": {"type": "none"},
+                    }
             else:
-                result = await call_tool(
-                    prompt=user_message_with_context,
-                    tool=tool_schema,
-                    model=MODEL_SONNET,
-                    max_tokens=max_reply_tokens,
-                    system=system_prompt,
-                    trace_name="customer_service_chat",
-                )
+                try:
+                    result = await call_tool(
+                        prompt=user_message_with_context,
+                        tool=tool_schema,
+                        model=MODEL_SONNET,
+                        max_tokens=max_reply_tokens,
+                        system=system_prompt,
+                        trace_name="customer_service_chat",
+                    )
+                except Exception as tool_err:
+                    logger.warning("[CS] Tool mode failed, fallback to plain chat: %s", tool_err)
+                    plain_reply, _, _ = await call_chat(
+                        prompt=user_message_with_context,
+                        model=MODEL_SONNET,
+                        max_tokens=max_reply_tokens,
+                        system=system_prompt,
+                        trace_name="customer_service_chat_fallback",
+                    )
+                    result = {
+                        "reply_text": plain_reply or "亲，您的问题我已记录，稍后为您回复~",
+                        "confidence": 0.55,
+                        "requires_human_review": current_intent in {"complaint"} or sentiment == "angry",
+                        "intent": current_intent or "other",
+                        "action": {"type": "none"},
+                    }
 
         _t_post_llm = time.time()
         logger.info(f"[CS-PERF] LLM call took {(_t_post_llm - _t_pre_llm)*1000:.0f}ms | Total so far: {(_t_post_llm - _t0)*1000:.0f}ms")
@@ -2132,9 +2166,6 @@ async def chat(
                 )
             )
 
-            from .auto_evolve import after_reply_hook
-            from .evaluator import evaluate_and_store
-
             context = {
                 "conversation_history": conversation_history,
                 "product_results": product_results,
@@ -2143,27 +2174,39 @@ async def chat(
                 "needs_human": needs_human,
             }
 
-            # 8. 异步评分+进化（合并为一个任务，避免重复评分）
-            async def _evaluate_and_evolve():
-                """先评分存储，再触发进化（共享评分结果，不重复调用 LLM）"""
-                await evaluate_and_store(
-                    pool=pool,
-                    session_id=session_id,
-                    user_message=message,
-                    ai_reply=reply_text,
-                    conversation_history=conversation_history,
-                    product_results=product_results,
+            # 8. 异步评分+进化（可选能力，不得影响主回复）
+            try:
+                from .auto_evolve import after_reply_hook
+                from .evaluator import evaluate_and_store
+            except Exception as import_err:
+                logger.warning(
+                    "[CS] Optional evaluator/auto_evolve unavailable, skip evolve hook: %s",
+                    import_err,
                 )
-                await after_reply_hook(
-                    session_id=session_id,
-                    user_msg=message,
-                    reply=reply_text,
-                    context=context,
-                    pool=pool,
-                    skip_scoring=True,
-                )
+            else:
+                async def _evaluate_and_evolve():
+                    """先评分存储，再触发进化（共享评分结果，不重复调用 LLM）"""
+                    try:
+                        await evaluate_and_store(
+                            pool=pool,
+                            session_id=session_id,
+                            user_message=message,
+                            ai_reply=reply_text,
+                            conversation_history=conversation_history,
+                            product_results=product_results,
+                        )
+                        await after_reply_hook(
+                            session_id=session_id,
+                            user_msg=message,
+                            reply=reply_text,
+                            context=context,
+                            pool=pool,
+                            skip_scoring=True,
+                        )
+                    except Exception as evolve_err:
+                        logger.debug("CS evaluate/evolve failed (non-critical): %s", evolve_err)
 
-            asyncio.create_task(_evaluate_and_evolve())
+                asyncio.create_task(_evaluate_and_evolve())
 
             # 异步记录客服决策（不阻塞主流程）
             async def _record_cs_action(
