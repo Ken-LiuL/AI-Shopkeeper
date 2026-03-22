@@ -15,11 +15,17 @@ import os
 import random
 import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
+
+
+def _new_ai_reply_id() -> str:
+    return f"csr-{uuid.uuid4().hex}"
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -56,7 +62,7 @@ _ACK_REPLIES = [
 ]
 
 
-def _fast_path_reply(session_id: str, message: str) -> dict | None:
+def _fast_path_reply(session_id: str, message: str, ai_reply_id: str | None = None) -> dict | None:
     """
     P0-1 快速路径：只拦截确定性高频简单消息（问候、感谢、简单确认）。
     不拦截任何需要推理的商品/订单/售后问题。
@@ -64,12 +70,15 @@ def _fast_path_reply(session_id: str, message: str) -> dict | None:
     """
     m = message.strip().lower().rstrip("~！!。，,.?？ ")
 
+    reply_id = ai_reply_id or _new_ai_reply_id()
+
     if m in _FAST_PATH_GREETINGS:
         reply = random.choice(_GREETING_REPLIES)
         logger.info("[CS-PERF] Fast-path hit: greeting")
         return {
             "session_id": session_id,
             "reply": reply,
+            "ai_reply_id": reply_id,
             "intent": "greeting",
             "sources": [],
             "needs_human": False,
@@ -83,6 +92,7 @@ def _fast_path_reply(session_id: str, message: str) -> dict | None:
         return {
             "session_id": session_id,
             "reply": reply,
+            "ai_reply_id": reply_id,
             "intent": "greeting",
             "sources": [],
             "needs_human": False,
@@ -97,6 +107,7 @@ def _fast_path_reply(session_id: str, message: str) -> dict | None:
         return {
             "session_id": session_id,
             "reply": reply,
+            "ai_reply_id": reply_id,
             "intent": "greeting",
             "sources": [],
             "needs_human": False,
@@ -151,6 +162,124 @@ def _postprocess_reply_text(reply_text: str) -> str:
     if len(processed) > _MAX_REPLY_TEXT_LEN:
         processed = processed[:_MAX_REPLY_TEXT_LEN].rstrip()
     return processed
+
+
+def _clean_context_text(value: object, max_len: int = 220) -> str:
+    if value is None:
+        return ""
+    text = str(value).replace("\u00a0", " ").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    return text[:max_len]
+
+
+def _build_extension_context_str(
+    session_id: str,
+    customer_info: dict[str, Any] | None,
+    order_context: dict[str, Any] | None,
+) -> str:
+    """把扩展采集到的客服侧上下文拼成可控长度的注入段。"""
+    lines: list[str] = []
+
+    if isinstance(customer_info, dict) and customer_info:
+        nickname = _clean_context_text(
+            customer_info.get("nickname")
+            or customer_info.get("name")
+            or customer_info.get("userName")
+        )
+        customer_id = _clean_context_text(
+            customer_info.get("customerId")
+            or customer_info.get("uid")
+            or customer_info.get("userId")
+        )
+        if nickname:
+            lines.append(f"- 客户昵称：{nickname}")
+        if customer_id:
+            lines.append(f"- 客户标识：{customer_id}")
+
+    if isinstance(order_context, dict) and order_context:
+        active_session_id = _clean_context_text(order_context.get("active_session_id"), 80)
+        if active_session_id and active_session_id != session_id:
+            logger.info(
+                "[CS] Skip order_context due session mismatch: request=%s active=%s",
+                session_id,
+                active_session_id,
+            )
+        else:
+            fields = order_context.get("fields")
+            if isinstance(fields, dict):
+                label_map = {
+                    "order_id": "订单号",
+                    "payment_amount": "顾客支付",
+                    "delivery_status": "配送状态",
+                    "rider": "骑手",
+                    "order_time": "下单时间",
+                    "customer": "收货人",
+                    "address": "收货地址",
+                    "store": "门店",
+                }
+                for key in (
+                    "order_id",
+                    "payment_amount",
+                    "delivery_status",
+                    "rider",
+                    "order_time",
+                    "customer",
+                    "address",
+                    "store",
+                ):
+                    val = _clean_context_text(fields.get(key))
+                    if val:
+                        lines.append(f"- {label_map.get(key, key)}：{val}")
+
+            items = order_context.get("items")
+            if isinstance(items, list) and items:
+                rendered_items: list[str] = []
+                for item in items[:4]:
+                    if not isinstance(item, dict):
+                        continue
+                    name = _clean_context_text(item.get("name"), 80)
+                    spec = _clean_context_text(item.get("spec"), 60)
+                    qty = _clean_context_text(item.get("quantity"), 30)
+                    if not name:
+                        continue
+                    piece = name
+                    if spec:
+                        piece = f"{piece}（{spec}）"
+                    if qty:
+                        piece = f"{piece} x{qty}"
+                    rendered_items.append(piece)
+                if rendered_items:
+                    lines.append(f"- 订单商品：{'; '.join(rendered_items)}")
+
+            raw_text = _clean_context_text(order_context.get("raw_text"), 420)
+            if raw_text:
+                lines.append(f"- 工作台摘要：{raw_text}")
+
+    if not lines:
+        return ""
+    return "【客服工作台上下文】\n" + "\n".join(lines)
+
+
+def _build_vision_prompt_text(messages: list[dict[str, Any]], fallback_user_prompt: str) -> str:
+    """把多轮 messages 压缩成适合视觉模型的纯文本 prompt。"""
+    dialogue_lines: list[str] = []
+    for msg in messages[-10:]:
+        if not isinstance(msg, dict):
+            continue
+        role = (msg.get("role") or "").strip().lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = _clean_context_text(msg.get("content"), 320)
+        if not content:
+            continue
+        speaker = "用户" if role == "user" else "客服"
+        dialogue_lines.append(f"{speaker}：{content}")
+
+    if dialogue_lines:
+        return "【最近对话】\n" + "\n".join(dialogue_lines)
+    return _clean_context_text(fallback_user_prompt, 1600)
 
 
 
@@ -961,10 +1090,12 @@ async def _log_conversation(
     user_message: str = "",
     intent: str = "",
     ai_response: str = "",
+    ai_reply_id: str | None = None,
     sources: list[dict] | None = None,
     confidence: float = 0.0,
 ) -> None:
     """异步记录对话日志"""
+    global _conversation_log_supports_ai_reply_id
     if not pool:
         return
 
@@ -975,6 +1106,32 @@ async def _log_conversation(
             for source in sources:
                 if source.get("id"):
                     product_ids.append(source["id"])
+
+        if _conversation_log_supports_ai_reply_id is not False:
+            try:
+                await pool.execute(
+                    """
+                    INSERT INTO cs_conversation_log (
+                        session_id, user_message, intent, ai_response, ai_reply_id,
+                        matched_kb_ids, matched_product_ids, confidence, created_at
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+                    """,
+                    session_id,
+                    user_message[:1000],  # 限制长度
+                    intent,
+                    ai_response[:2000],
+                    ai_reply_id,
+                    [],  # 不再使用KB IDs
+                    product_ids,
+                    confidence,
+                )
+                _conversation_log_supports_ai_reply_id = True
+                return
+            except Exception:
+                _conversation_log_supports_ai_reply_id = False
+                logger.debug(
+                    "[CS] cs_conversation_log.ai_reply_id unavailable, fallback to legacy insert"
+                )
 
         await pool.execute(
             """
@@ -1102,6 +1259,7 @@ _business_ctx_cache: dict | None = None
 _business_ctx_ts: float = 0
 _policy_ctx_cache: list[dict] | None = None
 _policy_ctx_ts: float = 0
+_conversation_log_supports_ai_reply_id: bool | None = None
 _CACHE_TTL = 300  # 5 minutes
 
 
@@ -1170,6 +1328,8 @@ async def chat(
     pool=None,
     conversation_history: list[dict] | None = None,
     images: list[str] | None = None,
+    customer_info: dict[str, Any] | None = None,
+    order_context: dict[str, Any] | None = None,
     stream: bool = False,
     token_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
@@ -1194,10 +1354,11 @@ async def chat(
     global _knowledge_base_cache, _cache_loaded
 
     _t0 = time.time()
+    ai_reply_id = _new_ai_reply_id()
 
     try:
         # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
-        _fast = _fast_path_reply(session_id, message)
+        _fast = _fast_path_reply(session_id, message, ai_reply_id=ai_reply_id)
         if _fast is not None:
             _t_fast = time.time()
             logger.info(f"[CS-PERF] Fast-path total: {(_t_fast - _t0)*1000:.0f}ms")
@@ -1224,6 +1385,11 @@ async def chat(
             history_to_summarize = effective_history[:-6]  # 保留最近6条，摘要其余
             effective_history = effective_history[-6:]
         conversation_history = effective_history
+        extension_context_str = _build_extension_context_str(
+            session_id=session_id,
+            customer_info=customer_info,
+            order_context=order_context,
+        )
 
         faq_context = []
         product_results = []
@@ -1740,6 +1906,8 @@ async def chat(
         logger.info(f"[CS] Context budget for intent '{current_intent}': {allowed_contexts}")
 
         extra_sections = []
+        if extension_context_str:
+            extra_sections.append(extension_context_str)
         if "profile" in allowed_contexts and customer_profile_str:
             extra_sections.append(customer_profile_str)
         if "order" in allowed_contexts and order_context_str:
@@ -1805,6 +1973,7 @@ async def chat(
 
         # 用于 LLM 调用的最终 prompt
         user_message_with_context = llm_messages
+        vision_prompt_text = _build_vision_prompt_text(llm_messages, context_prompt)
 
         # 调试日志：打印传给 LLM 的 messages 结构（只打角色和前50字）
         _msg_debug = [f"{m['role']}: {(m.get('content',''))[:50]}..." for m in llm_messages]
@@ -2053,7 +2222,7 @@ async def chat(
         if not stream_ready:
             if images and len(images) > 0:
                 result = await call_vision(
-                    text=user_message_with_context,
+                    text=vision_prompt_text,
                     images=images,
                     tool=tool_schema,
                     model="google/gemini-2.0-flash-001",
@@ -2127,6 +2296,7 @@ async def chat(
                     user_message=message,
                     intent=intent,
                     ai_response=reply_text,
+                    ai_reply_id=ai_reply_id,
                     sources=product_results,
                     confidence=confidence,
                 )
@@ -2217,6 +2387,7 @@ async def chat(
         return {
             "session_id": session_id,
             "reply": reply_text,
+            "ai_reply_id": ai_reply_id,
             "intent": intent,
             "sources": product_results,
             "needs_human": needs_human,
@@ -2243,6 +2414,7 @@ async def chat(
         return {
             "session_id": session_id,
             "reply": f"亲，系统繁忙，请稍后重试或联系人工客服🙏（错误码: {error_code}）",
+            "ai_reply_id": ai_reply_id,
             "intent": "other",
             "sources": [],
             "needs_human": True,
@@ -2271,7 +2443,16 @@ async def _log_conversation_compat(
     confidence: float = 0.0,
 ) -> None:
     """向后兼容的日志记录函数"""
-    await _log_conversation(pool, session_id, user_message, intent, ai_response, None, confidence)
+    await _log_conversation(
+        pool=pool,
+        session_id=session_id or "",
+        user_message=user_message,
+        intent=intent,
+        ai_response=ai_response,
+        ai_reply_id=None,
+        sources=None,
+        confidence=confidence,
+    )
 
 
 # 导出兼容接口

@@ -12,9 +12,40 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+async def _ensure_feedback_extended_columns(pool) -> None:
+    """兼容旧库：补齐学习链路依赖的反馈字段。"""
+    import contextlib
+
+    columns = [
+        ("ai_reply_id", "TEXT"),
+        ("action", "TEXT"),
+        ("original_reply", "TEXT"),
+        ("edited_reply", "TEXT"),
+        ("actual_reply", "TEXT"),
+        ("correction_text", "TEXT"),
+    ]
+    for name, col_type in columns:
+        with contextlib.suppress(Exception):
+            await pool.execute(
+                f"ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS {name} {col_type};"
+            )
+
+
+async def _ensure_conversation_log_extended_columns(pool) -> None:
+    """兼容旧库：补齐对话日志中的可选字段。"""
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_conversation_log ADD COLUMN IF NOT EXISTS ai_reply_id TEXT;"
+        )
+
+
 async def extract_learning_insights(pool) -> dict:
     """从对话日志中提取学习洞察"""
     try:
+        await _ensure_feedback_extended_columns(pool)
+        await _ensure_conversation_log_extended_columns(pool)
         # 1. 统计高频问题（按 intent 分组）
         high_freq_intents = await pool.fetch(
             """
@@ -33,7 +64,21 @@ async def extract_learning_insights(pool) -> dict:
             """
             SELECT f.session_id, f.comment, l.intent, l.user_message, l.ai_response, l.confidence
             FROM cs_feedback f
-            JOIN cs_conversation_log l ON f.session_id = l.session_id
+            LEFT JOIN LATERAL (
+                SELECT intent, user_message, ai_response, confidence, created_at
+                FROM cs_conversation_log l
+                WHERE l.session_id = f.session_id
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(f.ai_reply_id, '') <> '' AND l.ai_reply_id = f.ai_reply_id THEN 0
+                        WHEN COALESCE(f.actual_reply, '') <> '' AND l.ai_response = f.actual_reply THEN 1
+                        WHEN COALESCE(f.edited_reply, '') <> '' AND l.ai_response = f.edited_reply THEN 2
+                        WHEN COALESCE(f.original_reply, '') <> '' AND l.ai_response = f.original_reply THEN 3
+                        ELSE 4
+                    END,
+                    ABS(EXTRACT(EPOCH FROM (l.created_at - f.created_at)))
+                LIMIT 1
+            ) l ON TRUE
             WHERE f.rating = 'bad'
             AND f.created_at >= NOW() - INTERVAL '7 days'
             ORDER BY f.created_at DESC
@@ -82,13 +127,29 @@ async def extract_learning_insights(pool) -> dict:
 async def update_few_shot_examples(pool) -> None:
     """根据好评回复和高评分回复更新 few-shot 示例"""
     try:
+        await _ensure_feedback_extended_columns(pool)
+        await _ensure_conversation_log_extended_columns(pool)
         # 1. 查询 rating='good' 的对话，按 intent 分组
         good_examples = await pool.fetch(
             """
             SELECT l.intent, l.user_message, l.ai_response, l.confidence, f.created_at,
                    'feedback' as source, NULL as overall_score
             FROM cs_feedback f
-            JOIN cs_conversation_log l ON f.session_id = l.session_id
+            LEFT JOIN LATERAL (
+                SELECT intent, user_message, ai_response, confidence, created_at
+                FROM cs_conversation_log l
+                WHERE l.session_id = f.session_id
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(f.ai_reply_id, '') <> '' AND l.ai_reply_id = f.ai_reply_id THEN 0
+                        WHEN COALESCE(f.actual_reply, '') <> '' AND l.ai_response = f.actual_reply THEN 1
+                        WHEN COALESCE(f.edited_reply, '') <> '' AND l.ai_response = f.edited_reply THEN 2
+                        WHEN COALESCE(f.original_reply, '') <> '' AND l.ai_response = f.original_reply THEN 3
+                        ELSE 4
+                    END,
+                    ABS(EXTRACT(EPOCH FROM (l.created_at - f.created_at)))
+                LIMIT 1
+            ) l ON TRUE
             WHERE f.rating = 'good'
             AND l.intent IS NOT NULL
             AND f.created_at >= NOW() - INTERVAL '30 days'
@@ -268,6 +329,8 @@ async def generate_learning_report(pool) -> str:
 async def get_analytics_summary(pool) -> dict:
     """获取分析摘要数据（供前端使用）"""
     try:
+        await _ensure_feedback_extended_columns(pool)
+        await _ensure_conversation_log_extended_columns(pool)
         # 今日对话数
         today_conversations = (
             await pool.fetchval(
@@ -303,7 +366,21 @@ async def get_analytics_summary(pool) -> dict:
             SELECT f.session_id, f.comment, f.created_at,
                    l.user_message, l.ai_response, l.intent
             FROM cs_feedback f
-            LEFT JOIN cs_conversation_log l ON f.session_id = l.session_id
+            LEFT JOIN LATERAL (
+                SELECT user_message, ai_response, intent, created_at
+                FROM cs_conversation_log l
+                WHERE l.session_id = f.session_id
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(f.ai_reply_id, '') <> '' AND l.ai_reply_id = f.ai_reply_id THEN 0
+                        WHEN COALESCE(f.actual_reply, '') <> '' AND l.ai_response = f.actual_reply THEN 1
+                        WHEN COALESCE(f.edited_reply, '') <> '' AND l.ai_response = f.edited_reply THEN 2
+                        WHEN COALESCE(f.original_reply, '') <> '' AND l.ai_response = f.original_reply THEN 3
+                        ELSE 4
+                    END,
+                    ABS(EXTRACT(EPOCH FROM (l.created_at - f.created_at)))
+                LIMIT 1
+            ) l ON TRUE
             WHERE f.rating = 'bad' AND f.created_at >= CURRENT_DATE - INTERVAL '3 days'
             ORDER BY f.created_at DESC
             LIMIT 5
@@ -359,13 +436,8 @@ async def get_analytics_summary(pool) -> dict:
 async def update_negative_examples(pool) -> None:
     """从 cs_feedback 中提取差评+纠正案例，存入 system_config.cs_negative_examples"""
     try:
-        # 确保 correction_text 列存在
-        import contextlib
-
-        with contextlib.suppress(Exception):
-            await pool.execute(
-                "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS correction_text TEXT;"
-            )
+        await _ensure_feedback_extended_columns(pool)
+        await _ensure_conversation_log_extended_columns(pool)
 
         # 查询有 correction_text 的差评，关联对话日志取 intent
         rows = await pool.fetch(
@@ -373,7 +445,21 @@ async def update_negative_examples(pool) -> None:
             SELECT f.session_id, f.comment, f.correction_text,
                    l.intent, l.user_message, l.ai_response
             FROM cs_feedback f
-            LEFT JOIN cs_conversation_log l ON f.session_id = l.session_id
+            LEFT JOIN LATERAL (
+                SELECT intent, user_message, ai_response, created_at
+                FROM cs_conversation_log l
+                WHERE l.session_id = f.session_id
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(f.ai_reply_id, '') <> '' AND l.ai_reply_id = f.ai_reply_id THEN 0
+                        WHEN COALESCE(f.actual_reply, '') <> '' AND l.ai_response = f.actual_reply THEN 1
+                        WHEN COALESCE(f.edited_reply, '') <> '' AND l.ai_response = f.edited_reply THEN 2
+                        WHEN COALESCE(f.original_reply, '') <> '' AND l.ai_response = f.original_reply THEN 3
+                        ELSE 4
+                    END,
+                    ABS(EXTRACT(EPOCH FROM (l.created_at - f.created_at)))
+                LIMIT 1
+            ) l ON TRUE
             WHERE f.rating = 'bad'
               AND f.correction_text IS NOT NULL
               AND f.correction_text != ''

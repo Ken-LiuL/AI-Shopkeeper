@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections import OrderedDict
 from datetime import UTC
 
@@ -33,6 +34,23 @@ _MAX_MEM_SESSIONS = 200
 _MAX_HISTORY = 50
 _mem_sessions: OrderedDict[str, list[dict]] = OrderedDict()
 _mem_summaries: dict[str, str] = {}
+_feedback_schema_checked = False
+
+
+def _session_lock_wait_seconds() -> float:
+    raw = os.getenv("CS_SESSION_LOCK_WAIT", "35")
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 35.0
+
+
+def _session_lock_ttl_seconds() -> int:
+    raw = os.getenv("CS_SESSION_LOCK_TTL", "90")
+    try:
+        return max(10, int(float(raw)))
+    except ValueError:
+        return 90
 
 
 def _mem_ensure(session_id: str) -> list[dict]:
@@ -80,6 +98,40 @@ def _require_redis() -> SessionManager:
     if sm is None:
         raise AppError("Customer service requires Redis (not configured)", status_code=503)
     return sm
+
+
+async def _ensure_feedback_schema(pool) -> None:
+    """Best-effort schema compatibility for feedback enrichment fields."""
+    global _feedback_schema_checked
+    if _feedback_schema_checked:
+        return
+    import contextlib
+
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS ai_reply_id TEXT;"
+        )
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS action TEXT;"
+        )
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS original_reply TEXT;"
+        )
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS edited_reply TEXT;"
+        )
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS actual_reply TEXT;"
+        )
+    with contextlib.suppress(Exception):
+        await pool.execute(
+            "ALTER TABLE cs_feedback ADD COLUMN IF NOT EXISTS correction_text TEXT;"
+        )
+    _feedback_schema_checked = True
 
 
 # ── Create session ────────────────────────────────────────────
@@ -142,7 +194,11 @@ async def chat(
             # Auto-create session in Redis (idempotent)
             logger.info(f"[CS] Auto-creating Redis session for {session_id}")
             await sm.create_session_with_id(session_id)
-        if not await sm.acquire_lock(session_id, timeout=30, wait=8):
+        if not await sm.acquire_lock(
+            session_id,
+            timeout=_session_lock_ttl_seconds(),
+            wait=_session_lock_wait_seconds(),
+        ):
             raise AppError("Session is busy, please retry", status_code=429)
         use_redis = True
         lock_acquired = True
@@ -180,12 +236,15 @@ async def chat(
             pool=pool,
             conversation_history=history,
             images=request.images,
+            customer_info=request.customer_info,
+            order_context=request.order_context,
         )
 
         _api_post_chat = _time.time()
         logger.info(f"[CS-API-PERF] cs_chat() took {(_api_post_chat - _api_pre_chat)*1000:.0f}ms")
 
         reply = result.get("reply", "")
+        ai_reply_id = result.get("ai_reply_id")
         intent = result.get("intent")
         sources = result.get("sources", [])
         needs_human = result.get("needs_human", False)
@@ -209,6 +268,7 @@ async def chat(
             data=ChatResponse(
                 session_id=session_id,
                 reply=reply,
+                ai_reply_id=ai_reply_id,
                 intent=intent,
                 sources=sources,
                 needs_human=needs_human,  # 添加新字段
@@ -258,6 +318,8 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
                 pool=pool,
                 conversation_history=history,
                 images=getattr(request, "images", None),
+                customer_info=getattr(request, "customer_info", None),
+                order_context=getattr(request, "order_context", None),
             ),
             timeout=_timeout_seconds,
         )
@@ -268,6 +330,7 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
         return APIResponse(
             data={
                 "reply": result.get("reply", ""),
+                "ai_reply_id": result.get("ai_reply_id"),
                 "intent": result.get("intent"),
                 "needs_human": result.get("needs_human", False),
                 "response_ms": round(elapsed_ms),
@@ -322,7 +385,11 @@ async def chat_stream(request: ChatRequest):
         if not await sm.session_exists(session_id):
             logger.info(f"[CS] Stream: auto-creating Redis session for {session_id}")
             await sm.create_session_with_id(session_id)
-        if not await sm.acquire_lock(session_id, timeout=30):
+        if not await sm.acquire_lock(
+            session_id,
+            timeout=_session_lock_ttl_seconds(),
+            wait=_session_lock_wait_seconds(),
+        ):
             async def _busy():
                 yield f"data: {_json.dumps({'type': 'error', 'message': 'Session is busy'})}\n\n"
 
@@ -368,6 +435,8 @@ async def chat_stream(request: ChatRequest):
                     pool=pool,
                     conversation_history=history,
                     images=request.images,
+                    customer_info=request.customer_info,
+                    order_context=request.order_context,
                     stream=True,
                     token_callback=_on_token,
                 )
@@ -400,7 +469,7 @@ async def chat_stream(request: ChatRequest):
 
             yield (
                 "data: "
-                f"{_json.dumps({'type': 'done', 'reply': reply, 'intent': result.get('intent'), 'needs_human': result.get('needs_human', False)}, ensure_ascii=False)}\n\n"
+                f"{_json.dumps({'type': 'done', 'reply': reply, 'ai_reply_id': result.get('ai_reply_id'), 'intent': result.get('intent'), 'needs_human': result.get('needs_human', False)}, ensure_ascii=False)}\n\n"
             )
         except Exception as e:
             logger.error("Stream chat failed: %s", e)
@@ -469,19 +538,21 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
         raise AppError("Database connection unavailable", status_code=503)
 
     try:
+        await _ensure_feedback_schema(pool)
         # Store feedback with extended fields
         try:
             await pool.execute(
                 """
                 INSERT INTO cs_feedback (session_id, message_id, rating, comment,
-                                         action, original_reply, edited_reply, actual_reply,
+                                         ai_reply_id, action, original_reply, edited_reply, actual_reply,
                                          correction_text, created_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
                 """,
                 request.session_id,
                 request.message_id,
                 request.rating,
                 request.comment,
+                request.ai_reply_id,
                 request.action,
                 request.original_reply,
                 request.edited_reply,
@@ -609,7 +680,22 @@ async def get_stats() -> APIResponse[dict]:
         )
         total_feedback = await pool.fetchval("SELECT COUNT(*) FROM cs_feedback") or 0
         avg_rating = float(
-            await pool.fetchval("SELECT COALESCE(AVG(rating), 0) FROM cs_feedback") or 0
+            await pool.fetchval(
+                """
+                SELECT COALESCE(
+                    AVG(
+                        CASE
+                            WHEN rating = 'good' THEN 5.0
+                            WHEN rating = 'bad' THEN 1.0
+                            ELSE NULL
+                        END
+                    ),
+                    0
+                )
+                FROM cs_feedback
+                """
+            )
+            or 0
         )
         resolved_sessions = (
             await pool.fetchval(

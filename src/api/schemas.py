@@ -74,11 +74,14 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     images: list[str] = Field(default_factory=list, description="Base64 encoded images")
+    customer_info: dict[str, Any] = Field(default_factory=dict)
+    order_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):
     session_id: str
     reply: str
+    ai_reply_id: str | None = None
     intent: str | None = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
     needs_human: bool = False
@@ -103,6 +106,7 @@ class SessionHistory(BaseModel):
 class FeedbackRequest(BaseModel):
     session_id: str
     message_id: str | None = None
+    ai_reply_id: str | None = None
     rating: str = Field(..., pattern="^(good|bad)$")
     comment: str | None = None
     action: str | None = Field(None, pattern="^(adopted|edited|ignored)$")

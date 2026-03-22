@@ -1,78 +1,155 @@
 /**
- * injected.js — Hook MTDX SDK 消息 (v3 — 修复 prototype 错误 + 时序问题)
+ * injected.js — Hook MTDX SDK messages
+ * WS first, console fallback only.
  */
 (function () {
   'use strict';
 
   const CHANNEL = '__AI_DIANZHANG_WS__';
-  const origLog = console.log;
+  const original = {
+    log: console.log,
+    warn: console.warn,
+    info: console.info,
+  };
+
+  const MAX_RECENT_SIGNATURES = 300;
+  const RECENT_SIGNATURE_TTL_MS = 12000;
+  const recentSignatures = new Map();
+  let wsCaptureHealthy = false;
 
   function dbg(...args) {
-    origLog.apply(console, ['[AI店长-hook]', ...args]);
+    original.log.apply(console, ['[AI店长-hook]', ...args]);
   }
 
-  dbg('injected.js 开始加载...');
+  function cleanupRecentSignatures(now = Date.now()) {
+    for (const [key, ts] of recentSignatures.entries()) {
+      if (!ts || (now - ts) > RECENT_SIGNATURE_TTL_MS) {
+        recentSignatures.delete(key);
+      }
+    }
+    if (recentSignatures.size <= MAX_RECENT_SIGNATURES) return;
+    const overflow = recentSignatures.size - MAX_RECENT_SIGNATURES;
+    const iterator = recentSignatures.keys();
+    for (let i = 0; i < overflow; i++) {
+      const next = iterator.next();
+      if (next.done) break;
+      recentSignatures.delete(next.value);
+    }
+  }
 
-  // ═══════════════════ Console Hook ═══════════════════
-  function interceptConsole(origFn) {
-    return function (...args) {
+  function pickSessionId(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    const keys = ['sessionId', 'conversationId', 'session_id', 'conversation_id', 'chatId', 'chat_id'];
+    for (const key of keys) {
+      const value = obj[key];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    const inner = obj.data || obj.payload || obj.body || {};
+    if (inner && typeof inner === 'object') {
+      for (const key of keys) {
+        const value = inner[key];
+        if (typeof value === 'string' && value.trim()) return value.trim();
+      }
+    }
+    return '';
+  }
+
+  function getMessageIdentity(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    return String(obj.uuid || obj.mid || obj.messageId || obj.id || '').trim();
+  }
+
+  function getContent(obj) {
+    if (!obj || typeof obj !== 'object') return '';
+    for (const key of ['content', 'text', 'body', 'msg', 'message', 'summary']) {
       try {
-        for (let i = 0; i < args.length; i++) {
-          const arg = args[i];
-          if (typeof arg === 'string') {
-            if (arg.includes('接收到消息')) {
-              const obj = findObjectArg(args, i + 1);
-              if (obj && obj.sessionId) {
-                dbg('✅ 捕获[接收消息]', obj.sessionId, 'type:', obj.type);
-                emitMessage('customer_message', obj);
-              }
-            }
-            if (arg.includes('session-item')) {
-              const obj = findObjectArg(args, i + 1);
-              if (obj) {
-                dbg('✅ 捕获[session-item]', obj.poiId);
-                emitMessage('session_item', obj);
-              }
-            }
-            // 捕获客服发送
-            if (arg.includes('sendMessage') || arg.includes('发送消息成功')) {
-              const obj = findObjectArg(args, i + 1);
-              if (obj && obj.sessionId) {
-                dbg('✅ 捕获[发送消息]', obj.sessionId, getContent(obj));
-                emitMessage('agent_message', obj);
-              }
-            }
-            // ─── 历史消息采集 ───────────────────────────────────────────
-            // "[dev] 单个会话初次历史消息查询结果 {lastMsgId} [{...}×N] {sessionId}"
-            // args: [tag, lastMsgId, arrayOfMessages, sessionId]
-            if (arg.includes('单个会话初次历史消息查询结果')) {
-              // 找 sessionId（最后一个字符串参数）
-              let histSessionId = '';
-              let histMsgs = null;
-              for (let j = i + 1; j < args.length; j++) {
-                if (Array.isArray(args[j])) histMsgs = args[j];
-                if (typeof args[j] === 'string' && args[j].includes('_')) histSessionId = args[j];
-              }
-              if (histSessionId && histMsgs && histMsgs.length > 0) {
-                dbg('📚 历史消息', histSessionId, histMsgs.length, '条');
-                // 序列化每条历史消息
-                const safeMessages = histMsgs.slice(0, 50).map(m => {
-                  try { return extractFields(m); } catch (_) { return null; }
-                }).filter(Boolean);
-                window.dispatchEvent(new CustomEvent(CHANNEL, {
-                  detail: JSON.stringify({
-                    __type: 'history_messages',
-                    sessionId: histSessionId,
-                    messages: safeMessages
-                  })
-                }));
-              }
-            }
-          }
-        }
+        const val = obj[key];
+        if (typeof val === 'string' && val.trim()) return val.trim().slice(0, 300);
       } catch (_) {}
-      return origFn.apply(this, args);
-    };
+    }
+
+    const nested = obj.data || obj.payload || obj.body;
+    if (nested && typeof nested === 'object') {
+      for (const key of ['content', 'text', 'msg', 'message', 'summary']) {
+        const val = nested[key];
+        if (typeof val === 'string' && val.trim()) return val.trim().slice(0, 300);
+      }
+    }
+
+    return '';
+  }
+
+  function isSystemPayloadText(text) {
+    if (!text) return false;
+    return text.includes('systemEventType')
+      || text.includes('eventType":"system')
+      || text.includes('用户与客服会话已结束');
+  }
+
+  function isAgentMessage(obj) {
+    const direction = String(obj?.direction || obj?.dir || '').toLowerCase();
+    if (direction === 'out' || direction === 'outbound' || direction === 'send') return true;
+
+    if (obj?.fromMe === true || obj?.isSelf === true) return true;
+
+    const senderType = Number(obj?.senderType || obj?.roleType || obj?.userType || NaN);
+    if (senderType === 2) return true;
+
+    const sender = String(obj?.sender || obj?.from || obj?.senderRole || '').toLowerCase();
+    if (sender.includes('agent') || sender.includes('kf') || sender.includes('客服') || sender.includes('seller')) {
+      return true;
+    }
+
+    const identity = getMessageIdentity(obj).toLowerCase();
+    if (identity.includes('kf-') || identity.includes('agent')) return true;
+
+    return false;
+  }
+
+  function buildSignature(type, payload) {
+    const sid = pickSessionId(payload);
+    const identity = getMessageIdentity(payload);
+    const text = getContent(payload).slice(0, 80);
+    const historySize = Array.isArray(payload?.messages) ? String(payload.messages.length) : '';
+    let firstMsgIdentity = '';
+    if (Array.isArray(payload?.messages) && payload.messages.length > 0) {
+      const first = payload.messages[0];
+      if (first && typeof first === 'object') {
+        firstMsgIdentity = getMessageIdentity(first);
+      }
+    }
+    return [type, sid, identity, text, historySize, firstMsgIdentity].join('|');
+  }
+
+  function shouldEmit(type, payload) {
+    const sig = buildSignature(type, payload);
+    if (!sig.replace(/\|/g, '').trim()) return true;
+    cleanupRecentSignatures();
+    if (recentSignatures.has(sig)) return false;
+    recentSignatures.set(sig, Date.now());
+    return true;
+  }
+
+  function emitPayload(payload) {
+    try {
+      window.dispatchEvent(new CustomEvent(CHANNEL, { detail: JSON.stringify(payload) }));
+      return true;
+    } catch (e) {
+      dbg('❌ emit失败:', e.message);
+      return false;
+    }
+  }
+
+  function emitTyped(type, payload, source) {
+    if (!payload || typeof payload !== 'object') return false;
+    if (!shouldEmit(type, payload)) return false;
+
+    const out = { ...payload, __type: type, __source: source || '' };
+    const ok = emitPayload(out);
+    if (ok) {
+      wsCaptureHealthy = wsCaptureHealthy || source === 'ws';
+    }
+    return ok;
   }
 
   function findObjectArg(args, startIdx) {
@@ -82,151 +159,277 @@
     return null;
   }
 
-  function getContent(obj) {
-    if (!obj) return '';
-    // 尝试所有可能的文本字段
-    for (const key of ['content', 'text', 'body', 'msg', 'message', 'data', 'summary']) {
-      try {
-        const val = obj[key];
-        if (typeof val === 'string' && val.trim()) return val.substring(0, 80);
-        if (val && typeof val === 'object') {
-          const s = JSON.stringify(val);
-          if (s.length > 5) return s.substring(0, 80);
-        }
-      } catch (_) {}
-    }
-    // 暴力搜索：找第一个看起来像消息内容的字符串属性
-    try {
-      for (const key of Object.getOwnPropertyNames(obj)) {
-        const val = obj[key];
-        if (typeof val === 'string' && val.length > 1 && val.length < 500 &&
-            !key.startsWith('_') && key !== 'sessionId' && key !== 'uuid' && key !== 'mid') {
-          return `[${key}]${val.substring(0, 60)}`;
-        }
-      }
-    } catch (_) {}
-    return `(type:${obj.type||'?'} keys:${Object.getOwnPropertyNames(obj).slice(0,8).join(',')})`;
-  }
-
-  console.log = interceptConsole(origLog);
-  console.warn = interceptConsole(console.warn);
-  console.info = interceptConsole(console.info);
-
-  // ═══════════════════ Emit ═══════════════════
-  function emitMessage(type, data) {
-    try {
-      const payload = extractFields(data);
-      payload.__type = type;
-      const json = JSON.stringify(payload);
-      dbg('📤 CustomEvent:', type, json.length, 'bytes');
-      window.dispatchEvent(new CustomEvent(CHANNEL, { detail: json }));
-    } catch (e) {
-      dbg('❌ emit失败:', e.message);
-    }
-  }
-
   function extractFields(obj) {
     const result = {};
     const keys = [
       'sessionId', 'channelId', 'type', 'uuid', 'mid', 'appId',
       'content', 'text', 'body', 'data', 'summary', 'msg', 'message',
       'poiId', 'pubId', 'bizChatId', 'dialogStatus',
-      'nickname', 'name'
+      'nickname', 'name', 'direction', 'sender', 'senderType',
     ];
 
-    // 1. 尝试所有已知 key（包括原型链上的 getter）
     for (const key of keys) {
       try {
-        const val = obj[key]; // 不用 'in' 检查，直接访问（兼容 getter）
+        const val = obj[key];
         if (val === null || val === undefined) continue;
         if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
           result[key] = val;
         } else if (typeof val === 'object' && key !== 'customerInfo') {
-          // 对象值尝试 JSON 序列化
-          try { result[key] = JSON.stringify(val).substring(0, 500); } catch (_) {}
+          try { result[key] = JSON.stringify(val).slice(0, 1000); } catch (_) {}
         }
       } catch (_) {}
     }
 
-    // 2. 暴力遍历所有自有属性（SDK 可能用了非标准属性名）
-    try {
-      const allKeys = Object.getOwnPropertyNames(obj);
-      for (const key of allKeys) {
-        if (result[key] !== undefined) continue; // 已提取
-        try {
-          const val = obj[key];
-          if (typeof val === 'string' && val.length > 0 && val.length < 2000) {
-            result[key] = val;
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-
-    // 3. customerInfo 特殊处理
     try {
       const ci = obj.customerInfo || obj.customer_info || obj.userInfo;
       if (ci && typeof ci === 'object') {
         result.customerInfo = {};
         for (const k of ['nickname', 'name', 'avatar', 'userId', 'customerId', 'uid', 'userName']) {
-          try { const v = ci[k]; if (v) result.customerInfo[k] = v; } catch (_) {}
+          try {
+            const v = ci[k];
+            if (v) result.customerInfo[k] = v;
+          } catch (_) {}
         }
-      }
-    } catch (_) {}
-
-    // 4. Debug: 列出所有属性名（帮助定位 content 字段）
-    try {
-      result.__keys = Object.getOwnPropertyNames(obj).join(',');
-      // 也看原型链
-      const proto = Object.getPrototypeOf(obj);
-      if (proto && proto !== Object.prototype) {
-        result.__protoKeys = Object.getOwnPropertyNames(proto).filter(k => k !== 'constructor').join(',');
       }
     } catch (_) {}
 
     return result;
   }
 
-  // ═══════════════════ WebSocket hook (安全版) ═══════════════════
-  try {
-    const OrigWS = window.WebSocket;
-    const origAddEventListener = OrigWS.prototype.addEventListener;
-
-    // 不替换 WebSocket 类，只 patch prototype.addEventListener
-    const origSend = OrigWS.prototype.send;
-    OrigWS.prototype.send = function (data) {
-      // 可选：捕获发送的消息
-      return origSend.call(this, data);
-    };
-
-    // 用 MutationObserver-style 的方式 hook 新创建的 WS
-    const origWSConstructor = window.WebSocket;
-    window.WebSocket = function (url, protocols) {
-      dbg('🔌 WS连接:', typeof url === 'string' ? url.substring(0, 80) : url);
-      const ws = protocols !== undefined
-        ? new origWSConstructor(url, protocols)
-        : new origWSConstructor(url);
-      try {
-        ws.addEventListener('message', function (event) {
-          try {
-            if (typeof event.data === 'string') {
-              const parsed = JSON.parse(event.data);
-              if (parsed && parsed.sessionId) {
-                emitMessage('ws_message', parsed);
-              }
-            }
-          } catch (_) {}
-        });
-      } catch (_) {}
-      return ws;
-    };
-    window.WebSocket.prototype = origWSConstructor.prototype;
-    window.WebSocket.CONNECTING = origWSConstructor.CONNECTING;
-    window.WebSocket.OPEN = origWSConstructor.OPEN;
-    window.WebSocket.CLOSING = origWSConstructor.CLOSING;
-    window.WebSocket.CLOSED = origWSConstructor.CLOSED;
-  } catch (e) {
-    dbg('⚠️ WebSocket hook 跳过:', e.message);
+  function emitConsoleTyped(type, rawObj) {
+    if (!rawObj || typeof rawObj !== 'object') return;
+    const payload = extractFields(rawObj);
+    emitTyped(type, payload, 'console');
   }
 
-  dbg('✅ 安装完成');
+  function emitHistory(sessionId, messages, source) {
+    if (!sessionId || !Array.isArray(messages) || messages.length === 0) return;
+    const safeMessages = messages.slice(0, 80).map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      return source === 'ws' ? item : extractFields(item);
+    }).filter(Boolean);
+    if (safeMessages.length === 0) return;
+
+    emitTyped(
+      'history_messages',
+      {
+        sessionId,
+        messages: safeMessages,
+      },
+      source
+    );
+  }
+
+  function shouldUseConsoleFallback(kind) {
+    if (!wsCaptureHealthy) return true;
+    return kind === 'history';
+  }
+
+  function interceptConsole(origFn) {
+    return function (...args) {
+      try {
+        for (let i = 0; i < args.length; i++) {
+          const arg = args[i];
+          if (typeof arg !== 'string') continue;
+
+          if (arg.includes('接收到消息') && shouldUseConsoleFallback('message')) {
+            const obj = findObjectArg(args, i + 1);
+            if (obj && pickSessionId(obj)) {
+              emitConsoleTyped('customer_message', obj);
+            }
+          }
+
+          if (arg.includes('sendMessage') || arg.includes('发送消息成功')) {
+            if (!shouldUseConsoleFallback('message')) continue;
+            const obj = findObjectArg(args, i + 1);
+            if (obj && pickSessionId(obj)) {
+              emitConsoleTyped('agent_message', obj);
+            }
+          }
+
+          if (arg.includes('session-item') && shouldUseConsoleFallback('message')) {
+            const obj = findObjectArg(args, i + 1);
+            if (obj && pickSessionId(obj)) {
+              emitConsoleTyped('session_item', obj);
+            }
+          }
+
+          if (arg.includes('单个会话初次历史消息查询结果') && shouldUseConsoleFallback('history')) {
+            let histSessionId = '';
+            let histMsgs = null;
+            for (let j = i + 1; j < args.length; j++) {
+              if (Array.isArray(args[j])) histMsgs = args[j];
+              if (typeof args[j] === 'string' && args[j].includes('_')) histSessionId = args[j];
+            }
+            if (histSessionId && histMsgs && histMsgs.length > 0) {
+              emitHistory(histSessionId, histMsgs, 'console');
+            }
+          }
+        }
+      } catch (_) {}
+
+      return origFn.apply(this, args);
+    };
+  }
+
+  function safeParseJSON(raw) {
+    if (typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+    if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return null;
+    try {
+      return JSON.parse(trimmed);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function collectWSCandidates(root) {
+    const out = [];
+    const queue = [root];
+    const visited = new Set();
+    const maxCandidates = 80;
+
+    while (queue.length > 0 && out.length < maxCandidates) {
+      const node = queue.shift();
+      if (node === null || node === undefined) continue;
+
+      if (typeof node === 'string') {
+        const parsed = safeParseJSON(node);
+        if (parsed) queue.push(parsed);
+        continue;
+      }
+
+      if (Array.isArray(node)) {
+        out.push({ __array: true, items: node });
+        for (const item of node.slice(0, 30)) queue.push(item);
+        continue;
+      }
+
+      if (typeof node !== 'object') continue;
+      if (visited.has(node)) continue;
+      visited.add(node);
+      out.push(node);
+
+      for (const key of ['data', 'payload', 'body', 'message', 'msg', 'content', 'messages', 'list', 'items', 'events']) {
+        if (Object.prototype.hasOwnProperty.call(node, key)) {
+          queue.push(node[key]);
+        }
+      }
+    }
+
+    return out;
+  }
+
+  function maybeEmitFromWSCandidate(candidate) {
+    if (!candidate || typeof candidate !== 'object') return false;
+
+    if (candidate.__array === true && Array.isArray(candidate.items)) {
+      let hit = false;
+      for (const item of candidate.items.slice(0, 30)) {
+        hit = maybeEmitFromWSCandidate(item) || hit;
+      }
+      return hit;
+    }
+
+    const sid = pickSessionId(candidate);
+    if (!sid) return false;
+
+    if (Array.isArray(candidate.messages) && candidate.messages.length > 0) {
+      emitHistory(sid, candidate.messages, 'ws');
+      return true;
+    }
+
+    const text = getContent(candidate);
+
+    if (text) {
+      if (isSystemPayloadText(text)) {
+        emitTyped('passthrough', candidate, 'ws');
+      } else {
+        emitTyped(isAgentMessage(candidate) ? 'agent_message' : 'customer_message', candidate, 'ws');
+      }
+      return true;
+    }
+
+    if (candidate.customerInfo || candidate.dialogStatus || candidate.poiId || candidate.pubId) {
+      emitTyped('session_item', candidate, 'ws');
+      return true;
+    }
+
+    if (shouldEmit('raw', candidate)) {
+      emitPayload(candidate);
+      wsCaptureHealthy = true;
+      return true;
+    }
+
+    return false;
+  }
+
+  function handleWSData(rawData) {
+    const parsed = safeParseJSON(rawData);
+    if (!parsed) return;
+
+    const candidates = collectWSCandidates(parsed);
+    let emitted = false;
+    for (const candidate of candidates) {
+      emitted = maybeEmitFromWSCandidate(candidate) || emitted;
+    }
+
+    if (!emitted && typeof parsed === 'object' && parsed !== null) {
+      const sid = pickSessionId(parsed);
+      if (sid && shouldEmit('raw', parsed)) {
+        emitPayload(parsed);
+        wsCaptureHealthy = true;
+      }
+    }
+  }
+
+  function installWebSocketHook() {
+    try {
+      const NativeWS = window.WebSocket;
+      if (!NativeWS || !NativeWS.prototype) {
+        dbg('⚠️ WebSocket 不可用，保持 console fallback');
+        return;
+      }
+
+      const WrappedWS = function (url, protocols) {
+        const ws = protocols !== undefined
+          ? new NativeWS(url, protocols)
+          : new NativeWS(url);
+
+        try {
+          ws.addEventListener('message', (event) => {
+            try {
+              if (typeof event.data === 'string') {
+                handleWSData(event.data);
+              }
+            } catch (_) {}
+          });
+        } catch (_) {}
+
+        return ws;
+      };
+
+      WrappedWS.prototype = NativeWS.prototype;
+      WrappedWS.CONNECTING = NativeWS.CONNECTING;
+      WrappedWS.OPEN = NativeWS.OPEN;
+      WrappedWS.CLOSING = NativeWS.CLOSING;
+      WrappedWS.CLOSED = NativeWS.CLOSED;
+
+      window.WebSocket = WrappedWS;
+      dbg('✅ WebSocket hook 已安装（WS 优先）');
+    } catch (e) {
+      dbg('⚠️ WebSocket hook 安装失败:', e.message);
+    }
+  }
+
+  dbg('injected.js 开始加载...');
+
+  installWebSocketHook();
+
+  console.log = interceptConsole(original.log);
+  console.warn = interceptConsole(original.warn);
+  console.info = interceptConsole(original.info);
+
+  dbg('✅ 注入完成（WS first, console fallback）');
 })();

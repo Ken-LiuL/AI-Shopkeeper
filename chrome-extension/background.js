@@ -11,7 +11,12 @@ const LEGACY_API_BASES = new Set([
 const MAX_RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 const REQUEST_TIMEOUT_MS = 30000; // 30s 超时
+const MESSAGE_DEDUP_TTL_MS = 8000;
+const MAX_RECENT_MESSAGE_RESULTS = 200;
 const debugLogs = [];
+const sessionRequestChains = new Map(); // session_id -> Promise
+const inflightMessageRequests = new Map(); // dedup_key -> Promise
+const recentMessageResults = new Map(); // dedup_key -> { ts, result }
 
 function addLog(level, msg, detail = '') {
   const entry = { time: new Date().toLocaleTimeString(), level, msg, detail };
@@ -101,6 +106,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+function getSessionChainKey(payload) {
+  const sid = (payload?.session_id || '').trim();
+  return sid || '__default__';
+}
+
+function buildMessageDedupKey(payload) {
+  const sid = (payload?.session_id || '').trim();
+  const messageId = String(payload?.message_id || '').trim();
+  if (sid && messageId) return `${sid}#${messageId}`;
+  const msg = String(payload?.message || '')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+    .slice(0, 280);
+  if (!sid || !msg) return '';
+  return `${sid}::${msg}`;
+}
+
+function cleanupRecentMessageResults(now = Date.now()) {
+  for (const [key, item] of recentMessageResults.entries()) {
+    if (!item || (now - item.ts) > MESSAGE_DEDUP_TTL_MS) {
+      recentMessageResults.delete(key);
+    }
+  }
+  if (recentMessageResults.size <= MAX_RECENT_MESSAGE_RESULTS) return;
+  const overflow = recentMessageResults.size - MAX_RECENT_MESSAGE_RESULTS;
+  const keys = recentMessageResults.keys();
+  for (let i = 0; i < overflow; i++) {
+    const { value, done } = keys.next();
+    if (done) break;
+    recentMessageResults.delete(value);
+  }
+}
+
+async function enqueueBySession(payload, task) {
+  const sessionKey = getSessionChainKey(payload);
+  const previous = sessionRequestChains.get(sessionKey) || Promise.resolve();
+
+  const current = previous
+    .catch(() => null)
+    .then(task);
+
+  sessionRequestChains.set(
+    sessionKey,
+    current.finally(() => {
+      if (sessionRequestChains.get(sessionKey) === current) {
+        sessionRequestChains.delete(sessionKey);
+      }
+    })
+  );
+  return current;
+}
+
 /* ═══════════════════ Connection Test ═══════════════════ */
 async function testConnection() {
   const settings = await getApiSettings();
@@ -118,12 +176,53 @@ async function testConnection() {
 
 /* ═══════════════════ Customer Message → AI Reply ═══════════════════ */
 async function handleCustomerMessage(payload) {
+  const dedupKey = buildMessageDedupKey(payload);
+  const now = Date.now();
+  cleanupRecentMessageResults(now);
+
+  if (!dedupKey) {
+    return enqueueBySession(payload, () => handleCustomerMessageDirect(payload));
+  }
+
+  const cached = recentMessageResults.get(dedupKey);
+  if (cached && (now - cached.ts) <= MESSAGE_DEDUP_TTL_MS) {
+    addLog('info', '命中消息去重缓存', dedupKey.slice(0, 96));
+    return cached.result;
+  }
+
+  const inflight = inflightMessageRequests.get(dedupKey);
+  if (inflight) {
+    addLog('info', '复用进行中的同消息请求', dedupKey.slice(0, 96));
+    return inflight;
+  }
+
+  const task = enqueueBySession(payload, () => handleCustomerMessageDirect(payload))
+    .then((result) => {
+      recentMessageResults.set(dedupKey, { ts: Date.now(), result });
+      cleanupRecentMessageResults();
+      return result;
+    })
+    .finally(() => {
+      if (inflightMessageRequests.get(dedupKey) === task) {
+        inflightMessageRequests.delete(dedupKey);
+      }
+    });
+
+  inflightMessageRequests.set(dedupKey, task);
+  return task;
+}
+
+async function handleCustomerMessageDirect(payload) {
   const settings = await getApiSettings();
   const body = {
     message: payload.message,
     session_id: payload.session_id,
+    message_id: payload.message_id || '',
     customer_info: payload.customer_info || {},
   };
+  if (payload.order_context && typeof payload.order_context === 'object') {
+    body.order_context = payload.order_context;
+  }
   if (settings.storeId) body.store_id = settings.storeId;
 
   const headers = { 'Content-Type': 'application/json' };
@@ -146,11 +245,17 @@ async function handleCustomerMessage(payload) {
 
       if (!response.ok) {
         const errText = await response.text().catch(() => '');
-        throw new Error(`HTTP ${response.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`);
+        const httpErr = new Error(`HTTP ${response.status}${errText ? `: ${errText.slice(0, 120)}` : ''}`);
+        httpErr.status = response.status;
+        if (response.status === 429) {
+          httpErr.code = 'SESSION_BUSY';
+        }
+        throw httpErr;
       }
       const data = await response.json();
       const payload = (data && typeof data.data === 'object' && data.data) ? data.data : data;
       const reply = payload.reply || data.reply || data.message || data.response || '';
+      const aiReplyId = payload.ai_reply_id || data.ai_reply_id || '';
       const errorCode = payload.error_code || data.error_code || '';
       const errorDetail = payload.error_detail || data.error_detail || '';
       const elapsed = Date.now() - t0;
@@ -169,21 +274,32 @@ async function handleCustomerMessage(payload) {
         return { success: false, error: '后台返回空回复，请稍后重试' };
       }
       addLog('success', `客服回复生成成功 (${elapsed}ms)`, reply.slice(0, 60));
-      return { success: true, reply, product_cards: payload.product_cards || [] };
+      return {
+        success: true,
+        reply,
+        ai_reply_id: aiReplyId || '',
+        product_cards: payload.product_cards || [],
+      };
     } catch (err) {
       clearTimeout(timeoutId);
       lastError = err;
 
       const isTimeout = err.name === 'AbortError';
+      const isSessionBusy = err?.code === 'SESSION_BUSY'
+        || err?.status === 429
+        || (err.message && err.message.includes('Session is busy'));
       const friendlyMsg = isTimeout
         ? `AI思考超时 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`
-        : `请求异常 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`;
+        : isSessionBusy
+          ? `会话排队中 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`
+          : `请求异常 (尝试 ${attempt + 1}/${MAX_RETRIES + 1})`;
       addLog('error', friendlyMsg, err.message);
 
       if (attempt < MAX_RETRIES) {
-        // 429 (session busy) → 等更久让前一个请求完成
-        const is429 = err.message && err.message.includes('429');
-        const delay = is429 ? 10000 : RETRY_DELAY_MS * (attempt + 1);
+        // 对 session busy 使用短退避，避免 UI 卡住 10s
+        const delay = isSessionBusy
+          ? Math.min(1200 * (attempt + 1), 3500)
+          : RETRY_DELAY_MS * (attempt + 1);
         addLog('info', `等待 ${delay}ms 后重试...`);
         await new Promise((r) => setTimeout(r, delay));
       }
@@ -192,11 +308,16 @@ async function handleCustomerMessage(payload) {
 
   addLog('error', '客服回复生成失败', lastError?.message || 'unknown');
   const isTimeout = lastError?.name === 'AbortError';
+  const isSessionBusy = lastError?.code === 'SESSION_BUSY'
+    || lastError?.status === 429
+    || (lastError?.message && lastError.message.includes('Session is busy'));
   return {
     success: false,
     error: isTimeout
       ? 'AI正在思考中，请稍候重试~'
-      : `服务暂时繁忙，请稍后重试 (${lastError?.message || '未知错误'})`,
+      : isSessionBusy
+        ? '当前会话正在处理上一条消息，请稍后 1-2 秒重试'
+        : `服务暂时繁忙，请稍后重试 (${lastError?.message || '未知错误'})`,
   };
 }
 
@@ -263,6 +384,7 @@ async function handleFeedback(payload) {
   const body = {
     session_id: payload.session_id || '',
     message_id: payload.message_id || '',
+    ai_reply_id: payload.ai_reply_id || '',
     rating,                                // "good" | "bad"
     original_reply: payload.original_reply || '',
     edited_reply: payload.edited_reply || '',

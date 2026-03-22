@@ -9,6 +9,8 @@
  */
 (function () {
   'use strict';
+  if (window.__AI_DIANZHANG_CS_LOADED__) return;
+  window.__AI_DIANZHANG_CS_LOADED__ = true;
 
   /* ═══════════════════ State ═══════════════════ */
   let enabled = true;
@@ -20,6 +22,20 @@
   const sessionData = {};
   // 所有待处理建议（跨 session 的优先队列）
   const pendingQueue = []; // [{ id, text, time, sessionId, customerName, ... }]
+  let activeSessionId = '';
+  let panelViewMode = 'active'; // 'active' | 'all'
+  let orderPanelCache = { sessionId: '', ts: 0, data: null };
+
+  const ORDER_PANEL_FIELD_ALIASES = {
+    order_id: ['单号', '订单号'],
+    payment_amount: ['顾客支付', '支付金额', '实付金额'],
+    delivery_status: ['配送状态', '物流状态'],
+    rider: ['骑手', '配送员'],
+    order_time: ['下单时间', '下单时'],
+    customer: ['顾客', '买家', '收货人'],
+    address: ['收货地', '收货地址', '地址'],
+    store: ['门店', '店铺'],
+  };
 
   /* ═══════════════════ Session Helpers ═══════════════════ */
   function getSession(sessionId) {
@@ -101,6 +117,54 @@
       }
     }
     return '';
+  }
+
+  function isLikelySystemPayloadText(text) {
+    if (!text || typeof text !== 'string') return false;
+    const trimmed = text.trim();
+    if (!trimmed) return true;
+    if (
+      trimmed.includes('"systemEventType"')
+      || trimmed.includes('systemEventType')
+      || trimmed.includes('"eventType":"system"')
+      || trimmed.includes('用户与客服会话已结束')
+    ) {
+      return true;
+    }
+    if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+      const systemKeys = ['systemEventType', 'eventType', 'dialogStatus', 'sessionStatus'];
+      let hit = 0;
+      for (const key of systemKeys) {
+        if (trimmed.includes(`"${key}"`) || trimmed.includes(`${key}:`)) hit++;
+      }
+      if (hit >= 1) return true;
+    }
+    return false;
+  }
+
+  function getPendingTotal() {
+    return Object.values(sessionData).reduce((sum, s) => sum + (s.pendingCount || 0), 0);
+  }
+
+  function getSessionPending(sessionId) {
+    const session = sessionData[sessionId];
+    if (!session) return 0;
+    return session.replies.filter((r) => r.status === 'pending').length;
+  }
+
+  function resolveDisplaySessionId() {
+    if (panelViewMode === 'all') return '';
+    if (activeSessionId && sessionData[activeSessionId]) return activeSessionId;
+    let bestSid = '';
+    let bestTs = 0;
+    for (const [sid, data] of Object.entries(sessionData)) {
+      const ts = data.lastActivity || 0;
+      if (ts > bestTs) {
+        bestTs = ts;
+        bestSid = sid;
+      }
+    }
+    return bestSid;
   }
 
   function normalizeSessionId(rawSessionId, fallbackSeed = '') {
@@ -187,6 +251,158 @@
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
+  function sanitizePanelText(text, maxLen = 1200) {
+    if (!text || typeof text !== 'string') return '';
+    const normalized = text
+      .replace(/\u00a0/g, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    if (!normalized) return '';
+    return normalized.slice(0, maxLen);
+  }
+
+  function countOrderPanelMarkers(text) {
+    const markers = ['顾客支付', '配送状态', '下单时间', '收货地', '单号', '拣货指引'];
+    let hit = 0;
+    for (const marker of markers) {
+      if (text.includes(marker)) hit++;
+    }
+    return hit;
+  }
+
+  function findOrderPanelRoot() {
+    const candidates = document.querySelectorAll('aside,section,div');
+    let best = null;
+    let bestScore = -1;
+    let seen = 0;
+
+    for (const el of candidates) {
+      seen++;
+      if (seen > 1200) break;
+      if (!el || !(el instanceof HTMLElement)) continue;
+      if (el.offsetParent === null) continue;
+
+      const rect = el.getBoundingClientRect();
+      if (rect.width < 200 || rect.height < 140) continue;
+      if (rect.right < window.innerWidth * 0.55) continue;
+
+      const text = sanitizePanelText(el.innerText || '', 2000);
+      if (text.length < 80 || text.length > 3500) continue;
+
+      const markerScore = countOrderPanelMarkers(text);
+      if (markerScore < 2) continue;
+
+      const areaScore = Math.min(rect.width * rect.height, 500000) / 100000;
+      const score = markerScore * 10 + areaScore;
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+    return best;
+  }
+
+  function stripLabelPrefix(text, label) {
+    if (!text || !label) return '';
+    let cleaned = text.trim();
+    if (cleaned.startsWith(label)) {
+      cleaned = cleaned.slice(label.length).trim();
+      cleaned = cleaned.replace(/^[:：]/, '').trim();
+    }
+    return cleaned;
+  }
+
+  function isLikelyFieldValue(value, label) {
+    if (!value) return false;
+    if (value === label) return false;
+    if (value.length > 200) return false;
+    return true;
+  }
+
+  function extractFieldByAlias(root, aliases) {
+    const nodes = root.querySelectorAll('div,span,p,li,td,th,strong,b,label');
+    for (const node of nodes) {
+      const raw = sanitizePanelText(node.textContent || '', 260);
+      if (!raw) continue;
+      for (const alias of aliases) {
+        if (!raw.includes(alias)) continue;
+
+        const inlineValue = stripLabelPrefix(raw, alias);
+        if (isLikelyFieldValue(inlineValue, alias)) return inlineValue;
+
+        const nextText = sanitizePanelText(node.nextElementSibling?.textContent || '', 260);
+        if (isLikelyFieldValue(nextText, alias)) return nextText;
+
+        const parentText = sanitizePanelText(node.parentElement?.textContent || '', 260);
+        const parentValue = stripLabelPrefix(parentText, alias);
+        if (isLikelyFieldValue(parentValue, alias)) return parentValue;
+      }
+    }
+    return '';
+  }
+
+  function extractOrderItems(root) {
+    const items = [];
+    const rows = root.querySelectorAll('tr');
+    for (const row of rows) {
+      if (items.length >= 6) break;
+      const cells = Array.from(row.querySelectorAll('td'))
+        .map((cell) => sanitizePanelText(cell.textContent || '', 120))
+        .filter(Boolean);
+      if (cells.length === 0) continue;
+      const name = cells[0];
+      if (!name || name.includes('商品') || name.includes('子商品')) continue;
+      items.push({
+        name,
+        spec: cells[1] || '',
+        quantity: cells[2] || '',
+      });
+    }
+    return items;
+  }
+
+  function collectOrderPanelContext(sessionId) {
+    if (!sessionId) return null;
+    const now = Date.now();
+    if (
+      orderPanelCache.data
+      && orderPanelCache.sessionId === sessionId
+      && now - orderPanelCache.ts < 4000
+    ) {
+      return orderPanelCache.data;
+    }
+
+    const root = findOrderPanelRoot();
+    if (!root) return null;
+
+    const rawText = sanitizePanelText(root.innerText || '', 1200);
+    if (!rawText) return null;
+
+    const fields = {};
+    for (const [field, aliases] of Object.entries(ORDER_PANEL_FIELD_ALIASES)) {
+      const value = extractFieldByAlias(root, aliases);
+      if (value) fields[field] = value;
+    }
+    const items = extractOrderItems(root);
+
+    if (Object.keys(fields).length === 0 && items.length === 0 && rawText.length < 160) {
+      return null;
+    }
+
+    const context = {
+      source: 'extension_order_panel',
+      collected_at: new Date().toISOString(),
+      active_session_id: activeSessionId || '',
+      likely_session_match: activeSessionId ? activeSessionId === sessionId : null,
+      fields,
+      items,
+      raw_text: rawText,
+    };
+    orderPanelCache = { sessionId, ts: now, data: context };
+    return context;
+  }
+
   /* ═══════════════════ Inject ═══════════════════ */
   function injectScript() {
     const s = document.createElement('script');
@@ -218,6 +434,7 @@
 
     const customerMsg = extractCustomerMessage(data, sessionId);
     if (customerMsg && !processedMessages.has(customerMsg.id)) {
+      if (isLikelySystemPayloadText(customerMsg.text)) return;
       processedMessages.add(customerMsg.id);
       trimProcessed();
       const name = extractCustomerName(data);
@@ -267,6 +484,7 @@
       const msgId = data.uuid || data.mid || generateLocalId('mtdx');
       const text = extractMTDXContent(data);
 
+      if (isLikelySystemPayloadText(text)) return;
       if (!text || processedMessages.has(msgId)) return;
       processedMessages.add(msgId);
       trimProcessed();
@@ -314,10 +532,15 @@
     if (type === 'session_item') {
       // session-item 包含 customerInfo
       const sid = data.sessionId || '';
-      if (sid && data.customerInfo) {
+      if (sid) {
         const session = getSession(sid);
-        const name = data.customerInfo.nickname || data.customerInfo.name || '';
-        if (name) session.customerName = name;
+        activeSessionId = sid;
+        orderPanelCache = { sessionId: '', ts: 0, data: null };
+        if (data.customerInfo) {
+          const name = data.customerInfo.nickname || data.customerInfo.name || '';
+          if (name) session.customerName = name;
+        }
+        renderReplies();
       }
     }
 
@@ -379,6 +602,47 @@
    * MTDX 消息 content 可能是字符串或 JSON 字符串
    */
   function extractMTDXContent(msg) {
+    function pullTextFromObject(obj) {
+      if (!obj || typeof obj !== 'object') return '';
+      const candidates = [];
+      for (const key of ['text', 'content', 'msg', 'plain', 'richText', 'summary']) {
+        if (typeof obj[key] === 'string' && obj[key].trim()) {
+          candidates.push(obj[key].trim());
+        }
+      }
+      const cardParts = [];
+      for (const key of ['title', 'subTitle', 'name', 'goodsName', 'productName', 'description', 'desc', 'skuName']) {
+        if (typeof obj[key] === 'string' && obj[key].trim()) {
+          cardParts.push(obj[key].trim());
+        }
+      }
+      for (const key of ['price', 'currentPrice', 'salePrice']) {
+        if (typeof obj[key] === 'string' && obj[key].trim()) {
+          cardParts.push(`价格${obj[key].trim()}`);
+        } else if (typeof obj[key] === 'number') {
+          cardParts.push(`价格${obj[key]}`);
+        }
+      }
+      for (const key of ['imageUrl', 'imgUrl', 'picUrl', 'thumbUrl', 'url']) {
+        if (typeof obj[key] === 'string' && /^https?:\/\//i.test(obj[key].trim())) {
+          candidates.push(`[图片地址] ${obj[key].trim().slice(0, 180)}`);
+          break;
+        }
+      }
+      if (cardParts.length > 0) {
+        candidates.push(`[商品卡片] ${cardParts.slice(0, 4).join('，')}`);
+      }
+      if (candidates.length > 0) return candidates[0];
+
+      for (const nestedKey of ['item', 'goods', 'product', 'card', 'payload', 'ext']) {
+        if (obj[nestedKey] && typeof obj[nestedKey] === 'object') {
+          const nested = pullTextFromObject(obj[nestedKey]);
+          if (nested) return nested;
+        }
+      }
+      return '';
+    }
+
     // ── 1. 直接文本字段 ──
     for (const key of ['content', 'text', 'msg', 'message', 'plain']) {
       if (typeof msg[key] === 'string' && msg[key].trim()) {
@@ -390,6 +654,8 @@
           if (parsed.text) return parsed.text;
           if (parsed.content) return parsed.content;
           if (parsed.msg) return parsed.msg;
+          const parsedText = pullTextFromObject(parsed);
+          if (parsedText) return parsedText;
         } catch (_) {}
         return val;
       }
@@ -404,10 +670,8 @@
       }
       if (typeof body === 'string' && body.trim()) return body.trim();
       if (typeof body === 'object') {
-        // 提取 body 内的文本
-        for (const key of ['text', 'content', 'msg', 'plain', 'richText', 'summary']) {
-          if (typeof body[key] === 'string' && body[key].trim()) return body[key].trim();
-        }
+        const bodyText = pullTextFromObject(body);
+        if (bodyText) return bodyText;
         // 系统消息（状态变更等）跳过
         if (body.eType || body.type === 'system') return '';
       }
@@ -417,7 +681,7 @@
     if (typeof msg.data === 'string' && msg.data.trim()) {
       try {
         const parsed = JSON.parse(msg.data);
-        return parsed.content || parsed.text || parsed.msg || parsed.summary || '';
+        return parsed.content || parsed.text || parsed.msg || parsed.summary || pullTextFromObject(parsed) || '';
       } catch (_) {}
       return msg.data.trim();
     }
@@ -427,6 +691,8 @@
       try {
         const ext = JSON.parse(msg.extension);
         if (ext.text || ext.content) return ext.text || ext.content;
+        const extText = pullTextFromObject(ext);
+        if (extText) return extText;
       } catch (_) {}
     }
 
@@ -434,10 +700,16 @@
     if (typeof msg.summary === 'string' && msg.summary.trim()) return msg.summary.trim();
 
     // ── 6. 已知非文本消息类型 ──
-    // type 12 = 状态变更/卡片, type 3 = 图片
-    if (msg.type === 12) return ''; // 状态变更，不触发 AI
-    if (msg.type === 3) return '[图片消息]';
-    if (msg.type === 4) return '[图片消息]';
+    // type 12 = 卡片/系统，尽量抽取摘要；type 3/4 = 图片
+    if (msg.type === 12) {
+      const cardText = pullTextFromObject(msg);
+      if (cardText) return cardText;
+      return '[卡片消息]';
+    }
+    if (msg.type === 3 || msg.type === 4) {
+      const imageHint = pullTextFromObject(msg);
+      return imageHint ? `[图片消息] ${imageHint}` : '[图片消息]';
+    }
 
     return '';
   }
@@ -640,6 +912,8 @@
     sendFeedback({
       session_id: sessionId || '',
       message_id: suggestion.messageId || '',
+      ai_reply_id: suggestion.aiReplyId || '',
+      rating: 'bad',
       action: 'edited',
       original_reply: suggestion.text,
       edited_reply: '',
@@ -677,15 +951,27 @@
     const session = getSession(sessionId);
     const customerLabel = session.customerName || sessionId.slice(0, 10) || '客户';
     updatePanel('thinking', `🤔 [${customerLabel}] "${text.slice(0, 20)}..."`);
+    const customerInfo = (msg.customerInfo && typeof msg.customerInfo === 'object')
+      ? { ...msg.customerInfo }
+      : {};
+    if (!customerInfo.nickname && session.customerName) {
+      customerInfo.nickname = session.customerName;
+    }
+    const orderContext = collectOrderPanelContext(sessionId);
+    const payload = {
+      message: text,
+      session_id: sessionId,
+      message_id: msg.id || '',
+      customer_info: customerInfo,
+    };
+    if (orderContext) {
+      payload.order_context = orderContext;
+    }
 
     chrome.runtime.sendMessage(
       {
         type: 'CUSTOMER_MESSAGE',
-        payload: {
-          message: text,
-          session_id: sessionId,
-          customer_info: msg.customerInfo,
-        },
+        payload,
       },
       (response) => {
         if (chrome.runtime.lastError) {
@@ -693,7 +979,7 @@
           return;
         }
         if (response?.success && response.reply) {
-          handleAIReply(response.reply, sessionId, msg.id);
+          handleAIReply(response.reply, sessionId, msg.id, response.ai_reply_id || '');
         } else {
           updatePanel('error', response?.error || '未知错误');
         }
@@ -729,9 +1015,16 @@
   }
 
   /* ═══════════════════ AI Reply Handler ═══════════════════ */
-  function handleAIReply(reply, sessionId, messageId) {
+  function handleAIReply(reply, sessionId, messageId, aiReplyId = '') {
     const session = getSession(sessionId);
     const customerLabel = session.customerName || sessionId?.slice(0, 10) || '客户';
+    if (messageId) {
+      const duplicated = session.replies.find((item) => item.messageId === messageId);
+      if (duplicated) {
+        updatePanel('connected', `🔁 [${customerLabel}] 已复用同消息建议`);
+        return;
+      }
+    }
 
     const replyObj = {
       id: `reply-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -739,9 +1032,12 @@
       time: new Date().toLocaleTimeString(),
       sessionId: sessionId || '',
       messageId: messageId || '',
+      aiReplyId: aiReplyId || '',
       customerName: customerLabel,
+      createdAt: Date.now(),
       status: 'pending',
       editedText: '',
+      feedbackRating: '',
     };
 
     addReplyToSession(sessionId, replyObj);
@@ -763,6 +1059,7 @@
       sendFeedback({
         session_id: sessionId,
         message_id: messageId,
+        ai_reply_id: aiReplyId || '',
         rating: 'good',
         action: 'adopted',
         original_reply: reply,
@@ -825,6 +1122,11 @@
   let isMinimized = false;
 
   function createPanel() {
+    const existing = document.getElementById('ai-dianzhang-panel');
+    if (existing) {
+      panel = existing;
+      return;
+    }
     panel = document.createElement('div');
     panel.id = 'ai-dianzhang-panel';
 
@@ -848,9 +1150,17 @@
             <option value="auto-send">🚀 全自动模式</option>
           </select>
         </div>
+        <div class="aidz-view-controls" id="aidz-view-controls">
+          <button id="aidz-view-active" class="aidz-view-btn active" data-view="active">当前会话</button>
+          <button id="aidz-view-all" class="aidz-view-btn" data-view="all">全部会话</button>
+        </div>
+        <div class="aidz-session-tabs" id="aidz-session-tabs"></div>
         <div class="aidz-info" id="aidz-info">就绪 — 等待客户消息</div>
-        <div class="aidz-replies" id="aidz-replies">
-          <div class="aidz-empty">暂无 AI 建议</div>
+        <div class="aidz-main">
+          <div class="aidz-session-rail" id="aidz-session-rail"></div>
+          <div class="aidz-replies" id="aidz-replies">
+            <div class="aidz-empty">暂无 AI 建议</div>
+          </div>
         </div>
       </div>
     `;
@@ -890,6 +1200,10 @@
       updateModeBadge();
     });
 
+    document.getElementById('aidz-view-active').addEventListener('click', () => setPanelViewMode('active'));
+    document.getElementById('aidz-view-all').addEventListener('click', () => setPanelViewMode('all'));
+    panel.addEventListener('click', handleReplyAction);
+
     document.getElementById('aidz-minimize').addEventListener('click', () => {
       isMinimized = !isMinimized;
       const body = document.getElementById('aidz-body');
@@ -915,8 +1229,168 @@
         mode = s.mode;
         document.getElementById('aidz-mode').value = mode;
       }
+      setPanelViewMode('all');
       updateModeBadge();
     });
+  }
+
+  function setPanelViewMode(view) {
+    panelViewMode = view === 'active' ? 'active' : 'all';
+    const activeBtn = document.getElementById('aidz-view-active');
+    const allBtn = document.getElementById('aidz-view-all');
+    if (activeBtn) activeBtn.classList.toggle('active', panelViewMode === 'active');
+    if (allBtn) allBtn.classList.toggle('active', panelViewMode === 'all');
+    renderReplies();
+  }
+
+  function getSessionDisplayLabel(sessionId) {
+    const data = sessionData[sessionId];
+    const name = (data && data.customerName) || '';
+    if (name) return name;
+    return sessionId ? sessionId.slice(0, 12) : '未知会话';
+  }
+
+  function composePanelInfo() {
+    const totalPending = getPendingTotal();
+    if (totalPending <= 0) return '就绪 — 暂无待处理建议';
+    const sid = resolveDisplaySessionId();
+    if (!sid || panelViewMode === 'all') {
+      return `当前有 ${totalPending} 条建议，按会话分组展示`;
+    }
+    const currentPending = getSessionPending(sid);
+    const otherPending = Math.max(0, totalPending - currentPending);
+    const label = getSessionDisplayLabel(sid);
+    if (otherPending > 0) {
+      return `[${label}] ${currentPending}条待处理；其他会话 ${otherPending} 条`;
+    }
+    return `[${label}] ${currentPending}条待处理`;
+  }
+
+  function decodeSessionKey(sessionKey) {
+    if (!sessionKey || typeof sessionKey !== 'string') return '';
+    try {
+      return decodeURIComponent(sessionKey);
+    } catch (_) {
+      return sessionKey;
+    }
+  }
+
+  function getRenderableSessions() {
+    return Object.entries(sessionData)
+      .filter(([sid, data]) => {
+        if (!data) return false;
+        const hasReplies = Array.isArray(data.replies) && data.replies.length > 0;
+        const hasPending = getSessionPending(sid) > 0;
+        const isActive = sid === activeSessionId;
+        return hasReplies || hasPending || isActive;
+      })
+      .sort((a, b) => {
+        const ap = getSessionPending(a[0]);
+        const bp = getSessionPending(b[0]);
+        if (bp !== ap) return bp - ap;
+        return (b[1].lastActivity || 0) - (a[1].lastActivity || 0);
+      });
+  }
+
+  function getRailSessions() {
+    return Object.entries(sessionData)
+      .filter(([sid, data]) => {
+        if (!data) return false;
+        const hasReplies = Array.isArray(data.replies) && data.replies.length > 0;
+        const hasPending = getSessionPending(sid) > 0;
+        const isActive = sid === activeSessionId;
+        const isRecent = (Date.now() - (data.lastActivity || 0)) < 60 * 60 * 1000;
+        return hasReplies || hasPending || isActive || isRecent;
+      })
+      .sort((a, b) => {
+        const ap = getSessionPending(a[0]);
+        const bp = getSessionPending(b[0]);
+        if (bp !== ap) return bp - ap;
+        return (b[1].lastActivity || 0) - (a[1].lastActivity || 0);
+      });
+  }
+
+  function renderSessionTabs() {
+    const tabsEl = document.getElementById('aidz-session-tabs');
+    if (!tabsEl) return;
+
+    const entries = getRailSessions().slice(0, 8);
+
+    if (entries.length === 0) {
+      tabsEl.innerHTML = '';
+      return;
+    }
+
+    const allBtnClass = panelViewMode === 'all' ? ' active' : '';
+    const allCount = getPendingTotal();
+
+    const parts = [
+      `
+        <button class="aidz-session-chip${allBtnClass}" data-action="show-all" title="全部会话">
+          <span class="aidz-session-chip-label">全部</span>
+          ${allCount > 0 ? `<span class="aidz-session-chip-count">${allCount}</span>` : ''}
+        </button>
+      `,
+    ];
+
+    entries.forEach(([sid]) => {
+      const label = escapeHtml(getSessionDisplayLabel(sid));
+      const pending = getSessionPending(sid);
+      const activeClass = panelViewMode === 'active' && sid === activeSessionId ? ' active' : '';
+      parts.push(`
+        <button
+          class="aidz-session-chip${activeClass}"
+          data-action="switch-session"
+          data-session-key="${encodeURIComponent(sid)}"
+          title="${escapeHtml(sid)}"
+        >
+          <span class="aidz-session-chip-label">${label}</span>
+          ${pending > 0 ? `<span class="aidz-session-chip-count">${pending}</span>` : ''}
+        </button>
+      `);
+    });
+
+    tabsEl.innerHTML = parts.join('');
+  }
+
+  function renderSessionRail(entries) {
+    const railEl = document.getElementById('aidz-session-rail');
+    if (!railEl) return;
+
+    if (!entries || entries.length === 0) {
+      railEl.innerHTML = '<div class="aidz-session-rail-empty">暂无会话</div>';
+      return;
+    }
+
+    const totalPending = getPendingTotal();
+    const allClass = panelViewMode === 'all' ? ' active' : '';
+    const items = [
+      `
+        <button class="aidz-session-rail-item${allClass}" data-action="show-all">
+          <span class="aidz-session-rail-name">全部会话</span>
+          <span class="aidz-session-rail-count">${totalPending}</span>
+        </button>
+      `,
+    ];
+
+    entries.slice(0, 20).forEach(([sid]) => {
+      const pending = getSessionPending(sid);
+      const label = escapeHtml(getSessionDisplayLabel(sid));
+      const activeClass = panelViewMode === 'active' && sid === activeSessionId ? ' active' : '';
+      items.push(`
+        <button
+          class="aidz-session-rail-item${activeClass}"
+          data-action="switch-session"
+          data-session-key="${encodeURIComponent(sid)}"
+          title="${escapeHtml(sid)}"
+        >
+          <span class="aidz-session-rail-name">${label}</span>
+          <span class="aidz-session-rail-count">${pending}</span>
+        </button>
+      `);
+    });
+
+    railEl.innerHTML = `<div class="aidz-session-rail-list">${items.join('')}</div>`;
   }
 
   function updateModeBadge() {
@@ -936,7 +1410,7 @@
     // 更新活跃会话数
     if (countEl) {
       const activeCount = Object.keys(sessionData).length;
-      const pendingTotal = Object.values(sessionData).reduce((sum, s) => sum + s.pendingCount, 0);
+      const pendingTotal = getPendingTotal();
       countEl.textContent = pendingTotal > 0 ? `📋 ${activeCount}会话 · ${pendingTotal}待处理` : `📋 ${activeCount}会话`;
     }
   }
@@ -949,79 +1423,152 @@
   }
 
   /* ═══════════════════ Render Reply Cards (跨 session) ═══════════════════ */
+  function renderReplyCard(r) {
+    const statusClass = r.status === 'adopted' ? 'aidz-adopted'
+      : r.status === 'ignored' ? 'aidz-ignored' : '';
+    const isActioned = r.status !== 'pending';
+    const statusColors = { adopted: '#4caf50', edited: '#1976d2', ignored: '#999' };
+    const label = r.customerName || r.sessionId?.slice(0, 8) || '未知';
+    const feedbackText = r.feedbackRating === 'good'
+      ? '👍 已好评'
+      : r.feedbackRating === 'bad'
+        ? '👎 已差评'
+        : '';
+    const actionButtons = isActioned
+      ? `<span class="aidz-action-btn aidz-btn-disabled" style="cursor: default;">${statusLabel(r.status)}</span>
+         <span class="aidz-action-spacer"></span>
+         ${feedbackText ? `<span class="aidz-action-btn aidz-btn-disabled" style="cursor: default;">${feedbackText}</span>` : ''}`
+      : `<button class="aidz-action-btn aidz-btn-adopt"
+                  data-action="adopt" data-id="${r.id}">✅ 采纳</button>
+         <button class="aidz-action-btn aidz-btn-edit"
+                  data-action="edit" data-id="${r.id}">✏️ 编辑</button>
+         <button class="aidz-action-btn aidz-btn-ignore"
+                  data-action="ignore" data-id="${r.id}">❌ 忽略</button>
+         <span class="aidz-action-spacer"></span>
+         <button class="aidz-action-btn aidz-btn-feedback aidz-fb-good"
+                  data-action="feedback-good" data-id="${r.id}" title="好评">👍</button>
+         <button class="aidz-action-btn aidz-btn-feedback aidz-fb-bad"
+                  data-action="feedback-bad" data-id="${r.id}" title="差评">👎</button>`;
+
+    return `
+      <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
+        <div class="aidz-reply-session-tag" title="${escapeHtml(r.sessionId || '')}">👤 ${escapeHtml(label)}</div>
+        <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
+        <div class="aidz-reply-meta">
+          <span>⏱ ${r.time}</span>
+          ${r.status !== 'pending' ? `<span style="color: ${statusColors[r.status] || '#999'}">● ${statusLabel(r.status)}</span>` : ''}
+        </div>
+        <div class="aidz-reply-actions">
+          ${actionButtons}
+        </div>
+        <div class="aidz-edit-area" id="edit-area-${r.id}">
+          <textarea class="aidz-edit-textarea" id="edit-text-${r.id}">${escapeHtml(r.text)}</textarea>
+          <div class="aidz-edit-actions">
+            <button class="aidz-edit-btn cancel" data-action="edit-cancel" data-id="${r.id}">取消</button>
+            <button class="aidz-edit-btn confirm" data-action="edit-confirm" data-id="${r.id}">使用修改版</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   function renderReplies() {
     const container = document.getElementById('aidz-replies');
     if (!container) return;
+    const entries = getRenderableSessions();
+    const railEntries = getRailSessions();
+    renderSessionTabs();
+    renderSessionRail(railEntries);
 
-    // 收集所有 session 的待处理 + 最近回复，按时间排序
-    const allReplies = [];
-    for (const [sid, data] of Object.entries(sessionData)) {
-      for (const r of data.replies.slice(0, 5)) {
-        allReplies.push(r);
-      }
-    }
-    // 按时间倒序（最新的在上面）
-    allReplies.sort((a, b) => {
-      const ta = new Date(`1970-01-01T${a.time}`).getTime() || 0;
-      const tb = new Date(`1970-01-01T${b.time}`).getTime() || 0;
-      return tb - ta;
-    });
-
-    const display = allReplies.slice(0, 10);
-
-    if (display.length === 0) {
+    if (entries.length === 0) {
       container.innerHTML = '<div class="aidz-empty">暂无 AI 建议</div>';
+      updatePanel('connected', composePanelInfo());
       return;
     }
 
-    container.innerHTML = display.map((r) => {
-      const statusClass = r.status === 'adopted' ? 'aidz-adopted'
-        : r.status === 'ignored' ? 'aidz-ignored' : '';
-      const isActioned = r.status !== 'pending';
-      const statusColors = { adopted: '#4caf50', edited: '#1976d2', ignored: '#999' };
-      const label = r.customerName || r.sessionId?.slice(0, 8) || '未知';
+    if (!activeSessionId || !sessionData[activeSessionId]) {
+      activeSessionId = entries[0][0];
+    }
 
-      return `
-        <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
-          <div class="aidz-reply-session-tag" title="${r.sessionId}">👤 ${escapeHtml(label)}</div>
-          <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
-          <div class="aidz-reply-meta">
-            <span>⏱ ${r.time}</span>
-            ${r.status !== 'pending' ? `<span style="color: ${statusColors[r.status] || '#999'}">● ${statusLabel(r.status)}</span>` : ''}
+    if (panelViewMode === 'active') {
+      const sid = activeSessionId;
+      const session = sessionData[sid];
+      if (!session || !Array.isArray(session.replies)) {
+        panelViewMode = 'all';
+        renderReplies();
+        return;
+      }
+
+      const replies = [...session.replies]
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, 20);
+
+      container.innerHTML = `
+        <div class="aidz-session-group">
+          <div class="aidz-session-group-header">
+            <span class="aidz-session-group-title">${escapeHtml(getSessionDisplayLabel(sid))}</span>
+            <span class="aidz-session-group-meta">${getSessionPending(sid)} 待处理</span>
+            <button class="aidz-link-btn" data-action="show-all">查看全部</button>
           </div>
-          <div class="aidz-reply-actions">
-            <button class="aidz-action-btn aidz-btn-adopt ${isActioned ? 'aidz-btn-disabled' : ''}"
-                    data-action="adopt" data-id="${r.id}" ${isActioned ? 'disabled' : ''}>✅ 采纳</button>
-            <button class="aidz-action-btn aidz-btn-edit ${isActioned ? 'aidz-btn-disabled' : ''}"
-                    data-action="edit" data-id="${r.id}" ${isActioned ? 'disabled' : ''}>✏️ 编辑</button>
-            <button class="aidz-action-btn aidz-btn-ignore ${isActioned ? 'aidz-btn-disabled' : ''}"
-                    data-action="ignore" data-id="${r.id}" ${isActioned ? 'disabled' : ''}>❌ 忽略</button>
-            <span class="aidz-action-spacer"></span>
-            <button class="aidz-action-btn aidz-btn-feedback aidz-fb-good"
-                    data-action="feedback-good" data-id="${r.id}" title="好评">👍</button>
-            <button class="aidz-action-btn aidz-btn-feedback aidz-fb-bad"
-                    data-action="feedback-bad" data-id="${r.id}" title="差评">👎</button>
-          </div>
-          <div class="aidz-edit-area" id="edit-area-${r.id}">
-            <textarea class="aidz-edit-textarea" id="edit-text-${r.id}">${escapeHtml(r.text)}</textarea>
-            <div class="aidz-edit-actions">
-              <button class="aidz-edit-btn cancel" data-action="edit-cancel" data-id="${r.id}">取消</button>
-              <button class="aidz-edit-btn confirm" data-action="edit-confirm" data-id="${r.id}">使用修改版</button>
-            </div>
+          <div class="aidz-session-group-cards">
+            ${replies.length > 0 ? replies.map(renderReplyCard).join('') : '<div class="aidz-empty">该会话暂无 AI 建议</div>'}
           </div>
         </div>
       `;
-    }).join('');
+    } else {
+      const groups = entries.slice(0, 10).map(([sid, data]) => {
+        const pending = getSessionPending(sid);
+        const replies = [...data.replies]
+          .sort((a, b) => {
+            const ap = a.status === 'pending' ? 1 : 0;
+            const bp = b.status === 'pending' ? 1 : 0;
+            if (bp !== ap) return bp - ap;
+            return (b.createdAt || 0) - (a.createdAt || 0);
+          })
+          .slice(0, 4);
+        const cardsHtml = replies.length > 0
+          ? replies.map(renderReplyCard).join('')
+          : '<div class="aidz-empty">暂无 AI 建议</div>';
 
-    container.onclick = handleReplyAction;
-    updatePanel('connected', '');
+        return `
+          <div class="aidz-session-group">
+            <div class="aidz-session-group-header">
+              <span class="aidz-session-group-title">${escapeHtml(getSessionDisplayLabel(sid))}</span>
+              <span class="aidz-session-group-meta">${pending} 待处理</span>
+              <button class="aidz-link-btn" data-action="switch-session" data-session-key="${encodeURIComponent(sid)}">查看会话</button>
+            </div>
+            <div class="aidz-session-group-cards">
+              ${cardsHtml}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = groups || '<div class="aidz-empty">暂无 AI 建议</div>';
+    }
+
+    updatePanel('connected', composePanelInfo());
   }
 
   function handleReplyAction(e) {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
     const action = btn.dataset.action;
+    if (action === 'show-all') {
+      setPanelViewMode('all');
+      return;
+    }
+    if (action === 'switch-session') {
+      const sid = decodeSessionKey(btn.dataset.sessionKey || '');
+      if (!sid) return;
+      activeSessionId = sid;
+      setPanelViewMode('active');
+      return;
+    }
+
     const id = btn.dataset.id;
+    if (!id) return;
+
     let reply = null;
     for (const sid of Object.keys(sessionData)) {
       reply = sessionData[sid].replies.find((r) => r.id === id);
@@ -1042,6 +1589,7 @@
 
   function adoptReply(reply) {
     reply.status = 'adopted';
+    reply.feedbackRating = 'good';
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     fillReplyInput(reply.editedText || reply.text);
@@ -1050,6 +1598,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
+      ai_reply_id: reply.aiReplyId || '',
       rating: 'good', action: 'adopted',
       original_reply: reply.text,
       edited_reply: reply.editedText || '',
@@ -1080,6 +1629,7 @@
     if (!editedText) return;
     reply.editedText = editedText;
     reply.status = 'edited';
+    reply.feedbackRating = 'good';
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     fillReplyInput(editedText);
@@ -1088,6 +1638,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
+      ai_reply_id: reply.aiReplyId || '',
       rating: 'good', action: 'edited',
       original_reply: reply.text,
       edited_reply: editedText,
@@ -1097,6 +1648,7 @@
 
   function ignoreReply(reply) {
     reply.status = 'ignored';
+    reply.feedbackRating = 'bad';
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     renderReplies(); // UI 立刻更新，不等 feedback
@@ -1105,6 +1657,7 @@
       sendFeedback({
         session_id: reply.sessionId,
         message_id: reply.messageId,
+        ai_reply_id: reply.aiReplyId || '',
         rating: 'bad', action: 'ignored',
         original_reply: reply.text,
         edited_reply: '', actual_reply: '',
@@ -1113,6 +1666,7 @@
   }
 
   function sendReplyFeedback(reply, type, btn) {
+    reply.feedbackRating = type;
     btn.classList.add('active');
     btn.disabled = true;
     const card = btn.closest('.aidz-reply-card');
@@ -1124,6 +1678,7 @@
     sendFeedback({
       session_id: reply.sessionId,
       message_id: reply.messageId,
+      ai_reply_id: reply.aiReplyId || '',
       rating: type,
       action: reply.status === 'pending' ? '' : reply.status,
       original_reply: reply.text,
