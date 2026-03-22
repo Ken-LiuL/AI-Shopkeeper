@@ -164,6 +164,44 @@ def _tool_schema_to_json_instruction(tool: dict) -> str:
     return "\n".join(lines)
 
 
+def _strip_markdown_fence(raw: str) -> str:
+    """去掉 markdown 代码块包裹，保留 JSON 主体。"""
+    text = (raw or "").strip()
+    if not text.startswith("```"):
+        return text
+    text = text.split("\n", 1)[-1].strip()
+    if text.endswith("```"):
+        text = text[:-3].strip()
+    return text
+
+
+def _try_parse_json_dict(raw: str) -> dict[str, Any] | None:
+    """尽可能从模型输出中提取 JSON object。"""
+    text = _strip_markdown_fence(raw)
+    if not text:
+        return None
+
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+    except Exception:
+        pass
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidate = text[start : end + 1]
+        try:
+            parsed = json.loads(candidate)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            return None
+    return None
+
+
 async def _call_openrouter(
     prompt: str | list[dict],
     tool: dict,
@@ -210,14 +248,8 @@ async def _call_openrouter(
 
         choice = response.choices[0]
         raw_content = choice.message.content or "{}"
-        # 容错：去掉可能的 markdown 包裹
-        raw_content = raw_content.strip()
-        if raw_content.startswith("```"):
-            raw_content = raw_content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-
-        try:
-            result = json.loads(raw_content)
-        except json.JSONDecodeError:
+        result = _try_parse_json_dict(raw_content)
+        if result is None:
             logger.warning(f"JSON mode parse failed, falling back to tool_choice. Raw: {raw_content[:200]}")
             # fallback 到 tool_choice 模式
             return await _call_openrouter_tool_choice(prompt, tool, model, max_tokens, system)
@@ -269,12 +301,48 @@ async def _call_openrouter_tool_choice(
             raise ValueError(f"LLM call timeout after 120s (model={model})") from None
 
         choice = response.choices[0]
+        input_tokens = response.usage.prompt_tokens if response.usage else 0
+        output_tokens = response.usage.completion_tokens if response.usage else 0
         if choice.message.tool_calls:
             tc = choice.message.tool_calls[0]
-            result = json.loads(tc.function.arguments)
-            input_tokens = response.usage.prompt_tokens if response.usage else 0
-            output_tokens = response.usage.completion_tokens if response.usage else 0
-            return result, input_tokens, output_tokens
+            parsed_args = _try_parse_json_dict(tc.function.arguments or "")
+            if parsed_args is not None:
+                return parsed_args, input_tokens, output_tokens
+            if attempt < max_retries:
+                logger.warning(
+                    "OpenRouter invalid tool arguments (attempt %s/%s), retrying in 1s...",
+                    attempt,
+                    max_retries,
+                )
+                await asyncio.sleep(1)
+                continue
+            raise ValueError(f"Invalid tool arguments JSON: {tc.function.arguments}")
+
+        parsed_content = _try_parse_json_dict(choice.message.content or "")
+        if parsed_content is not None:
+            logger.warning(
+                "OpenRouter returned JSON content instead of tool_call, accepting fallback parse. model=%s",
+                model,
+            )
+            return parsed_content, input_tokens, output_tokens
+
+        content_text = _strip_markdown_fence(choice.message.content or "").strip()
+        schema_props = (tool.get("input_schema") or {}).get("properties") or {}
+        if content_text and "reply_text" in schema_props:
+            logger.warning(
+                "OpenRouter returned plain text instead of tool_call, wrapping into reply_text. model=%s",
+                model,
+            )
+            wrapped: dict[str, Any] = {"reply_text": content_text}
+            if "confidence" in schema_props:
+                wrapped["confidence"] = 0.55
+            if "requires_human_review" in schema_props:
+                wrapped["requires_human_review"] = False
+            if "intent" in schema_props:
+                wrapped["intent"] = "other"
+            if "action" in schema_props:
+                wrapped["action"] = {"type": "none"}
+            return wrapped, input_tokens, output_tokens
 
         if attempt < max_retries:
             logger.warning(

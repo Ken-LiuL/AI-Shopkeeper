@@ -17,7 +17,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 
-from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat, call_chat_stream, call_tool, call_vision
+from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
 
@@ -2052,59 +2052,25 @@ async def chat(
 
         if not stream_ready:
             if images and len(images) > 0:
-                try:
-                    result = await call_vision(
-                        text=user_message_with_context,
-                        images=images,
-                        tool=tool_schema,
-                        model="google/gemini-2.0-flash-001",
-                        max_tokens=max_reply_tokens,
-                        system=system_prompt
-                        + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
-                        trace_name="customer_service_vision_chat",
-                    )
-                except Exception as vision_err:
-                    logger.warning("[CS] Vision tool mode failed, fallback to text chat: %s", vision_err)
-                    plain_reply, _, _ = await call_chat(
-                        prompt=user_message_with_context,
-                        model=MODEL_SONNET,
-                        max_tokens=max_reply_tokens,
-                        system=system_prompt,
-                        trace_name="customer_service_vision_fallback_chat",
-                    )
-                    result = {
-                        "reply_text": plain_reply or "亲，您的问题我已记录，稍后为您回复~",
-                        "confidence": 0.55,
-                        "requires_human_review": current_intent in {"complaint"} or sentiment == "angry",
-                        "intent": current_intent or "other",
-                        "action": {"type": "none"},
-                    }
+                result = await call_vision(
+                    text=user_message_with_context,
+                    images=images,
+                    tool=tool_schema,
+                    model="google/gemini-2.0-flash-001",
+                    max_tokens=max_reply_tokens,
+                    system=system_prompt
+                    + "\n\n当用户上传图片时：仔细观察图片内容，如果是商品损坏照片 → 确认质量问题并给退换方案；如果是商品照片 → 识别商品并提供信息",
+                    trace_name="customer_service_vision_chat",
+                )
             else:
-                try:
-                    result = await call_tool(
-                        prompt=user_message_with_context,
-                        tool=tool_schema,
-                        model=MODEL_SONNET,
-                        max_tokens=max_reply_tokens,
-                        system=system_prompt,
-                        trace_name="customer_service_chat",
-                    )
-                except Exception as tool_err:
-                    logger.warning("[CS] Tool mode failed, fallback to plain chat: %s", tool_err)
-                    plain_reply, _, _ = await call_chat(
-                        prompt=user_message_with_context,
-                        model=MODEL_SONNET,
-                        max_tokens=max_reply_tokens,
-                        system=system_prompt,
-                        trace_name="customer_service_chat_fallback",
-                    )
-                    result = {
-                        "reply_text": plain_reply or "亲，您的问题我已记录，稍后为您回复~",
-                        "confidence": 0.55,
-                        "requires_human_review": current_intent in {"complaint"} or sentiment == "angry",
-                        "intent": current_intent or "other",
-                        "action": {"type": "none"},
-                    }
+                result = await call_tool(
+                    prompt=user_message_with_context,
+                    tool=tool_schema,
+                    model=MODEL_SONNET,
+                    max_tokens=max_reply_tokens,
+                    system=system_prompt,
+                    trace_name="customer_service_chat",
+                )
 
         _t_post_llm = time.time()
         logger.info(f"[CS-PERF] LLM call took {(_t_post_llm - _t_pre_llm)*1000:.0f}ms | Total so far: {(_t_post_llm - _t0)*1000:.0f}ms")
@@ -2267,6 +2233,8 @@ async def chat(
             error_code = "llm_rate_limit"
         elif "auth" in err_lower or "key" in err_lower or "401" in err_lower:
             error_code = "llm_auth_error"
+        elif "tool call" in err_lower or "tool arguments" in err_lower:
+            error_code = "llm_tool_output_error"
         else:
             error_code = "llm_unknown_error"
 
