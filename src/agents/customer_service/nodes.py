@@ -262,6 +262,108 @@ def _build_extension_context_str(
     return "【客服工作台上下文】\n" + "\n".join(lines)
 
 
+def _extract_extension_order_fields(
+    session_id: str,
+    order_context: dict[str, Any] | None,
+) -> dict[str, str]:
+    if not isinstance(order_context, dict):
+        return {}
+
+    active_session_id = _clean_context_text(order_context.get("active_session_id"), 80)
+    if active_session_id and active_session_id != session_id:
+        return {}
+
+    raw_fields = order_context.get("fields")
+    if not isinstance(raw_fields, dict):
+        return {}
+
+    result: dict[str, str] = {}
+    for key in (
+        "order_id",
+        "payment_amount",
+        "delivery_status",
+        "rider",
+        "order_time",
+        "customer",
+        "address",
+        "store",
+    ):
+        val = _clean_context_text(raw_fields.get(key), 120)
+        if val:
+            result[key] = val
+    return result
+
+
+def _is_eta_or_logistics_question(message: str) -> bool:
+    m = (message or "").strip().lower()
+    if not m:
+        return False
+    return any(
+        kw in m
+        for kw in (
+            "什么时候",
+            "多久",
+            "几分钟",
+            "几点",
+            "还没到",
+            "在哪",
+            "什么意思",
+            "配送",
+            "骑手",
+            "送达",
+            "到吗",
+            "催单",
+        )
+    )
+
+
+def _build_logistics_reply_from_extension_context(
+    message: str,
+    session_id: str,
+    order_context: dict[str, Any] | None,
+) -> str | None:
+    fields = _extract_extension_order_fields(session_id=session_id, order_context=order_context)
+    if not fields:
+        return None
+
+    status = fields.get("delivery_status", "")
+    rider = fields.get("rider", "")
+    order_id = fields.get("order_id", "")
+    order_time = fields.get("order_time", "")
+
+    parts: list[str] = []
+
+    if status:
+        parts.append(f"亲，我这边帮您看到了当前配送状态是“{status}”。")
+    else:
+        parts.append("亲，我这边已经帮您查询到订单配送进度了。")
+
+    if _is_eta_or_logistics_question(message):
+        if any(kw in status for kw in ("已送达", "已完成", "已签收")):
+            parts.append("订单已经送达啦，您可以查看一下门口或与骑手电话确认。")
+        elif any(kw in status for kw in ("配送中", "派送中", "已接单", "已取货", "骑手已接单", "骑手已取货")):
+            parts.append("目前正在配送中，通常预计 20-40 分钟内送达。")
+        elif any(kw in status for kw in ("待分配", "待接单", "等待骑手", "商家备货")):
+            parts.append("目前处于待配送阶段，一般会在 10-20 分钟内分配骑手后尽快送达。")
+        else:
+            parts.append("预计会尽快送达，建议您再留意一下骑手动态。")
+
+    if rider and rider not in ("—", "-", "暂无", "未分配"):
+        parts.append(f"当前骑手信息：{rider}。")
+
+    if order_time:
+        parts.append(f"下单时间是 {order_time}。")
+
+    if order_id:
+        masked_order_id = order_id
+        if len(order_id) > 8 and order_id.isdigit():
+            masked_order_id = f"{order_id[:3]}***{order_id[-4:]}"
+        parts.append(f"订单号（尾号）{masked_order_id}。")
+
+    parts.append("如果超过预计时间还未送达，我这边可以继续帮您催单处理。")
+    return "".join(parts)
+
+
 def _build_vision_prompt_text(messages: list[dict[str, Any]], fallback_user_prompt: str) -> str:
     """把多轮 messages 压缩成适合视觉模型的纯文本 prompt。"""
     dialogue_lines: list[str] = []
@@ -1789,6 +1891,38 @@ async def chat(
             current_intent = "complaint"
 
         logger.info(f"[CS] Intent routing: quick={quick_intent}, llm={intent_result.get('intent', 'N/A')}, topic={current_topic.name}, final={current_intent}")
+
+        # 如果扩展已经提供了订单配送上下文，物流类问题优先走确定性回复，避免反问订单号。
+        if current_intent == "logistics":
+            direct_logistics_reply = _build_logistics_reply_from_extension_context(
+                message=message,
+                session_id=session_id,
+                order_context=order_context,
+            )
+            if direct_logistics_reply:
+                if pool:
+                    asyncio.create_task(
+                        _log_conversation(
+                            pool=pool,
+                            session_id=session_id,
+                            user_message=message,
+                            intent=current_intent,
+                            ai_response=direct_logistics_reply,
+                            ai_reply_id=ai_reply_id,
+                            sources=product_results,
+                            confidence=0.92,
+                        )
+                    )
+                return {
+                    "session_id": session_id,
+                    "reply": direct_logistics_reply,
+                    "ai_reply_id": ai_reply_id,
+                    "intent": current_intent,
+                    "sources": product_results,
+                    "needs_human": False,
+                    "action": {"type": "check_logistics"},
+                    "product_cards": [],
+                }
 
         # 3. 构建优化版系统提示词
         try:

@@ -301,8 +301,10 @@
       }
 
       if (Array.isArray(node)) {
-        out.push({ __array: true, items: node });
-        for (const item of node.slice(0, 30)) queue.push(item);
+        // Root array 允许展开；但不要把内部 message 列表当实时消息逐条下钻。
+        if (node === root) {
+          for (const item of node.slice(0, 20)) queue.push(item);
+        }
         continue;
       }
 
@@ -311,7 +313,7 @@
       visited.add(node);
       out.push(node);
 
-      for (const key of ['data', 'payload', 'body', 'message', 'msg', 'content', 'messages', 'list', 'items', 'events']) {
+      for (const key of ['data', 'payload', 'body', 'message', 'msg', 'content']) {
         if (Object.prototype.hasOwnProperty.call(node, key)) {
           queue.push(node[key]);
         }
@@ -323,14 +325,6 @@
 
   function maybeEmitFromWSCandidate(candidate) {
     if (!candidate || typeof candidate !== 'object') return false;
-
-    if (candidate.__array === true && Array.isArray(candidate.items)) {
-      let hit = false;
-      for (const item of candidate.items.slice(0, 30)) {
-        hit = maybeEmitFromWSCandidate(item) || hit;
-      }
-      return hit;
-    }
 
     const sid = pickSessionId(candidate);
     if (!sid) return false;

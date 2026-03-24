@@ -16,6 +16,8 @@
   let enabled = true;
   let mode = 'suggest'; // 'suggest' | 'auto-fill' | 'auto-send'
   const processedMessages = new Set();
+  const recentMessageFingerprints = new Map();
+  const MESSAGE_FP_TTL_MS = 12000;
 
   // ── 多 Session 管理（纯数据驱动）─────────────────────────────
   // sessionData: { [sessionId]: { replies: [], customerName: '', lastActivity: Date, pendingCount: 0 } }
@@ -139,6 +141,64 @@
       }
       if (hit >= 1) return true;
     }
+    return false;
+  }
+
+  function parseObjectMaybe(val) {
+    if (!val) return null;
+    if (typeof val === 'object') return val;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      if (!(trimmed.startsWith('{') || trimmed.startsWith('['))) return null;
+      try {
+        const parsed = JSON.parse(trimmed);
+        return parsed && typeof parsed === 'object' ? parsed : null;
+      } catch (_) {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  function isLikelyAgentEnvelope(data) {
+    const stack = [data, parseObjectMaybe(data?.data), parseObjectMaybe(data?.payload), parseObjectMaybe(data?.body)]
+      .filter(Boolean);
+
+    for (const obj of stack) {
+      const fromCustomer = obj.fromCustomer;
+      if (fromCustomer === false || fromCustomer === 'false') return true;
+
+      if (obj.fromMe === true || obj.isSelf === true || obj.mine === true) return true;
+
+      const direction = String(obj.direction || obj.dir || '').toLowerCase();
+      if (direction === 'out' || direction === 'outbound' || direction === 'send') return true;
+
+      const senderType = Number(obj.senderType || obj.roleType || obj.userType || obj.fromType || NaN);
+      if (senderType === 2 || senderType === 3) return true;
+
+      const roleText = String(
+        obj.role
+        || obj.senderRole
+        || obj.sender
+        || obj.from
+        || obj.userRole
+        || ''
+      ).toLowerCase();
+      if (
+        roleText.includes('agent')
+        || roleText.includes('merchant')
+        || roleText.includes('seller')
+        || roleText.includes('客服')
+        || roleText.includes('商家')
+        || roleText.includes('kf')
+      ) {
+        return true;
+      }
+
+      const msgId = String(obj.uuid || obj.mid || obj.msgId || '').toLowerCase();
+      if (msgId.includes('kf-') || msgId.includes('agent')) return true;
+    }
+
     return false;
   }
 
@@ -434,6 +494,7 @@
 
     const customerMsg = extractCustomerMessage(data, sessionId);
     if (customerMsg && !processedMessages.has(customerMsg.id)) {
+      if (shouldSkipDuplicateMessage('customer', customerMsg.sessionId, '', customerMsg.text)) return;
       if (isLikelySystemPayloadText(customerMsg.text)) return;
       processedMessages.add(customerMsg.id);
       trimProcessed();
@@ -447,6 +508,7 @@
 
     const agentMsg = extractAgentMessage(data, sessionId);
     if (agentMsg && !processedMessages.has(agentMsg.id)) {
+      if (shouldSkipDuplicateMessage('agent', agentMsg.sessionId, '', agentMsg.text)) return;
       processedMessages.add(agentMsg.id);
       trimProcessed();
       logChatMessage(agentMsg);
@@ -472,6 +534,11 @@
    */
   function handleMTDXMessage(type, data) {
     if (type === 'customer_message') {
+      if (isLikelyAgentEnvelope(data)) {
+        handleMTDXMessage('agent_message', data);
+        return;
+      }
+
       // [MTDX] 接收到消息 — 客户发的
       const fallbackSeed = buildSessionSeed(
         data,
@@ -485,6 +552,7 @@
       const text = extractMTDXContent(data);
 
       if (isLikelySystemPayloadText(text)) return;
+      if (shouldSkipDuplicateMessage('customer', sid, data.uuid || data.mid || '', text)) return;
       if (!text || processedMessages.has(msgId)) return;
       processedMessages.add(msgId);
       trimProcessed();
@@ -513,6 +581,7 @@
       const msgId = data.uuid || data.mid || generateLocalId('mtdx-agent');
       const text = extractMTDXContent(data);
 
+      if (shouldSkipDuplicateMessage('agent', sid, data.uuid || data.mid || '', text)) return;
       if (!text || processedMessages.has(msgId)) return;
       processedMessages.add(msgId);
       trimProcessed();
@@ -629,9 +698,8 @@
           break;
         }
       }
-      if (cardParts.length > 0) {
-        candidates.push(`[商品卡片] ${cardParts.slice(0, 4).join('，')}`);
-      }
+      // 商品卡片信息优先于泛化文本，避免链接消息被“你好/欢迎语”覆盖。
+      if (cardParts.length > 0) return `[商品卡片] ${cardParts.slice(0, 4).join('，')}`;
       if (candidates.length > 0) return candidates[0];
 
       for (const nestedKey of ['item', 'goods', 'product', 'card', 'payload', 'ext']) {
@@ -721,6 +789,44 @@
         processedMessages.delete(iter.next().value);
       }
     }
+  }
+
+  function trimRecentFingerprints(now = Date.now()) {
+    for (const [key, ts] of recentMessageFingerprints.entries()) {
+      if (!ts || (now - ts) > MESSAGE_FP_TTL_MS) {
+        recentMessageFingerprints.delete(key);
+      }
+    }
+    if (recentMessageFingerprints.size <= 1500) return;
+    const overflow = recentMessageFingerprints.size - 1500;
+    const iter = recentMessageFingerprints.keys();
+    for (let i = 0; i < overflow; i++) {
+      const next = iter.next();
+      if (next.done) break;
+      recentMessageFingerprints.delete(next.value);
+    }
+  }
+
+  function buildMessageFingerprint(kind, sessionId, msgId, text) {
+    const sid = (sessionId || '').trim();
+    const mid = (msgId || '').trim();
+    if (sid && mid) return `${kind}:${sid}:${mid}`;
+    const normalized = (text || '')
+      .trim()
+      .replace(/\s+/g, ' ')
+      .toLowerCase()
+      .slice(0, 220);
+    if (!sid || !normalized) return '';
+    return `${kind}:${sid}:${normalized}`;
+  }
+
+  function shouldSkipDuplicateMessage(kind, sessionId, msgId, text) {
+    const key = buildMessageFingerprint(kind, sessionId, msgId, text);
+    if (!key) return false;
+    trimRecentFingerprints();
+    if (recentMessageFingerprints.has(key)) return true;
+    recentMessageFingerprints.set(key, Date.now());
+    return false;
   }
 
   function extractCustomerMessage(data, fallbackSessionId) {
@@ -909,16 +1015,11 @@
   startDOMObserver();
 
   function trackReplyComparison(suggestion, actual, sessionId) {
-    sendFeedback({
-      session_id: sessionId || '',
-      message_id: suggestion.messageId || '',
-      ai_reply_id: suggestion.aiReplyId || '',
-      rating: 'bad',
-      action: 'edited',
-      original_reply: suggestion.text,
-      edited_reply: '',
-      actual_reply: actual,
-    });
+    // 产品要求：仅“采纳”和“👍/👎”反馈到后端。
+    // 人工回复对比仅用于本地行为标记，不自动上报。
+    void suggestion;
+    void actual;
+    void sessionId;
   }
 
   /* ═══════════════════ Chat Log Collection ═══════════════════ */
@@ -1635,15 +1736,7 @@
     fillReplyInput(editedText);
     if (mode === 'auto-send') setTimeout(() => clickSendButton(), 300);
     renderReplies();
-    sendFeedback({
-      session_id: reply.sessionId,
-      message_id: reply.messageId,
-      ai_reply_id: reply.aiReplyId || '',
-      rating: 'good', action: 'edited',
-      original_reply: reply.text,
-      edited_reply: editedText,
-      actual_reply: editedText,
-    });
+    // 产品要求：编辑不反馈到后端。
   }
 
   function ignoreReply(reply) {
@@ -1652,17 +1745,7 @@
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     renderReplies(); // UI 立刻更新，不等 feedback
-    // feedback 异步发送，失败不影响 UI
-    try {
-      sendFeedback({
-        session_id: reply.sessionId,
-        message_id: reply.messageId,
-        ai_reply_id: reply.aiReplyId || '',
-        rating: 'bad', action: 'ignored',
-        original_reply: reply.text,
-        edited_reply: '', actual_reply: '',
-      });
-    } catch (_) {}
+    // 产品要求：忽略不反馈到后端。
   }
 
   function sendReplyFeedback(reply, type, btn) {
