@@ -73,6 +73,7 @@ class CreateSessionResponse(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     message: str
+    message_id: str | None = None
     images: list[str] = Field(default_factory=list, description="Base64 encoded images")
     customer_info: dict[str, Any] = Field(default_factory=dict)
     order_context: dict[str, Any] = Field(default_factory=dict)
@@ -87,6 +88,7 @@ class ChatResponse(BaseModel):
     needs_human: bool = False
     error_code: str | None = None
     error_detail: str | None = None
+    context_trace: dict[str, Any] = Field(default_factory=dict)
 
 
 class SessionListItem(BaseModel):

@@ -1457,11 +1457,19 @@ async def chat(
 
     _t0 = time.time()
     ai_reply_id = _new_ai_reply_id()
+    context_trace: dict[str, Any] = {
+        "has_extension_context": False,
+        "has_extension_order_fields": False,
+        "extension_order_field_keys": [],
+        "direct_logistics_from_extension": False,
+    }
 
     try:
         # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
         _fast = _fast_path_reply(session_id, message, ai_reply_id=ai_reply_id)
         if _fast is not None:
+            if isinstance(_fast, dict):
+                _fast.setdefault("context_trace", context_trace)
             _t_fast = time.time()
             logger.info(f"[CS-PERF] Fast-path total: {(_t_fast - _t0)*1000:.0f}ms")
             return _fast
@@ -1491,6 +1499,17 @@ async def chat(
             session_id=session_id,
             customer_info=customer_info,
             order_context=order_context,
+        )
+        extension_order_fields = _extract_extension_order_fields(
+            session_id=session_id,
+            order_context=order_context,
+        )
+        context_trace.update(
+            {
+                "has_extension_context": bool(extension_context_str),
+                "has_extension_order_fields": bool(extension_order_fields),
+                "extension_order_field_keys": sorted(extension_order_fields.keys()),
+            }
         )
 
         faq_context = []
@@ -1900,6 +1919,7 @@ async def chat(
                 order_context=order_context,
             )
             if direct_logistics_reply:
+                context_trace["direct_logistics_from_extension"] = True
                 if pool:
                     asyncio.create_task(
                         _log_conversation(
@@ -1922,6 +1942,7 @@ async def chat(
                     "needs_human": False,
                     "action": {"type": "check_logistics"},
                     "product_cards": [],
+                    "context_trace": context_trace,
                 }
 
         # 3. 构建优化版系统提示词
@@ -2527,6 +2548,7 @@ async def chat(
             "needs_human": needs_human,
             "action": suggested_action,
             "product_cards": product_cards,  # P2-1
+            "context_trace": context_trace,
         }
 
     except Exception as e:
@@ -2554,6 +2576,7 @@ async def chat(
             "needs_human": True,
             "error_code": error_code,
             "error_detail": error_detail,
+            "context_trace": context_trace,
         }
 
 

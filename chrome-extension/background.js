@@ -258,6 +258,9 @@ async function handleCustomerMessageDirect(payload) {
       const aiReplyId = payload.ai_reply_id || data.ai_reply_id || '';
       const errorCode = payload.error_code || data.error_code || '';
       const errorDetail = payload.error_detail || data.error_detail || '';
+      const contextTrace = (payload.context_trace && typeof payload.context_trace === 'object')
+        ? payload.context_trace
+        : {};
       const elapsed = Date.now() - t0;
 
       if (errorCode) {
@@ -274,11 +277,15 @@ async function handleCustomerMessageDirect(payload) {
         return { success: false, error: '后台返回空回复，请稍后重试' };
       }
       addLog('success', `客服回复生成成功 (${elapsed}ms)`, reply.slice(0, 60));
+      if (contextTrace.has_extension_order_fields || contextTrace.direct_logistics_from_extension) {
+        addLog('info', '本次回复已使用工作台订单上下文', JSON.stringify(contextTrace).slice(0, 160));
+      }
       return {
         success: true,
         reply,
         ai_reply_id: aiReplyId || '',
         product_cards: payload.product_cards || [],
+        context_trace: contextTrace,
       };
     } catch (err) {
       clearTimeout(timeoutId);

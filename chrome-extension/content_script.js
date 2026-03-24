@@ -27,6 +27,12 @@
   let activeSessionId = '';
   let panelViewMode = 'active'; // 'active' | 'all'
   let orderPanelCache = { sessionId: '', ts: 0, data: null };
+  const LOCAL_STATE_KEY = 'aidz_panel_state_v1';
+  const LOCAL_STATE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+  const LOCAL_STATE_MAX_SESSIONS = 80;
+  const LOCAL_STATE_MAX_REPLIES_PER_SESSION = 30;
+  let persistStateTimer = null;
+  let localStateRestored = false;
 
   const ORDER_PANEL_FIELD_ALIASES = {
     order_id: ['单号', '订单号'],
@@ -40,7 +46,205 @@
   };
 
   /* ═══════════════════ Session Helpers ═══════════════════ */
+  function safeLocalGet(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function safeLocalSet(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+      return true;
+    } catch (err) {
+      console.warn('[AI店长] localStorage 写入失败:', err?.message || err);
+      return false;
+    }
+  }
+
+  function safeLocalRemove(key) {
+    try {
+      window.localStorage.removeItem(key);
+    } catch (_) {}
+  }
+
+  function normalizeStoredReply(raw, sid) {
+    if (!raw || typeof raw !== 'object') return null;
+    const createdAt = Number(raw.createdAt || 0) || Date.now();
+    if ((Date.now() - createdAt) > LOCAL_STATE_RETENTION_MS) return null;
+    const status = ['pending', 'adopted', 'edited', 'ignored'].includes(raw.status)
+      ? raw.status
+      : 'pending';
+    const text = typeof raw.text === 'string' ? raw.text : '';
+    if (!text.trim()) return null;
+    return {
+      id: typeof raw.id === 'string' && raw.id ? raw.id : `local-${createdAt}-${Math.random().toString(36).slice(2, 7)}`,
+      text,
+      time: typeof raw.time === 'string' && raw.time ? raw.time : new Date(createdAt).toLocaleTimeString(),
+      sessionId: (typeof raw.sessionId === 'string' && raw.sessionId) || sid,
+      messageId: typeof raw.messageId === 'string' ? raw.messageId : '',
+      aiReplyId: typeof raw.aiReplyId === 'string' ? raw.aiReplyId : '',
+      customerName: typeof raw.customerName === 'string' ? raw.customerName : '',
+      createdAt,
+      status,
+      editedText: typeof raw.editedText === 'string' ? raw.editedText : '',
+      feedbackRating: raw.feedbackRating === 'good' || raw.feedbackRating === 'bad' ? raw.feedbackRating : '',
+      contextTrace: (raw.contextTrace && typeof raw.contextTrace === 'object') ? raw.contextTrace : {},
+    };
+  }
+
+  function pruneLocalStateSessions(now = Date.now()) {
+    const cutoff = now - LOCAL_STATE_RETENTION_MS;
+    for (const sid of Object.keys(sessionData)) {
+      const session = sessionData[sid];
+      if (!session || typeof session !== 'object') {
+        delete sessionData[sid];
+        continue;
+      }
+      const replies = Array.isArray(session.replies) ? session.replies : [];
+      const cleanedReplies = replies
+        .map((r) => normalizeStoredReply(r, sid))
+        .filter(Boolean)
+        .filter((r) => (r.createdAt || 0) >= cutoff)
+        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .slice(0, LOCAL_STATE_MAX_REPLIES_PER_SESSION);
+      session.replies = cleanedReplies;
+      session.pendingCount = cleanedReplies.filter((r) => r.status === 'pending').length;
+      session.lastActivity = Number(session.lastActivity || 0);
+      const latestReplyAt = cleanedReplies[0]?.createdAt || 0;
+      if (!session.lastActivity || session.lastActivity < latestReplyAt) {
+        session.lastActivity = latestReplyAt || now;
+      }
+      const hasRecentActivity = (session.lastActivity || 0) >= cutoff;
+      if (!hasRecentActivity && session.pendingCount <= 0 && cleanedReplies.length === 0) {
+        delete sessionData[sid];
+      }
+    }
+  }
+
+  function rebuildPendingQueueFromSessionData() {
+    pendingQueue.length = 0;
+    const pendingItems = [];
+    for (const [sid, session] of Object.entries(sessionData)) {
+      if (!session || !Array.isArray(session.replies)) continue;
+      for (const reply of session.replies) {
+        if (reply.status === 'pending') {
+          pendingItems.push({ ...reply, sessionId: reply.sessionId || sid });
+        }
+      }
+      session.pendingCount = session.replies.filter((r) => r.status === 'pending').length;
+    }
+    pendingItems
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .slice(0, 50)
+      .forEach((item) => pendingQueue.push(item));
+  }
+
+  function persistLocalStateNow() {
+    pruneLocalStateSessions();
+    rebuildPendingQueueFromSessionData();
+
+    const sortedSessions = Object.entries(sessionData)
+      .sort((a, b) => (b[1]?.lastActivity || 0) - (a[1]?.lastActivity || 0))
+      .slice(0, LOCAL_STATE_MAX_SESSIONS);
+
+    const sessionsPayload = {};
+    for (const [sid, session] of sortedSessions) {
+      sessionsPayload[sid] = {
+        customerName: typeof session.customerName === 'string' ? session.customerName : '',
+        lastActivity: Number(session.lastActivity || Date.now()),
+        replies: (session.replies || []).map((r) => ({
+          id: r.id || '',
+          text: r.text || '',
+          time: r.time || '',
+          sessionId: r.sessionId || sid,
+          messageId: r.messageId || '',
+          aiReplyId: r.aiReplyId || '',
+          customerName: r.customerName || '',
+          createdAt: Number(r.createdAt || Date.now()),
+          status: r.status || 'pending',
+          editedText: r.editedText || '',
+          feedbackRating: r.feedbackRating || '',
+          contextTrace: (r.contextTrace && typeof r.contextTrace === 'object') ? r.contextTrace : {},
+        })),
+      };
+    }
+
+    const payload = {
+      version: 1,
+      savedAt: Date.now(),
+      activeSessionId: activeSessionId || '',
+      panelViewMode: panelViewMode === 'all' ? 'all' : 'active',
+      sessions: sessionsPayload,
+    };
+
+    safeLocalSet(LOCAL_STATE_KEY, JSON.stringify(payload));
+  }
+
+  function schedulePersistLocalState(delay = 220) {
+    if (persistStateTimer) {
+      clearTimeout(persistStateTimer);
+    }
+    persistStateTimer = setTimeout(() => {
+      persistStateTimer = null;
+      persistLocalStateNow();
+    }, delay);
+  }
+
+  function restoreLocalState() {
+    if (localStateRestored) return;
+    localStateRestored = true;
+
+    const raw = safeLocalGet(LOCAL_STATE_KEY);
+    if (!raw) return;
+
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        safeLocalRemove(LOCAL_STATE_KEY);
+        return;
+      }
+
+      const savedAt = Number(parsed.savedAt || 0);
+      if (savedAt > 0 && (Date.now() - savedAt) > LOCAL_STATE_RETENTION_MS) {
+        safeLocalRemove(LOCAL_STATE_KEY);
+        return;
+      }
+
+      const sessions = parsed.sessions && typeof parsed.sessions === 'object' ? parsed.sessions : {};
+      for (const [sid, rawSession] of Object.entries(sessions)) {
+        if (!sid || !rawSession || typeof rawSession !== 'object') continue;
+        const replies = Array.isArray(rawSession.replies)
+          ? rawSession.replies.map((r) => normalizeStoredReply(r, sid)).filter(Boolean)
+          : [];
+        sessionData[sid] = {
+          customerName: typeof rawSession.customerName === 'string' ? rawSession.customerName : '',
+          lastActivity: Number(rawSession.lastActivity || replies[0]?.createdAt || Date.now()),
+          replies: replies
+            .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+            .slice(0, LOCAL_STATE_MAX_REPLIES_PER_SESSION),
+          pendingCount: 0,
+        };
+      }
+
+      pruneLocalStateSessions();
+      rebuildPendingQueueFromSessionData();
+
+      if (typeof parsed.activeSessionId === 'string' && sessionData[parsed.activeSessionId]) {
+        activeSessionId = parsed.activeSessionId;
+      }
+      if (parsed.panelViewMode === 'all' || parsed.panelViewMode === 'active') {
+        panelViewMode = parsed.panelViewMode;
+      }
+    } catch (_) {
+      safeLocalRemove(LOCAL_STATE_KEY);
+    }
+  }
+
   function getSession(sessionId) {
+    let created = false;
     if (!sessionData[sessionId]) {
       sessionData[sessionId] = {
         replies: [],
@@ -48,8 +252,10 @@
         lastActivity: Date.now(),
         pendingCount: 0,
       };
+      created = true;
     }
     sessionData[sessionId].lastActivity = Date.now();
+    if (created) schedulePersistLocalState(80);
     return sessionData[sessionId];
   }
 
@@ -69,6 +275,7 @@
         delete sessionData[sid];
       }
     }
+    schedulePersistLocalState();
   }
 
   function extractSessionId(data) {
@@ -501,6 +708,7 @@
       const name = extractCustomerName(data);
       if (name && customerMsg.sessionId) {
         getSession(customerMsg.sessionId).customerName = name;
+        schedulePersistLocalState();
       }
       logChatMessage({ ...customerMsg, role: 'customer' });
       sendToBackend(customerMsg);
@@ -561,6 +769,7 @@
       const session = getSession(sid);
       if (data.customerInfo?.nickname) {
         session.customerName = data.customerInfo.nickname;
+        schedulePersistLocalState();
       }
 
       const msg = { id: msgId, text, sessionId: sid, customerInfo: data.customerInfo || {} };
@@ -609,6 +818,7 @@
           const name = data.customerInfo.nickname || data.customerInfo.name || '';
           if (name) session.customerName = name;
         }
+        schedulePersistLocalState();
         renderReplies();
       }
     }
@@ -1080,7 +1290,13 @@
           return;
         }
         if (response?.success && response.reply) {
-          handleAIReply(response.reply, sessionId, msg.id, response.ai_reply_id || '');
+          const contextTrace = (response.context_trace && typeof response.context_trace === 'object')
+            ? response.context_trace
+            : {};
+          if (contextTrace.direct_logistics_from_extension || contextTrace.has_extension_order_fields) {
+            updatePanel('connected', `🧭 [${customerLabel}] 已使用工作台订单信息`);
+          }
+          handleAIReply(response.reply, sessionId, msg.id, response.ai_reply_id || '', contextTrace);
         } else {
           updatePanel('error', response?.error || '未知错误');
         }
@@ -1116,7 +1332,7 @@
   }
 
   /* ═══════════════════ AI Reply Handler ═══════════════════ */
-  function handleAIReply(reply, sessionId, messageId, aiReplyId = '') {
+  function handleAIReply(reply, sessionId, messageId, aiReplyId = '', contextTrace = {}) {
     const session = getSession(sessionId);
     const customerLabel = session.customerName || sessionId?.slice(0, 10) || '客户';
     if (messageId) {
@@ -1134,6 +1350,7 @@
       sessionId: sessionId || '',
       messageId: messageId || '',
       aiReplyId: aiReplyId || '',
+      contextTrace: contextTrace && typeof contextTrace === 'object' ? contextTrace : {},
       customerName: customerLabel,
       createdAt: Date.now(),
       status: 'pending',
@@ -1264,12 +1481,40 @@
           </div>
         </div>
       </div>
+      <div class="aidz-resize-handle" id="aidz-resize-handle" title="拖拽调整大小"></div>
     `;
     document.body.appendChild(panel);
 
     /* — Drag — */
     let isDragging = false, startX, startY, origX, origY;
+    let isResizing = false;
+    let resizeStartX = 0;
+    let resizeStartY = 0;
+    let resizeStartW = 0;
+    let resizeStartBodyH = 0;
     const header = panel.querySelector('.aidz-header');
+    const body = document.getElementById('aidz-body');
+    const resizeHandle = document.getElementById('aidz-resize-handle');
+
+    function clamp(v, min, max) {
+      return Math.max(min, Math.min(max, v));
+    }
+
+    function parsePx(value, fallback) {
+      if (typeof value !== 'string') return fallback;
+      const n = Number.parseFloat(value.replace('px', '').trim());
+      return Number.isFinite(n) ? n : fallback;
+    }
+
+    function persistPanelSize() {
+      const width = parsePx(panel.style.width, panel.getBoundingClientRect().width);
+      const bodyMaxH = parsePx(body.style.maxHeight, parsePx(getComputedStyle(body).maxHeight, 560));
+      chrome.storage.sync.set({
+        panelWidth: Math.round(width),
+        panelBodyMaxHeight: Math.round(bodyMaxH),
+      });
+    }
+
     header.addEventListener('mousedown', (e) => {
       if (e.target.closest('button') || e.target.closest('select')) return;
       isDragging = true;
@@ -1280,13 +1525,43 @@
       origY = rect.top;
       e.preventDefault();
     });
+    resizeHandle.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      resizeStartX = e.clientX;
+      resizeStartY = e.clientY;
+      const rect = panel.getBoundingClientRect();
+      resizeStartW = rect.width;
+      resizeStartBodyH = parsePx(body.style.maxHeight, parsePx(getComputedStyle(body).maxHeight, 560));
+      panel.classList.add('aidz-resizing');
+      e.preventDefault();
+      e.stopPropagation();
+    });
     document.addEventListener('mousemove', (e) => {
+      if (isResizing) {
+        const maxW = Math.max(360, window.innerWidth - 12);
+        const minW = 320;
+        const nextW = clamp(resizeStartW + (e.clientX - resizeStartX), minW, maxW);
+        panel.style.width = `${Math.round(nextW)}px`;
+
+        const maxBodyH = Math.max(260, window.innerHeight - 160);
+        const minBodyH = 220;
+        const nextBodyH = clamp(resizeStartBodyH + (e.clientY - resizeStartY), minBodyH, maxBodyH);
+        body.style.maxHeight = `${Math.round(nextBodyH)}px`;
+        return;
+      }
       if (!isDragging) return;
       panel.style.right = 'auto';
       panel.style.left = (origX + e.clientX - startX) + 'px';
       panel.style.top = (origY + e.clientY - startY) + 'px';
     });
-    document.addEventListener('mouseup', () => { isDragging = false; });
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        panel.classList.remove('aidz-resizing');
+        persistPanelSize();
+      }
+      isDragging = false;
+    });
 
     /* — Controls — */
     document.getElementById('aidz-enabled').addEventListener('change', (e) => {
@@ -1320,7 +1595,7 @@
       }
     });
 
-    chrome.storage.sync.get(['enabled', 'mode'], (s) => {
+    chrome.storage.sync.get(['enabled', 'mode', 'panelWidth', 'panelBodyMaxHeight'], (s) => {
       if (s.enabled === false) {
         enabled = false;
         document.getElementById('aidz-enabled').checked = false;
@@ -1330,7 +1605,17 @@
         mode = s.mode;
         document.getElementById('aidz-mode').value = mode;
       }
-      setPanelViewMode('all');
+      if (typeof s.panelWidth === 'number' && Number.isFinite(s.panelWidth)) {
+        const maxW = Math.max(360, window.innerWidth - 12);
+        const minW = 320;
+        panel.style.width = `${Math.round(clamp(s.panelWidth, minW, maxW))}px`;
+      }
+      if (typeof s.panelBodyMaxHeight === 'number' && Number.isFinite(s.panelBodyMaxHeight)) {
+        const maxBodyH = Math.max(260, window.innerHeight - 160);
+        const minBodyH = 220;
+        body.style.maxHeight = `${Math.round(clamp(s.panelBodyMaxHeight, minBodyH, maxBodyH))}px`;
+      }
+      setPanelViewMode(panelViewMode);
       updateModeBadge();
     });
   }
@@ -1341,6 +1626,7 @@
     const allBtn = document.getElementById('aidz-view-all');
     if (activeBtn) activeBtn.classList.toggle('active', panelViewMode === 'active');
     if (allBtn) allBtn.classList.toggle('active', panelViewMode === 'all');
+    schedulePersistLocalState();
     renderReplies();
   }
 
@@ -1530,6 +1816,11 @@
     const isActioned = r.status !== 'pending';
     const statusColors = { adopted: '#4caf50', edited: '#1976d2', ignored: '#999' };
     const label = r.customerName || r.sessionId?.slice(0, 8) || '未知';
+    const trace = (r.contextTrace && typeof r.contextTrace === 'object') ? r.contextTrace : {};
+    const hasOrderContext = Boolean(trace.has_extension_order_fields || trace.direct_logistics_from_extension);
+    const traceBadge = hasOrderContext
+      ? '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff3cd;color:#8a6d3b;font-size:12px;margin-bottom:6px;">🧭 已使用订单面板</span>'
+      : '';
     const feedbackText = r.feedbackRating === 'good'
       ? '👍 已好评'
       : r.feedbackRating === 'bad'
@@ -1554,6 +1845,7 @@
     return `
       <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
         <div class="aidz-reply-session-tag" title="${escapeHtml(r.sessionId || '')}">👤 ${escapeHtml(label)}</div>
+        ${traceBadge}
         <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
         <div class="aidz-reply-meta">
           <span>⏱ ${r.time}</span>
@@ -1587,8 +1879,12 @@
       return;
     }
 
+    const prevActiveSessionId = activeSessionId;
     if (!activeSessionId || !sessionData[activeSessionId]) {
       activeSessionId = entries[0][0];
+    }
+    if (activeSessionId !== prevActiveSessionId) {
+      schedulePersistLocalState();
     }
 
     if (panelViewMode === 'active') {
@@ -1695,6 +1991,7 @@
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     fillReplyInput(reply.editedText || reply.text);
     if (mode === 'auto-send') setTimeout(() => clickSendButton(), 300);
+    schedulePersistLocalState();
     renderReplies();
     sendFeedback({
       session_id: reply.sessionId,
@@ -1735,6 +2032,7 @@
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
     fillReplyInput(editedText);
     if (mode === 'auto-send') setTimeout(() => clickSendButton(), 300);
+    schedulePersistLocalState();
     renderReplies();
     // 产品要求：编辑不反馈到后端。
   }
@@ -1744,12 +2042,14 @@
     reply.feedbackRating = 'bad';
     const session = sessionData[reply.sessionId];
     if (session) session.pendingCount = Math.max(0, session.pendingCount - 1);
+    schedulePersistLocalState();
     renderReplies(); // UI 立刻更新，不等 feedback
     // 产品要求：忽略不反馈到后端。
   }
 
   function sendReplyFeedback(reply, type, btn) {
     reply.feedbackRating = type;
+    schedulePersistLocalState();
     btn.classList.add('active');
     btn.disabled = true;
     const card = btn.closest('.aidz-reply-card');
@@ -1783,6 +2083,7 @@
   /* ═══════════════════ Init ═══════════════════ */
   // document_start 时 body 可能还不存在，等 DOM 就绪再创建面板
   function initPanel() {
+    restoreLocalState();
     if (document.body) {
       createPanel();
       console.log('[AI店长] v3 已加载 — 数据驱动多会话 + 全量聊天记录采集');
@@ -1793,5 +2094,24 @@
       });
     }
   }
+
+  window.addEventListener('beforeunload', () => {
+    if (persistStateTimer) {
+      clearTimeout(persistStateTimer);
+      persistStateTimer = null;
+    }
+    persistLocalStateNow();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      if (persistStateTimer) {
+        clearTimeout(persistStateTimer);
+        persistStateTimer = null;
+      }
+      persistLocalStateNow();
+    }
+  });
+
   initPanel();
 })();

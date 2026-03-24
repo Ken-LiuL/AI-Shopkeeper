@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 from collections import OrderedDict
 from datetime import UTC
 
@@ -40,7 +41,11 @@ _feedback_schema_checked = False
 def _session_lock_wait_seconds() -> float:
     raw = os.getenv("CS_SESSION_LOCK_WAIT", "35")
     try:
-        return max(0.0, float(raw))
+        value = float(raw)
+        # 线上曾出现 wait=0 导致立即 429，这里设置保护下限。
+        if value < 8.0:
+            return 8.0
+        return value
     except ValueError:
         return 35.0
 
@@ -51,6 +56,24 @@ def _session_lock_ttl_seconds() -> int:
         return max(10, int(float(raw)))
     except ValueError:
         return 90
+
+
+def _request_dedup_wait_seconds() -> float:
+    raw = os.getenv("CS_REQUEST_DEDUP_WAIT", "24")
+    try:
+        value = float(raw)
+        return max(2.0, min(value, 28.0))
+    except ValueError:
+        return 24.0
+
+
+def _session_queue_wait_seconds() -> float:
+    raw = os.getenv("CS_SESSION_QUEUE_WAIT", "95")
+    try:
+        value = float(raw)
+        return max(10.0, min(value, 240.0))
+    except ValueError:
+        return 95.0
 
 
 def _mem_ensure(session_id: str) -> list[dict]:
@@ -168,6 +191,7 @@ async def create_session(
 async def chat(
     request: ChatRequest,
 ) -> APIResponse[ChatResponse]:
+    import asyncio
     import time as _time
     _api_t0 = _time.time()
 
@@ -177,10 +201,53 @@ async def chat(
     sm = _get_session_manager()
     pool = pg_db.get_pool()
     session_id = (request.session_id or "").strip()
+    message_id = (request.message_id or "").strip()
     if not session_id:
         raise AppError("session_id cannot be empty", status_code=400)
     use_redis = False
     lock_acquired = False
+    dedup_owner = False
+    dedup_cache_key = ""
+    dedup_inflight_key = ""
+
+    redis_client = redis_db.get_redis()
+    if redis_client is not None and message_id:
+        dedup_cache_key = f"cs:req:reply:{session_id}:{message_id}"
+        dedup_inflight_key = f"cs:req:inflight:{session_id}:{message_id}"
+        try:
+            cached_raw = await redis_client.get(dedup_cache_key)
+            if cached_raw:
+                cached_data = json.loads(cached_raw)
+                return APIResponse(data=ChatResponse(**cached_data))
+        except Exception:
+            pass
+
+        try:
+            dedup_owner = bool(
+                await redis_client.set(
+                    dedup_inflight_key,
+                    "1",
+                    nx=True,
+                    ex=max(8, int(_request_dedup_wait_seconds()) + 6),
+                )
+            )
+        except Exception:
+            dedup_owner = False
+
+        if not dedup_owner:
+            wait_deadline = _time.time() + _request_dedup_wait_seconds()
+            while _time.time() < wait_deadline:
+                await asyncio.sleep(0.25)
+                try:
+                    cached_raw = await redis_client.get(dedup_cache_key)
+                    if cached_raw:
+                        cached_data = json.loads(cached_raw)
+                        return APIResponse(data=ChatResponse(**cached_data))
+                    inflight_alive = await redis_client.exists(dedup_inflight_key)
+                    if not inflight_alive:
+                        break
+                except Exception:
+                    break
 
     # Determine history source: Redis (with auto-create) or in-memory fallback
     #
@@ -194,14 +261,48 @@ async def chat(
             # Auto-create session in Redis (idempotent)
             logger.info(f"[CS] Auto-creating Redis session for {session_id}")
             await sm.create_session_with_id(session_id)
-        if not await sm.acquire_lock(
-            session_id,
-            timeout=_session_lock_ttl_seconds(),
-            wait=_session_lock_wait_seconds(),
-        ):
-            raise AppError("Session is busy, please retry", status_code=429)
+        queue_deadline = _time.time() + _session_queue_wait_seconds()
+        lock_timeout = _session_lock_ttl_seconds()
+        lock_wait = _session_lock_wait_seconds()
+        while _time.time() < queue_deadline:
+            wait_window = min(lock_wait, max(0.5, queue_deadline - _time.time()))
+            if await sm.acquire_lock(
+                session_id,
+                timeout=lock_timeout,
+                wait=wait_window,
+            ):
+                lock_acquired = True
+                break
+            await asyncio.sleep(0.15)
+        if not lock_acquired:
+            logger.warning("Session queue wait timeout: session_id=%s", session_id)
+            fallback = ChatResponse(
+                session_id=session_id,
+                reply="亲，当前咨询较多，我正在为您排队处理，请稍后再发一条我会优先跟进～",
+                ai_reply_id=None,
+                intent="session_queue",
+                sources=[],
+                needs_human=False,
+                error_code=None,
+                error_detail=None,
+            )
+            if redis_client is not None and dedup_cache_key:
+                try:
+                    await redis_client.set(
+                        dedup_cache_key,
+                        fallback.model_dump_json(),
+                        ex=30,
+                    )
+                except Exception:
+                    pass
+            if dedup_owner and redis_client is not None and dedup_inflight_key:
+                try:
+                    await redis_client.delete(dedup_inflight_key)
+                except Exception:
+                    pass
+                dedup_owner = False
+            return APIResponse(data=fallback)
         use_redis = True
-        lock_acquired = True
         try:
             history = await sm.get_history(session_id, limit=20)
             session_summary = await sm.get_summary(session_id)
@@ -264,21 +365,35 @@ async def chat(
             f"chat={(_api_post_chat - _api_pre_chat)*1000:.0f}ms, "
             f"post={(_api_end - _api_post_chat)*1000:.0f}ms)"
         )
-        return APIResponse(
-            data=ChatResponse(
-                session_id=session_id,
-                reply=reply,
-                ai_reply_id=ai_reply_id,
-                intent=intent,
-                sources=sources,
-                needs_human=needs_human,  # 添加新字段
-                error_code=error_code,
-                error_detail=error_detail,
-            )
+        response_data = ChatResponse(
+            session_id=session_id,
+            reply=reply,
+            ai_reply_id=ai_reply_id,
+            intent=intent,
+            sources=sources,
+            needs_human=needs_human,  # 添加新字段
+            error_code=error_code,
+            error_detail=error_detail,
+            context_trace=result.get("context_trace", {}),
         )
+        if redis_client is not None and dedup_cache_key:
+            try:
+                await redis_client.set(
+                    dedup_cache_key,
+                    response_data.model_dump_json(),
+                    ex=90,
+                )
+            except Exception:
+                pass
+        return APIResponse(data=response_data)
     finally:
         if lock_acquired:
             await sm.release_lock(session_id)
+        if dedup_owner and redis_client is not None and dedup_inflight_key:
+            try:
+                await redis_client.delete(dedup_inflight_key)
+            except Exception:
+                pass
 
 
 # ── Quick auto-reply (stateless) ──────────────────────────────
@@ -368,6 +483,7 @@ async def chat_stream(request: ChatRequest):
     import asyncio
     import contextlib
     import json as _json
+    import time as _time
 
     from src.agents.customer_service.nodes import chat as cs_chat
     from src.db import postgres as pg_db
@@ -385,17 +501,26 @@ async def chat_stream(request: ChatRequest):
         if not await sm.session_exists(session_id):
             logger.info(f"[CS] Stream: auto-creating Redis session for {session_id}")
             await sm.create_session_with_id(session_id)
-        if not await sm.acquire_lock(
-            session_id,
-            timeout=_session_lock_ttl_seconds(),
-            wait=_session_lock_wait_seconds(),
-        ):
+        queue_deadline = _time.time() + _session_queue_wait_seconds()
+        lock_timeout = _session_lock_ttl_seconds()
+        lock_wait = _session_lock_wait_seconds()
+        while _time.time() < queue_deadline:
+            wait_window = min(lock_wait, max(0.5, queue_deadline - _time.time()))
+            if await sm.acquire_lock(
+                session_id,
+                timeout=lock_timeout,
+                wait=wait_window,
+            ):
+                lock_acquired = True
+                break
+            await asyncio.sleep(0.15)
+        if not lock_acquired:
+            logger.warning("Stream session queue wait timeout: session_id=%s", session_id)
             async def _busy():
-                yield f"data: {_json.dumps({'type': 'error', 'message': 'Session is busy'})}\n\n"
+                yield f"data: {_json.dumps({'type': 'error', 'message': '当前会话排队中，请稍后重试'})}\n\n"
 
             return StreamingResponse(_busy(), media_type="text/event-stream")
         use_redis = True
-        lock_acquired = True
         try:
             history = await sm.get_history(session_id, limit=20)
             session_summary = await sm.get_summary(session_id)
@@ -469,7 +594,7 @@ async def chat_stream(request: ChatRequest):
 
             yield (
                 "data: "
-                f"{_json.dumps({'type': 'done', 'reply': reply, 'ai_reply_id': result.get('ai_reply_id'), 'intent': result.get('intent'), 'needs_human': result.get('needs_human', False)}, ensure_ascii=False)}\n\n"
+                f"{_json.dumps({'type': 'done', 'reply': reply, 'ai_reply_id': result.get('ai_reply_id'), 'intent': result.get('intent'), 'needs_human': result.get('needs_human', False), 'context_trace': result.get('context_trace', {})}, ensure_ascii=False)}\n\n"
             )
         except Exception as e:
             logger.error("Stream chat failed: %s", e)

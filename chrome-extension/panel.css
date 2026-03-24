@@ -4,7 +4,8 @@
   position: fixed;
   top: 80px;
   right: 20px;
-  width: 340px;
+  width: 420px;
+  max-width: 92vw;
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 12px;
@@ -15,6 +16,10 @@
   color: #333;
   user-select: none;
   transition: box-shadow 0.2s, width 0.2s;
+}
+
+#ai-dianzhang-panel.aidz-resizing {
+  transition: none;
 }
 
 #ai-dianzhang-panel:hover {
@@ -89,9 +94,11 @@
 
 /* ---- Body ---- */
 .aidz-body {
+  display: flex;
+  flex-direction: column;
   padding: 12px 14px;
-  max-height: 480px;
-  overflow-y: auto;
+  max-height: 560px;
+  overflow: hidden;
 }
 
 .aidz-controls {
@@ -99,6 +106,169 @@
   align-items: center;
   gap: 10px;
   margin-bottom: 10px;
+}
+
+.aidz-view-controls {
+  display: flex;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.aidz-view-btn {
+  flex: 1;
+  border: 1px solid #ffd39c;
+  border-radius: 6px;
+  background: #fff8ef;
+  color: #8a5a1f;
+  font-size: 12px;
+  padding: 6px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.aidz-view-btn:hover {
+  background: #fff1df;
+}
+
+.aidz-view-btn.active {
+  background: linear-gradient(135deg, #ff9500, #ff6a00);
+  border-color: #ff7f00;
+  color: #fff;
+  font-weight: 600;
+}
+
+.aidz-session-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 2px 0 8px;
+  margin-bottom: 6px;
+}
+
+.aidz-session-chip {
+  border: 1px solid #ffd39c;
+  background: #fff;
+  color: #70451a;
+  border-radius: 14px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.aidz-session-chip.active {
+  border-color: #ff9500;
+  background: #fff3e0;
+  color: #d75b00;
+  font-weight: 600;
+}
+
+.aidz-session-chip-label {
+  max-width: 88px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidz-session-chip-count {
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: #ff6a00;
+  color: #fff;
+  line-height: 16px;
+  text-align: center;
+  font-size: 10px;
+  padding: 0 4px;
+}
+
+.aidz-main {
+  display: grid;
+  grid-template-columns: 104px 1fr;
+  gap: 8px;
+  min-height: 200px;
+}
+
+.aidz-resize-handle {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-radius: 4px;
+  background:
+    linear-gradient(135deg, transparent 0 45%, rgba(255, 149, 0, 0.35) 45% 55%, transparent 55% 100%),
+    linear-gradient(135deg, transparent 0 62%, rgba(255, 149, 0, 0.55) 62% 72%, transparent 72% 100%),
+    linear-gradient(135deg, transparent 0 79%, rgba(255, 149, 0, 0.75) 79% 89%, transparent 89% 100%);
+}
+
+.aidz-session-rail {
+  border: 1px solid #f0e0c8;
+  border-radius: 8px;
+  background: #fffdf9;
+  overflow: hidden;
+}
+
+.aidz-session-rail-list {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.aidz-session-rail-item {
+  border: 1px solid #f2dec2;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 7px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+
+.aidz-session-rail-item:hover {
+  border-color: #ffcb8a;
+  background: #fffaf2;
+}
+
+.aidz-session-rail-item.active {
+  border-color: #ff9500;
+  background: #fff3e0;
+}
+
+.aidz-session-rail-name {
+  font-size: 11px;
+  color: #5f3e18;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidz-session-rail-count {
+  align-self: flex-end;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: #ff6a00;
+  color: #fff;
+  line-height: 18px;
+  text-align: center;
+  font-size: 10px;
+  padding: 0 4px;
+}
+
+.aidz-session-rail-empty {
+  color: #aaa;
+  font-size: 12px;
+  padding: 12px;
 }
 
 .aidz-toggle {
@@ -146,8 +316,66 @@
 
 /* ---- Reply Cards ---- */
 .aidz-replies {
-  max-height: 360px;
+  max-height: 420px;
+  min-height: 240px;
   overflow-y: auto;
+}
+
+.aidz-session-group {
+  border: 1px solid #f0e0c8;
+  border-radius: 8px;
+  background: #fff;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.aidz-session-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid #f5e8d8;
+  background: #fffaf2;
+}
+
+.aidz-session-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5f3e18;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aidz-session-group-meta {
+  font-size: 11px;
+  color: #9c6b2e;
+  white-space: nowrap;
+}
+
+.aidz-link-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: #1976d2;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.aidz-link-btn:hover {
+  text-decoration: underline;
+}
+
+.aidz-session-group-cards {
+  padding: 6px;
+}
+
+.aidz-reply-session-tag {
+  padding: 8px 12px 0;
+  color: #51626f;
+  font-size: 12px;
 }
 
 .aidz-reply-card {
@@ -385,4 +613,31 @@
   color: #bbb;
   padding: 20px 10px;
   font-size: 12px;
+}
+
+@media (max-width: 768px) {
+  #ai-dianzhang-panel {
+    width: 92vw;
+    right: 4vw;
+    left: 4vw;
+  }
+
+  .aidz-main {
+    grid-template-columns: 1fr;
+  }
+
+  .aidz-session-rail {
+    max-height: 120px;
+  }
+
+  .aidz-session-rail-list {
+    max-height: 120px;
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .aidz-session-rail-item {
+    min-width: 120px;
+  }
 }
