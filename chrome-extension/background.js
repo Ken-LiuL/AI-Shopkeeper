@@ -256,6 +256,7 @@ async function handleCustomerMessageDirect(payload) {
       const payload = (data && typeof data.data === 'object' && data.data) ? data.data : data;
       const reply = payload.reply || data.reply || data.message || data.response || '';
       const aiReplyId = payload.ai_reply_id || data.ai_reply_id || '';
+      const needsHuman = Boolean(payload.needs_human ?? data.needs_human);
       const errorCode = payload.error_code || data.error_code || '';
       const errorDetail = payload.error_detail || data.error_detail || '';
       const contextTrace = (payload.context_trace && typeof payload.context_trace === 'object')
@@ -284,6 +285,7 @@ async function handleCustomerMessageDirect(payload) {
         success: true,
         reply,
         ai_reply_id: aiReplyId || '',
+        needs_human: needsHuman,
         product_cards: payload.product_cards || [],
         context_trace: contextTrace,
       };

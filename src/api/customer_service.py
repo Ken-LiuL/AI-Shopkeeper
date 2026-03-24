@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
-import json
 from collections import OrderedDict
 from datetime import UTC
 
@@ -128,7 +129,6 @@ async def _ensure_feedback_schema(pool) -> None:
     global _feedback_schema_checked
     if _feedback_schema_checked:
         return
-    import contextlib
 
     with contextlib.suppress(Exception):
         await pool.execute(
@@ -287,19 +287,15 @@ async def chat(
                 error_detail=None,
             )
             if redis_client is not None and dedup_cache_key:
-                try:
+                with contextlib.suppress(Exception):
                     await redis_client.set(
                         dedup_cache_key,
                         fallback.model_dump_json(),
                         ex=30,
                     )
-                except Exception:
-                    pass
             if dedup_owner and redis_client is not None and dedup_inflight_key:
-                try:
+                with contextlib.suppress(Exception):
                     await redis_client.delete(dedup_inflight_key)
-                except Exception:
-                    pass
                 dedup_owner = False
             return APIResponse(data=fallback)
         use_redis = True
@@ -377,23 +373,19 @@ async def chat(
             context_trace=result.get("context_trace", {}),
         )
         if redis_client is not None and dedup_cache_key:
-            try:
+            with contextlib.suppress(Exception):
                 await redis_client.set(
                     dedup_cache_key,
                     response_data.model_dump_json(),
                     ex=90,
                 )
-            except Exception:
-                pass
         return APIResponse(data=response_data)
     finally:
         if lock_acquired:
             await sm.release_lock(session_id)
         if dedup_owner and redis_client is not None and dedup_inflight_key:
-            try:
+            with contextlib.suppress(Exception):
                 await redis_client.delete(dedup_inflight_key)
-            except Exception:
-                pass
 
 
 # ── Quick auto-reply (stateless) ──────────────────────────────

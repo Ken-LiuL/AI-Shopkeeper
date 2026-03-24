@@ -17,6 +17,7 @@ import re
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
@@ -60,9 +61,86 @@ _ACK_REPLIES = [
     "亲，好的！😊 有其他问题随时告诉我哦~",
     "好的亲！🌟 如还有需要帮忙的随时找我~",
 ]
+_FAST_GREETING_COOLDOWN_SECONDS = 10 * 60
 
 
-def _fast_path_reply(session_id: str, message: str, ai_reply_id: str | None = None) -> dict | None:
+def _parse_history_timestamp(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        ts = float(value)
+        return ts if ts > 0 else None
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return None
+        try:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            return datetime.fromisoformat(raw).timestamp()
+        except Exception:
+            return None
+    return None
+
+
+def _has_recent_fast_greeting(
+    conversation_history: list[dict] | None,
+    *,
+    cooldown_seconds: int = _FAST_GREETING_COOLDOWN_SECONDS,
+) -> bool:
+    if not conversation_history:
+        return False
+
+    now_ts = datetime.now(UTC).timestamp()
+    reply_set = set(_GREETING_REPLIES) | set(_THANKS_REPLIES) | set(_ACK_REPLIES)
+    for msg in reversed(conversation_history[-20:]):
+        if not isinstance(msg, dict):
+            continue
+        role = (msg.get("role") or "").strip().lower()
+        if role != "assistant":
+            continue
+        content = (msg.get("content") or "").strip()
+        if content not in reply_set:
+            continue
+        ts = _parse_history_timestamp(msg.get("timestamp"))
+        if ts is None:
+            return True
+        return (now_ts - ts) <= cooldown_seconds
+    return False
+
+
+def _is_non_actionable_placeholder_message(message: str) -> bool:
+    """占位消息不进入 LLM，避免生成无意义问候/泛回复。"""
+    normalized = re.sub(r"\s+", "", (message or "").strip().lower())
+    if not normalized:
+        return False
+
+    pure_placeholders = {
+        "[图片消息]",
+        "[卡片消息]",
+        "[语音消息]",
+        "[系统消息]",
+        "[文件消息]",
+    }
+    if normalized in pure_placeholders:
+        return True
+
+    if normalized.startswith("[图片消息]"):
+        tail = normalized[len("[图片消息]") :]
+        if not tail or tail == "[图片地址]":
+            return True
+        if tail.startswith("[图片地址]http"):
+            return True
+
+    return normalized.startswith("[卡片消息]") and len(normalized) <= 10
+
+
+def _fast_path_reply(
+    session_id: str,
+    message: str,
+    ai_reply_id: str | None = None,
+    conversation_history: list[dict] | None = None,
+) -> dict | None:
     """
     P0-1 快速路径：只拦截确定性高频简单消息（问候、感谢、简单确认）。
     不拦截任何需要推理的商品/订单/售后问题。
@@ -73,6 +151,9 @@ def _fast_path_reply(session_id: str, message: str, ai_reply_id: str | None = No
     reply_id = ai_reply_id or _new_ai_reply_id()
 
     if m in _FAST_PATH_GREETINGS:
+        if _has_recent_fast_greeting(conversation_history):
+            logger.info("[CS-PERF] Fast-path greeting throttled (session=%s)", session_id)
+            return None
         reply = random.choice(_GREETING_REPLIES)
         logger.info("[CS-PERF] Fast-path hit: greeting")
         return {
@@ -1465,8 +1546,27 @@ async def chat(
     }
 
     try:
+        if _is_non_actionable_placeholder_message(message):
+            logger.info("[CS] Placeholder message skip LLM: session=%s message=%s", session_id, message[:80])
+            return {
+                "session_id": session_id,
+                "reply": "亲，已收到这条图片/卡片消息。为便于我准确处理，麻烦再发一下您的具体问题（例如“什么时候到”“怎么使用”）。",
+                "ai_reply_id": ai_reply_id,
+                "intent": "other",
+                "sources": [],
+                "needs_human": False,
+                "action": {"type": "none"},
+                "product_cards": [],
+                "context_trace": context_trace,
+            }
+
         # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
-        _fast = _fast_path_reply(session_id, message, ai_reply_id=ai_reply_id)
+        _fast = _fast_path_reply(
+            session_id,
+            message,
+            ai_reply_id=ai_reply_id,
+            conversation_history=conversation_history,
+        )
         if _fast is not None:
             if isinstance(_fast, dict):
                 _fast.setdefault("context_trace", context_trace)

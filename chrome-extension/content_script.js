@@ -92,6 +92,7 @@
       editedText: typeof raw.editedText === 'string' ? raw.editedText : '',
       feedbackRating: raw.feedbackRating === 'good' || raw.feedbackRating === 'bad' ? raw.feedbackRating : '',
       contextTrace: (raw.contextTrace && typeof raw.contextTrace === 'object') ? raw.contextTrace : {},
+      needsHuman: Boolean(raw.needsHuman),
     };
   }
 
@@ -168,6 +169,7 @@
           editedText: r.editedText || '',
           feedbackRating: r.feedbackRating || '',
           contextTrace: (r.contextTrace && typeof r.contextTrace === 'object') ? r.contextTrace : {},
+          needsHuman: Boolean(r.needsHuman),
         })),
       };
     }
@@ -326,6 +328,24 @@
       }
     }
     return '';
+  }
+
+  function isNonActionablePlaceholderText(text) {
+    const normalized = String(text || '').trim().replace(/\s+/g, '');
+    if (!normalized) return false;
+    if (['[图片消息]', '[卡片消息]', '[语音消息]', '[系统消息]', '[文件消息]'].includes(normalized)) {
+      return true;
+    }
+    if (normalized.startsWith('[图片消息]')) {
+      const tail = normalized.slice('[图片消息]'.length);
+      if (!tail || tail === '[图片地址]' || tail.startsWith('[图片地址]http')) {
+        return true;
+      }
+    }
+    if (normalized.startsWith('[卡片消息]') && normalized.length <= 10) {
+      return true;
+    }
+    return false;
   }
 
   function isLikelySystemPayloadText(text) {
@@ -1261,6 +1281,10 @@
     }
     const session = getSession(sessionId);
     const customerLabel = session.customerName || sessionId.slice(0, 10) || '客户';
+    if (isNonActionablePlaceholderText(text)) {
+      updatePanel('connected', `⏭️ [${customerLabel}] 占位消息，已跳过AI生成`);
+      return;
+    }
     updatePanel('thinking', `🤔 [${customerLabel}] "${text.slice(0, 20)}..."`);
     const customerInfo = (msg.customerInfo && typeof msg.customerInfo === 'object')
       ? { ...msg.customerInfo }
@@ -1293,10 +1317,20 @@
           const contextTrace = (response.context_trace && typeof response.context_trace === 'object')
             ? response.context_trace
             : {};
+          const needsHuman = Boolean(response.needs_human);
           if (contextTrace.direct_logistics_from_extension || contextTrace.has_extension_order_fields) {
             updatePanel('connected', `🧭 [${customerLabel}] 已使用工作台订单信息`);
+          } else if (needsHuman) {
+            updatePanel('connected', `⚠️ [${customerLabel}] 建议转人工处理`);
           }
-          handleAIReply(response.reply, sessionId, msg.id, response.ai_reply_id || '', contextTrace);
+          handleAIReply(
+            response.reply,
+            sessionId,
+            msg.id,
+            response.ai_reply_id || '',
+            contextTrace,
+            needsHuman
+          );
         } else {
           updatePanel('error', response?.error || '未知错误');
         }
@@ -1332,7 +1366,14 @@
   }
 
   /* ═══════════════════ AI Reply Handler ═══════════════════ */
-  function handleAIReply(reply, sessionId, messageId, aiReplyId = '', contextTrace = {}) {
+  function handleAIReply(
+    reply,
+    sessionId,
+    messageId,
+    aiReplyId = '',
+    contextTrace = {},
+    needsHuman = false
+  ) {
     const session = getSession(sessionId);
     const customerLabel = session.customerName || sessionId?.slice(0, 10) || '客户';
     if (messageId) {
@@ -1351,6 +1392,7 @@
       messageId: messageId || '',
       aiReplyId: aiReplyId || '',
       contextTrace: contextTrace && typeof contextTrace === 'object' ? contextTrace : {},
+      needsHuman: Boolean(needsHuman),
       customerName: customerLabel,
       createdAt: Date.now(),
       status: 'pending',
@@ -1361,7 +1403,10 @@
     addReplyToSession(sessionId, replyObj);
 
     if (mode === 'suggest') {
-      updatePanel('connected', `✨ [${customerLabel}] 新建议`);
+      updatePanel(
+        'connected',
+        needsHuman ? `⚠️ [${customerLabel}] 建议转人工` : `✨ [${customerLabel}] 新建议`
+      );
       renderReplies();
       flashPanel();
     } else if (mode === 'auto-fill') {
@@ -1821,6 +1866,9 @@
     const traceBadge = hasOrderContext
       ? '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fff3cd;color:#8a6d3b;font-size:12px;margin-bottom:6px;">🧭 已使用订单面板</span>'
       : '';
+    const humanBadge = r.needsHuman
+      ? '<span style="display:inline-block;padding:2px 8px;border-radius:999px;background:#fdecea;color:#b42318;font-size:12px;margin-bottom:6px;">⚠️ 建议转人工</span>'
+      : '';
     const feedbackText = r.feedbackRating === 'good'
       ? '👍 已好评'
       : r.feedbackRating === 'bad'
@@ -1846,6 +1894,7 @@
       <div class="aidz-reply-card ${statusClass}" data-reply-id="${r.id}" data-session-id="${r.sessionId}">
         <div class="aidz-reply-session-tag" title="${escapeHtml(r.sessionId || '')}">👤 ${escapeHtml(label)}</div>
         ${traceBadge}
+        ${humanBadge}
         <div class="aidz-reply-content">${escapeHtml(r.editedText || r.text)}</div>
         <div class="aidz-reply-meta">
           <span>⏱ ${r.time}</span>
