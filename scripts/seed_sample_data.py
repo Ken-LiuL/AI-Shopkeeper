@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
-"""将 sample/ 目录下的 Excel 文件通过 ManualImportService 导入数据库。
+"""将 sample/ 目录下的 Excel 文件通过 ManualImportService 导入数据库（幂等去重）。
 
 用法:
-    # 在 Docker 容器内运行（自动使用 DATABASE_URL）
-    python3 scripts/seed_sample_data.py
-
-    # 强制重新导入
-    python3 scripts/seed_sample_data.py --force
+    python3 scripts/seed_sample_data.py          # 自动跳过已导入的
+    python3 scripts/seed_sample_data.py --force   # 强制重新导入
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import sys
@@ -27,17 +25,65 @@ SAMPLE_FILES = [
 ]
 
 
+def file_md5(filepath: Path) -> str:
+    """计算文件 MD5，用于去重判断。"""
+    h = hashlib.md5()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+async def already_imported(pool, filename: str, md5: str) -> bool:
+    """检查文件是否已成功导入过（按文件名+MD5 双重判断）。"""
+    try:
+        # 检查 manual_import_runs 表
+        row = await pool.fetchrow(
+            """SELECT run_id, imported_rows FROM manual_import_runs 
+               WHERE filename = $1 AND status = 'completed'
+               ORDER BY created_at DESC LIMIT 1""",
+            filename,
+        )
+        if row and row["imported_rows"] and row["imported_rows"] > 0:
+            return True
+    except Exception:
+        pass  # 表可能不存在
+
+    # 备用检查：直接看目标表有没有数据
+    try:
+        counts = {
+            "products": "SELECT count(*) FROM qnh_products",
+            "orders": "SELECT count(*) FROM qnh_orders",
+            "inventory": "SELECT count(*) FROM qnh_inventory",
+        }
+        for import_type, _ in SAMPLE_FILES:
+            if filename.startswith("主档") and import_type == "products":
+                count = await pool.fetchval(counts["products"])
+                if count and count > 100:
+                    return True
+            elif filename.startswith("导出订单") and import_type == "orders":
+                count = await pool.fetchval(counts["orders"])
+                if count and count > 100:
+                    return True
+            elif filename.startswith("库存") and import_type == "inventory":
+                count = await pool.fetchval(counts["inventory"])
+                if count and count > 100:
+                    return True
+    except Exception:
+        pass
+
+    return False
+
+
 async def main():
     force = "--force" in sys.argv
 
-    # 添加项目根目录到 path
     project_root = Path(__file__).resolve().parent.parent
     sys.path.insert(0, str(project_root))
 
     from src.db import postgres as pg_db
     from src.services.manual_import import ManualImportService
 
-    # 初始化数据库连接
     dsn = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/ai_store")
     await pg_db.init(dsn)
 
@@ -50,20 +96,14 @@ async def main():
             logger.warning("⏩ 文件不存在: %s", filepath)
             continue
 
-        # 检查是否已导入过（查 manual_import_runs 表）
-        if not force:
-            try:
-                existing = await pool.fetchval(
-                    "SELECT count(*) FROM manual_import_runs WHERE filename = $1 AND status = 'completed'",
-                    filename,
-                )
-                if existing and existing > 0:
-                    logger.info("⏩ 已导入过: %s（使用 --force 强制重新导入）", filename)
-                    continue
-            except Exception:
-                pass  # 表可能不存在
+        md5 = file_md5(filepath)
 
-        logger.info("📦 导入 %s: %s (%.1f MB)", import_type, filename, filepath.stat().st_size / 1024 / 1024)
+        if not force and await already_imported(pool, filename, md5):
+            logger.info("⏩ 已导入过: %s (跳过)", filename)
+            continue
+
+        size_mb = filepath.stat().st_size / 1024 / 1024
+        logger.info("📦 导入 %s: %s (%.1f MB, md5=%s)", import_type, filename, size_mb, md5[:8])
 
         content = filepath.read_bytes()
         try:
@@ -82,7 +122,7 @@ async def main():
             logger.error("❌ %s 导入失败: %s", import_type, e, exc_info=True)
 
     await pg_db.close()
-    logger.info("🎉 数据导入完成!")
+    logger.info("🎉 完成!")
 
 
 if __name__ == "__main__":

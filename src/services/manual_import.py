@@ -1396,6 +1396,9 @@ class ManualImportService:
                             """
                             INSERT INTO order_items (order_id, product_id, quantity, unit_price, created_at)
                             VALUES ($1, $2, $3, $4, NOW())
+                            ON CONFLICT (order_id, product_id) DO UPDATE SET
+                                quantity = EXCLUDED.quantity,
+                                unit_price = EXCLUDED.unit_price
                             """,
                             order["order_id"],
                             product_id,
