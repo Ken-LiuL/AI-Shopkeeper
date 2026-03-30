@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   adoptPricingSuggestion,
+  applyPricingSuggestions,
   batchUpdatePrices,
   getPricingRules,
   getPricingSuggestions,
@@ -42,6 +43,13 @@ export default function PricingPage() {
   const [batchValue, setBatchValue] = useState('');
   const [batchReason, setBatchReason] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
+
+  // Apply suggestion state
+  const [applyingIds, setApplyingIds] = useState<Set<string>>(new Set());
+  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
+  const [showApplyConfirm, setShowApplyConfirm] = useState(false);
+  const [pendingApplyItems, setPendingApplyItems] = useState<Array<{ product_id: string; new_price: number }>>([]);
+  const [applyProcessing, setApplyProcessing] = useState(false);
 
   const summary = useMemo(() => {
     const highConfidence = suggestions.filter((item) => item.confidence >= 0.8).length;
@@ -151,6 +159,55 @@ export default function PricingPage() {
       setMessage(`批量调价失败：${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
       setBatchProcessing(false);
+    }
+  }
+
+  function handleApplySingle(suggestion: PricingSuggestion) {
+    setPendingApplyItems([{ product_id: suggestion.product_id, new_price: suggestion.suggested_price }]);
+    setShowApplyConfirm(true);
+  }
+
+  function handleApplySelected() {
+    if (selectedSuggestions.size === 0) {
+      setMessage('请先选择要应用的商品。');
+      return;
+    }
+    const items = suggestions
+      .filter((s) => selectedSuggestions.has(s.product_id))
+      .map((s) => ({ product_id: s.product_id, new_price: s.suggested_price }));
+    setPendingApplyItems(items);
+    setShowApplyConfirm(true);
+  }
+
+  async function handleConfirmApply() {
+    if (pendingApplyItems.length === 0) return;
+    setApplyProcessing(true);
+    // Mark as applying
+    const ids = new Set(pendingApplyItems.map((i) => i.product_id));
+    setApplyingIds((prev) => new Set([...prev, ...ids]));
+    try {
+      const result = await applyPricingSuggestions(pendingApplyItems);
+      if (result.updated_count > 0) {
+        setAppliedIds((prev) => new Set([...prev, ...ids]));
+        setMessage(
+          `已成功应用 ${result.updated_count} 个商品的价格${result.failed_count > 0 ? `，${result.failed_count} 个失败` : ''}。`,
+        );
+        setSelectedSuggestions(new Set());
+        await loadData();
+      } else {
+        setMessage('应用失败，没有商品价格被更新。');
+      }
+    } catch (err) {
+      setMessage(`应用失败：${err instanceof Error ? err.message : '未知错误'}`);
+    } finally {
+      setApplyingIds((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+      setApplyProcessing(false);
+      setShowApplyConfirm(false);
+      setPendingApplyItems([]);
     }
   }
 
@@ -279,9 +336,14 @@ export default function PricingPage() {
               </p>
             </div>
             {selectedSuggestions.size > 0 && (
-              <Button onClick={() => setShowBatchModal(true)}>
-                批量调价 ({selectedSuggestions.size})
-              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowBatchModal(true)}>
+                  批量调价 ({selectedSuggestions.size})
+                </Button>
+                <Button onClick={handleApplySelected}>
+                  批量应用建议价 ({selectedSuggestions.size})
+                </Button>
+              </div>
             )}
           </CardHeader>
           <CardContent className="space-y-4">
@@ -369,18 +431,33 @@ export default function PricingPage() {
                             {suggestion.expected_impact || '需要结合执行结果继续观察'}
                           </td>
                           <td className="px-6 py-4 align-top text-sm">
-                            <Button
-                              size="sm"
-                              variant={suggestion.status === 'adopted' ? 'outline' : 'default'}
-                              disabled={adoptingIds.has(suggestion.product_id) || suggestion.status === 'adopted'}
-                              onClick={() => void handleAdoptSuggestion(suggestion.product_id)}
-                            >
-                              {suggestion.status === 'adopted'
-                                ? '已采纳'
-                                : adoptingIds.has(suggestion.product_id)
-                                  ? '处理中...'
-                                  : '采纳建议'}
-                            </Button>
+                            <div className="flex flex-col gap-2">
+                              {appliedIds.has(suggestion.product_id) ? (
+                                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">
+                                  ✓ 已应用
+                                </span>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  disabled={applyingIds.has(suggestion.product_id)}
+                                  onClick={() => handleApplySingle(suggestion)}
+                                >
+                                  {applyingIds.has(suggestion.product_id) ? '应用中...' : '应用'}
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant={suggestion.status === 'adopted' ? 'outline' : 'outline'}
+                                disabled={adoptingIds.has(suggestion.product_id) || suggestion.status === 'adopted'}
+                                onClick={() => void handleAdoptSuggestion(suggestion.product_id)}
+                              >
+                                {suggestion.status === 'adopted'
+                                  ? '已采纳'
+                                  : adoptingIds.has(suggestion.product_id)
+                                    ? '处理中...'
+                                    : '采纳'}
+                              </Button>
+                            </div>
                           </td>
                         </tr>
                       );
@@ -428,6 +505,34 @@ export default function PricingPage() {
             )}
           </CardContent>
         </Card>
+      )}
+
+      {showApplyConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-sm rounded-lg bg-white">
+            <div className="border-b border-gray-200 px-6 py-4">
+              <h3 className="text-lg font-medium text-gray-900">确认应用价格</h3>
+            </div>
+            <div className="px-6 py-4 text-sm text-gray-700">
+              确定要修改 <span className="font-bold text-gray-900">{pendingApplyItems.length}</span> 个商品的价格吗？此操作将立即更新商品实际售价。
+            </div>
+            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+              <Button
+                variant="outline"
+                disabled={applyProcessing}
+                onClick={() => {
+                  setShowApplyConfirm(false);
+                  setPendingApplyItems([]);
+                }}
+              >
+                取消
+              </Button>
+              <Button disabled={applyProcessing} onClick={() => void handleConfirmApply()}>
+                {applyProcessing ? '应用中...' : '确认'}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {showBatchModal && (

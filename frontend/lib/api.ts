@@ -847,6 +847,26 @@ export async function batchUpdatePrices(request: BatchPriceUpdateRequest): Promi
   });
 }
 
+// Apply AI pricing suggestions directly to products
+export interface ApplySuggestionItem {
+  product_id: string;
+  new_price: number;
+}
+
+export interface ApplySuggestionsResult {
+  updated_count: number;
+  failed_count: number;
+}
+
+export async function applyPricingSuggestions(
+  suggestions: ApplySuggestionItem[],
+): Promise<ApplySuggestionsResult> {
+  return fetchAPI<ApplySuggestionsResult>('/pricing/apply', {
+    method: 'POST',
+    body: JSON.stringify({ suggestions }),
+  });
+}
+
 // Inventory Restock API
 export interface RestockSuggestion {
   product_id: string;

@@ -595,6 +595,20 @@ class ApplyPriceRequest(BaseModel):
     changes: list[dict]
 
 
+class ApplySuggestionItem(BaseModel):
+    product_id: str
+    new_price: float
+
+
+class ApplySuggestionsRequest(BaseModel):
+    suggestions: list[ApplySuggestionItem]
+
+
+class ApplySuggestionsResult(BaseModel):
+    updated_count: int
+    failed_count: int
+
+
 class BatchPriceUpdateRequest(BaseModel):
     product_ids: list[str]
     operation: str  # "multiply", "add", "set"
@@ -768,17 +782,87 @@ async def batch_update_prices(req: BatchPriceUpdateRequest) -> APIResponse[Batch
         )
 
 
-# UNUSED: no frontend caller
-@router.post("/apply", response_model=APIResponse[list])
-async def apply_prices(req: ApplyPriceRequest) -> APIResponse:
-    """应用价格变更"""
+@router.post("/apply", response_model=APIResponse[ApplySuggestionsResult])
+async def apply_pricing_suggestions(req: ApplySuggestionsRequest) -> APIResponse[ApplySuggestionsResult]:
+    """一键应用 AI 定价建议：将建议价格写入 products 和 qnh_products 表，并记录变更历史。"""
     try:
-        svc = PricingService()
-        results = await svc.apply_price_changes(req.changes)
-        return APIResponse(data=results)
+        pool = pg.get_pool()
+        updated_count = 0
+        failed_count = 0
+
+        for item in req.suggestions:
+            try:
+                if item.new_price <= 0:
+                    failed_count += 1
+                    continue
+
+                row = await pool.fetchrow(
+                    "SELECT retail_price FROM products WHERE product_id = $1",
+                    item.product_id,
+                )
+                if not row:
+                    failed_count += 1
+                    continue
+
+                old_price = float(row["retail_price"] or 0)
+
+                # Update products table
+                await pool.execute(
+                    "UPDATE products SET retail_price = $1, updated_at = NOW() WHERE product_id = $2",
+                    item.new_price,
+                    item.product_id,
+                )
+
+                # Update qnh_products table (spu_id == product_id convention)
+                with contextlib.suppress(Exception):
+                    await pool.execute(
+                        "UPDATE qnh_products SET retail_price = $1 WHERE spu_id = $2",
+                        item.new_price,
+                        item.product_id,
+                    )
+
+                # Record price change history
+                with contextlib.suppress(Exception):
+                    price_history_exists = await pool.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = 'price_history'
+                        )
+                        """
+                    )
+                    if price_history_exists:
+                        await pool.execute(
+                            """INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
+                               VALUES ($1, $2, $3, $4, NOW())""",
+                            item.product_id,
+                            old_price,
+                            item.new_price,
+                            "定价建议一键应用",
+                        )
+
+                updated_count += 1
+
+            except Exception as e:
+                logger.error(f"Failed to apply price for {item.product_id}: {e}")
+                failed_count += 1
+
+        return APIResponse(
+            data=ApplySuggestionsResult(
+                updated_count=updated_count,
+                failed_count=failed_count,
+            ),
+            message=f"成功应用 {updated_count} 个商品价格"
+            + (f"，{failed_count} 个失败" if failed_count else ""),
+        )
+
     except Exception as e:
-        logger.error(f"Failed to apply price changes: {e}")
-        return APIResponse(success=False, message=f"Failed to apply changes: {str(e)}", data=[])
+        logger.error(f"Failed to apply pricing suggestions: {e}")
+        return APIResponse(
+            success=False,
+            message=f"应用价格失败: {str(e)}",
+            data=ApplySuggestionsResult(updated_count=0, failed_count=len(req.suggestions)),
+        )
 
 
 # 专门的 /api/products/pricing 端点
