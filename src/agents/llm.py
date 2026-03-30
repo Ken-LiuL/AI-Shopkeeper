@@ -106,7 +106,7 @@ def _get_openai_client():
 
         if LLM_PROVIDER == "deepseek":
             _openai_client = AsyncOpenAI(
-                api_key=os.environ.get("DEEPSEEK_API_KEY", "sk-e2c7225a0d714a5185e3c8e5c721a9eb"),
+                api_key=os.environ.get("DEEPSEEK_API_KEY", ""),
                 base_url="https://api.deepseek.com",
             )
         else:

@@ -38,9 +38,7 @@ from src.api.products import router as products_router
 from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.selection import router as selection_router
-from src.api.store_config import router as store_config_router
 from src.api.stores import router as stores_router
-from src.api.sync import router as sync_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.sync_status import router as sync_status_router
 from src.api.system import router as system_router
@@ -156,39 +154,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             logger.warning("Failed to start scheduler", exc_info=True)
 
-        # Run an initial cookie health check in background
+        # Check product count for info logging
         try:
-            import asyncio as _asyncio_hc
-
-            async def _startup_cookie_health_check():
-                try:
-                    from src.scheduler import cookie_health_check_task
-                    await cookie_health_check_task()
-                except Exception as _e:
-                    logger.warning("Startup cookie health check failed: %s", _e)
-
-            _asyncio_hc.create_task(_startup_cookie_health_check())
-            logger.info("Startup cookie health check task scheduled")
-        except Exception:
-            logger.warning("Failed to schedule startup cookie health check", exc_info=True)
-
-        # Check if DB is empty → trigger full sync in background
-        try:
-
-            # Skip sync on server — sync runs locally via nodriver daemon
-            if os.environ.get("DISABLE_SYNC", "").lower() in ("1", "true", "yes"):
-                logger.info("DISABLE_SYNC=true, skipping initial sync (use local daemon instead)")
-            elif pg_db._pool is not None:
+            if pg_db._pool is not None:
                 pool = pg_db.get_pool()
                 count = await pool.fetchval("SELECT COUNT(*) FROM qnh_products")
                 if count == 0:
-                    logger.info("Empty database — use Chrome extension or POST /api/sync/trigger to sync data")
+                    logger.info("Empty database — use Chrome extension or manual import to add data")
                 else:
                     logger.info("Database has %d products", count)
-            else:
-                logger.warning("PG not available, skipping initial sync check")
         except Exception:
-            logger.warning("Failed to check DB for initial sync", exc_info=True)
+            logger.warning("Failed to check product count", exc_info=True)
 
     # Init and register skills for customer service agent (懒加载：后台延迟初始化)
     # 改为后台任务，避免在 512MB 环境启动时阻塞 / OOM
@@ -281,16 +257,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # ── Shutdown ─────────────────────────────────────────────
     logger.info("Shutting down …")
 
-    # 关闭 Playwright 浏览器（如果已启动）
-    try:
-        from src.sync.browser_client import _instance as _browser_instance
-
-        if _browser_instance is not None:
-            await _browser_instance.close()
-            logger.info("Browser client closed ✓")
-    except Exception:
-        logger.debug("No browser client to close", exc_info=True)
-
     # Shutdown scheduler
     try:
         from src.scheduler import shutdown_scheduler
@@ -379,49 +345,6 @@ async def _run_migrations(pool: Any) -> None:
             logger.error("Migration %s failed: %s", fname, e)
             # Continue with remaining migrations
             continue
-
-
-async def _run_incremental_sync(syncer_name: str) -> None:
-    """Run a single syncer's smart sync (incremental or full based on state)."""
-    try:
-        from src.db import postgres as pg
-        from src.sync import (
-            InventorySyncer,
-            MetricsSyncer,
-            OrderSyncer,
-            ProductSyncer,
-            QNHAuth,
-            QNHClient,
-            ReviewSyncer,
-            TrafficSyncer,
-        )
-        from src.sync.competitors import CompetitorSyncer
-
-        pool = pg.get_pool()
-        auth = QNHAuth()
-
-        syncer_map = {
-            "products": ProductSyncer,
-            "orders": OrderSyncer,
-            "inventory": InventorySyncer,
-            "reviews": ReviewSyncer,
-            "traffic": TrafficSyncer,
-            "metrics": MetricsSyncer,
-            "competitors": CompetitorSyncer,
-        }
-
-        cls = syncer_map.get(syncer_name)
-        if not cls:
-            logger.warning("Unknown syncer: %s", syncer_name)
-            return
-
-        async with QNHClient(auth=auth) as client:
-            syncer = cls(client, pool)
-            result = await syncer.sync()
-            logger.info("Scheduled sync %s: %s", syncer_name, result.summary)
-
-    except Exception as e:
-        logger.error("Scheduled sync %s failed: %s", syncer_name, e, exc_info=True)
 
 
 app = FastAPI(
@@ -529,7 +452,6 @@ app.include_router(
 app.include_router(products_router)
 app.include_router(products_v1_router)
 app.include_router(dashboard_router)
-app.include_router(sync_router)
 app.include_router(sync_receiver_router)
 app.include_router(sync_status_router)
 app.include_router(manual_import_router)
@@ -537,7 +459,6 @@ app.include_router(issue_actions_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
-app.include_router(store_config_router)
 app.include_router(system_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
