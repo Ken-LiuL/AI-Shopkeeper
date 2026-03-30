@@ -132,24 +132,65 @@ async def _pick_orders_payload_column(conn) -> str | None:
     return None
 
 
+async def _has_rows(conn, table: str) -> bool:
+    """Return True if the table exists and has at least one row."""
+    exists = await conn.fetchval(
+        """
+        SELECT EXISTS (
+            SELECT FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = $1
+        )
+        """,
+        table,
+    )
+    if not exists:
+        return False
+    count = await conn.fetchval(f"SELECT COUNT(*) FROM {table}")
+    return (count or 0) > 0
+
+
 async def run_product_associations_etl(pool) -> None:
-    """统计订单商品共现关系并写入 product_associations。"""
+    """统计订单商品共现关系并写入 product_associations。
+
+    数据源优先级：
+      1. qnh_orders_raw（raw JSONB，content 或 raw_data 列）
+      2. qnh_orders（结构化表，items JSONB 列）— 当 qnh_orders_raw 为空时自动降级
+    """
     try:
         async with pool.acquire() as conn:
             await conn.execute(_ASSOCIATION_TABLE_SQL)
 
-            payload_col = await _pick_orders_payload_column(conn)
-            if not payload_col:
-                logger.warning("Skip product associations ETL: qnh_orders_raw has no content/raw_data column")
-                return
+            # --- 决定数据源 ---
+            use_raw = await _has_rows(conn, "qnh_orders_raw")
+            if use_raw:
+                payload_col = await _pick_orders_payload_column(conn)
+                if not payload_col:
+                    logger.warning(
+                        "qnh_orders_raw exists but has no content/raw_data column; "
+                        "falling back to qnh_orders"
+                    )
+                    use_raw = False
 
-            rows = await conn.fetch(
-                f"""
-                SELECT {payload_col} AS payload
-                FROM qnh_orders_raw
-                WHERE {payload_col} IS NOT NULL
-                """
-            )
+            if use_raw:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT {payload_col} AS payload
+                    FROM qnh_orders_raw
+                    WHERE {payload_col} IS NOT NULL
+                    """
+                )
+            else:
+                # 从结构化 qnh_orders 表读取，把每行包装成兼容格式
+                logger.info("使用 qnh_orders 作为数据源（qnh_orders_raw 为空或不存在）")
+                raw_rows = await conn.fetch(
+                    """
+                    SELECT order_id, items
+                    FROM qnh_orders
+                    WHERE items IS NOT NULL
+                    """
+                )
+                # 把 qnh_orders.items 包装成 run_product_associations_etl 期望的 payload 格式
+                rows = [{"payload": {"orderId": r["order_id"], "items": r["items"]}} for r in raw_rows]
 
             product_order_counts: Counter[str] = Counter()
             pair_counts: Counter[tuple[str, str]] = Counter()
