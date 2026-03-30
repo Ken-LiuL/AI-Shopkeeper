@@ -61,6 +61,14 @@ from .search import (  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# LangGraph 管线开关
+# 设置环境变量 CS_USE_PIPELINE=false 可回退到原有线性调用链
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+USE_LANGGRAPH_PIPELINE: bool = (
+    os.environ.get("CS_USE_PIPELINE", "true").lower() == "true"
+)
+
 
 def _new_ai_reply_id() -> str:
     return f"csr-{uuid.uuid4().hex}"
@@ -1482,7 +1490,7 @@ def _filter_relevant_knowledge(
     return result
 
 
-async def chat(
+async def _chat_legacy(
     session_id: str,
     message: str,
     pool=None,
@@ -1494,7 +1502,10 @@ async def chat(
     token_callback: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict:
     """
-    新版客服聊天函数 - 单次LLM调用完成所有任务
+    原有客服聊天函数（保留用于回退）- 单次LLM调用完成所有任务。
+
+    此函数是 chat() 重构前的原始实现。
+    通过设置 CS_USE_PIPELINE=false 可令 chat() 走此路径。
 
     Args:
         session_id: 会话ID
@@ -2655,6 +2666,155 @@ async def chat(
             "error_detail": error_detail,
             "context_trace": context_trace,
         }
+
+
+async def _chat_via_pipeline(
+    session_id: str,
+    message: str,
+    pool=None,
+    conversation_history: list[dict] | None = None,
+    images: list[str] | None = None,
+    customer_info: dict[str, Any] | None = None,
+    order_context: dict[str, Any] | None = None,
+    stream: bool = False,
+    token_callback: Callable[[str], Awaitable[None]] | None = None,
+) -> dict:
+    """通过 LangGraph 5 步管线执行客服回复。"""
+    from .pipeline import build_cs_pipeline
+
+    ai_reply_id = new_ai_reply_id()
+    context_trace: dict[str, Any] = {
+        "has_extension_context": bool(
+            _build_extension_context_str(
+                session_id=session_id,
+                customer_info=customer_info,
+                order_context=order_context,
+            )
+        ),
+        "has_extension_order_fields": bool(
+            _extract_extension_order_fields(session_id=session_id, order_context=order_context)
+        ),
+        "extension_order_field_keys": sorted(
+            _extract_extension_order_fields(session_id=session_id, order_context=order_context).keys()
+        ),
+        "direct_logistics_from_extension": False,
+    }
+
+    # 当前 pipeline 聚焦文本问答。流式/视觉场景先走 legacy，保证兼容。
+    if stream or (images and len(images) > 0):
+        logger.info("[CS] Pipeline fallback to legacy for stream/images session=%s", session_id)
+        return await _chat_legacy(
+            session_id=session_id,
+            message=message,
+            pool=pool,
+            conversation_history=conversation_history,
+            images=images,
+            customer_info=customer_info,
+            order_context=order_context,
+            stream=stream,
+            token_callback=token_callback,
+        )
+
+    try:
+        pipeline = build_cs_pipeline()
+        initial_state = {
+            "user_message": message,
+            "session_id": session_id,
+            "pool": pool,
+            "conversation_history": conversation_history or [],
+            "images": images or [],
+            "customer_info": customer_info or {},
+            "order_context": order_context or {},
+            "stream": stream,
+            "token_callback": token_callback,
+            "ai_reply_id": ai_reply_id,
+        }
+
+        result_state = await pipeline.ainvoke(initial_state)
+
+        reply_text = result_state.get("reply") or "亲，系统繁忙，请稍后重试或联系人工客服🙏"
+        intent = result_state.get("intent") or "other"
+        sources = result_state.get("reranked_results") or result_state.get("search_results") or []
+        needs_human = bool(result_state.get("needs_human", intent in {"complaint"}))
+        suggested_action = result_state.get("suggested_action") or {"type": "none"}
+        product_cards = result_state.get("product_cards") or []
+
+        if pool:
+            asyncio.create_task(
+                _log_conversation(
+                    pool=pool,
+                    session_id=session_id,
+                    user_message=message,
+                    intent=intent,
+                    ai_response=reply_text,
+                    ai_reply_id=ai_reply_id,
+                    sources=sources,
+                    confidence=float(result_state.get("intent_confidence", 0.8) or 0.8),
+                )
+            )
+
+        return {
+            "session_id": session_id,
+            "reply": _postprocess_reply_text(reply_text),
+            "ai_reply_id": ai_reply_id,
+            "intent": intent,
+            "sources": sources,
+            "needs_human": needs_human,
+            "action": suggested_action,
+            "product_cards": product_cards,
+            "context_trace": context_trace,
+        }
+    except Exception as e:
+        logger.error("[CS] Pipeline execution failed, fallback to legacy: %s", e, exc_info=True)
+        return await _chat_legacy(
+            session_id=session_id,
+            message=message,
+            pool=pool,
+            conversation_history=conversation_history,
+            images=images,
+            customer_info=customer_info,
+            order_context=order_context,
+            stream=stream,
+            token_callback=token_callback,
+        )
+
+
+async def chat(
+    session_id: str,
+    message: str,
+    pool=None,
+    conversation_history: list[dict] | None = None,
+    images: list[str] | None = None,
+    customer_info: dict[str, Any] | None = None,
+    order_context: dict[str, Any] | None = None,
+    stream: bool = False,
+    token_callback: Callable[[str], Awaitable[None]] | None = None,
+) -> dict:
+    """客服聊天入口：按开关路由到 LangGraph 管线或 legacy 实现。"""
+    if USE_LANGGRAPH_PIPELINE:
+        return await _chat_via_pipeline(
+            session_id=session_id,
+            message=message,
+            pool=pool,
+            conversation_history=conversation_history,
+            images=images,
+            customer_info=customer_info,
+            order_context=order_context,
+            stream=stream,
+            token_callback=token_callback,
+        )
+
+    return await _chat_legacy(
+        session_id=session_id,
+        message=message,
+        pool=pool,
+        conversation_history=conversation_history,
+        images=images,
+        customer_info=customer_info,
+        order_context=order_context,
+        stream=stream,
+        token_callback=token_callback,
+    )
 
 
 # 为了向后兼容，保留一些原有函数签名（但实现很简单）
