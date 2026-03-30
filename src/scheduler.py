@@ -565,27 +565,8 @@ async def daily_report_task() -> None:
 
 
 async def competitor_crawl_task() -> None:
-    """竞品数据采集任务 (8:00, 14:00)"""
-    logger.info("Starting competitor crawl task")
-    try:
-        from src.skills.actionbook import ActionBookSkill
-
-        skill = ActionBookSkill()
-
-        # 获取竞品店铺
-        stores = await skill.competitor_stores("default_store", radius_km=3.0)
-        logger.info(f"Found {len(stores)} competitor stores")
-
-        # 获取竞品商品
-        for store in stores:
-            products = await skill.competitor_products("default_store", store.store_id, limit=50)
-            logger.info(f"Crawled {len(products)} products from {store.name}")
-            await asyncio.sleep(1)  # 限速
-
-        logger.info("Competitor crawl completed")
-
-    except Exception:
-        logger.exception("Competitor crawl task failed")
+    """竞品数据采集任务 — 已迁移至 Chrome 扩展，此处为空操作。"""
+    logger.info("Competitor crawl now handled by Chrome extension — skipping")
 
 
 def _resolve_database_url() -> str | None:
@@ -602,283 +583,59 @@ def _resolve_database_url() -> str | None:
     )
 
 
+# ── 数据采集任务已移除 ──────────────────────────────────────────────────────
+# 美团/牵牛花数据采集已迁移至 Chrome 扩展 + 手动上传模式。
+# 以下函数保留空实现，避免调度器引用断裂。
+
 async def meituan_product_sync_task() -> None:
-    """美团买药商品同步 (主数据源)."""
-    logger.info("Starting Meituan product sync task")
-    dsn = _resolve_database_url()
-    if not dsn:
-        logger.warning("DATABASE_URL unavailable — skip Meituan sync")
-        return
-    try:
-        import asyncpg
-
-        from src.sync.meituan_client import MeituanBrowserClient
-        from src.sync.meituan_products import MeituanProductSyncer
-
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
-        try:
-            # 从 store_configs 获取活跃门店
-            async with pool.acquire() as conn:
-                stores = await conn.fetch(
-                    "SELECT wm_poi_id, cookie_json FROM store_configs WHERE sync_status = 'active' AND platform = 'meituan_yiyao'"
-                )
-
-            for store in stores:
-                wm_poi_id = store["wm_poi_id"]
-                logger.info("Syncing Meituan store %s", wm_poi_id)
-                client = MeituanBrowserClient(wm_poi_id=wm_poi_id)
-                syncer = MeituanProductSyncer(client, pool, wm_poi_id)
-                result = await syncer.sync()
-                logger.info(
-                    "Meituan product sync for %s: success=%s records=%s",
-                    wm_poi_id,
-                    result.success,
-                    result.records_synced,
-                )
-                # 更新 sync 状态
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE store_configs SET last_sync_at = NOW(), last_sync_error = $1 WHERE wm_poi_id = $2",
-                        result.error if not result.success else None,
-                        wm_poi_id,
-                    )
-                await client.close()
-        finally:
-            await pool.close()
-    except Exception:
-        logger.exception("Meituan product sync task failed")
+    """已迁移至 Chrome 扩展。"""
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_full_sync_task(target: str | None = None, days_back: int = 7) -> None:
-    """定时数据同步（使用 nodriver + YiyaoFullSyncer）。"""
-    logger.info("Starting Meituan full sync via nodriver (target=%s)", target or "all")
-    try:
-        import asyncpg
-
-        from src.sync.meituan_client import MeituanBrowserClient
-        from src.sync.yiyao_syncer import YiyaoFullSyncer
-
-        dsn = _resolve_database_url()
-        if not dsn:
-            logger.warning("DATABASE_URL unavailable — skip sync")
-            return
-
-        wm_poi_id = os.environ.get("WM_POI_ID", "")
-        if not wm_poi_id:
-            logger.warning("WM_POI_ID not set — skip sync")
-            return
-
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
-
-        # 尝试从 DB 读取最新 Cookie
-        cookie_json = None
-        try:
-            row = await pool.fetchrow(
-                "SELECT cookie_json FROM merchant_sync_cookies "
-                "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
-            )
-            if row and row["cookie_json"]:
-                import json as _json
-                cookie_json = _json.loads(row["cookie_json"]) if isinstance(row["cookie_json"], str) else row["cookie_json"]
-                logger.info("从 DB 加载 Cookie（%d 个键）", len(cookie_json))
-        except Exception:
-            logger.debug("DB Cookie 表不存在或查询失败，将使用文件/环境变量")
-
-        client = MeituanBrowserClient(wm_poi_id=wm_poi_id, cookie_json=cookie_json)
-        try:
-            syncer = YiyaoFullSyncer(client=client, pool=pool, wm_poi_id=wm_poi_id, days_back=days_back)
-            if target == "products":
-                results = [await syncer.sync_products()]
-            elif target == "orders":
-                results = [await syncer.sync_orders()]
-            elif target == "reviews":
-                results = [await syncer.sync_reviews()]
-            elif target == "metrics":
-                results = [await syncer.sync_stats()]
-            elif target == "refunds":
-                results = [await syncer.sync_refunds()]
-            elif target == "promotions":
-                results = [await syncer.sync_promotions()]
-            elif target == "review_analysis":
-                results = [await syncer.sync_review_analysis()]
-            else:
-                results = await syncer.sync_all()
-
-            for r in results:
-                if r.success:
-                    logger.info("✅ %s: %d 条, %d 页", r.syncer, r.records, r.pages)
-                else:
-                    logger.error("❌ %s: %s", r.syncer, r.error)
-        finally:
-            await client.close()
-            await pool.close()
-    except Exception:
-        logger.exception("Meituan full sync failed")
+    """已迁移至 Chrome 扩展。"""
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def qnh_full_sync_task() -> None:
-    """牵牛花全量同步任务（QNH goldengateway + IM）。"""
-    logger.info("Starting QNH full sync")
-    try:
-        import time
-
-        import asyncpg
-
-        from src.sync.channels import ChannelSyncer
-        from src.sync.competitors import CompetitorSyncer
-        from src.sync.customers import CustomerSyncer
-        from src.sync.finance import FinanceSyncer
-        from src.sync.im_history import IMHistorySyncer
-        from src.sync.inventory import InventorySyncer
-        from src.sync.products import ProductSyncer
-        from src.sync.promotions import PromotionSyncer
-        from src.sync.qnh_auth import QNHAuth
-        from src.sync.qnh_client import QNHClient
-        from src.sync.traffic import TrafficSyncer
-
-        dsn = _resolve_database_url()
-        if not dsn:
-            logger.warning("DATABASE_URL unavailable — skip QNH sync")
-            return
-
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
-        try:
-            cookie_json = None
-            try:
-                row = await pool.fetchrow(
-                    "SELECT cookie_json FROM merchant_sync_cookies "
-                    "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
-                )
-                if row and row["cookie_json"]:
-                    raw_cookie = row["cookie_json"]
-                    cookie_json = (
-                        json.loads(raw_cookie) if isinstance(raw_cookie, str) else raw_cookie
-                    )
-                    logger.info("QNH 从 DB 加载 Cookie（%d 个键）", len(cookie_json))
-            except Exception:
-                logger.debug("QNH Cookie 查询失败，将使用文件/环境变量")
-
-            auth = QNHAuth()
-            if cookie_json:
-                auth._cookies = {str(k): str(v) for k, v in cookie_json.items()}
-                auth._session_expires = time.time() + 7200
-
-            client = QNHClient(auth=auth)
-            try:
-                syncers = [
-                    ProductSyncer(client, pool),
-                    PromotionSyncer(client, pool),
-                    TrafficSyncer(client, pool),
-                    InventorySyncer(client, pool),
-                    CustomerSyncer(client, pool),
-                    ChannelSyncer(client, pool),
-                    CompetitorSyncer(pool),
-                    FinanceSyncer(client, pool),
-                    IMHistorySyncer(client, pool),
-                ]
-                results = []
-                for syncer in syncers:
-                    result = await syncer.sync()
-                    results.append(result)
-                    if result.success:
-                        logger.info(
-                            "✅ QNH %s: %d records",
-                            result.syncer_name,
-                            result.records_synced,
-                        )
-                    else:
-                        logger.error("❌ QNH %s: %s", result.syncer_name, result.error)
-
-                ok = sum(1 for item in results if item.success)
-                failed = len(results) - ok
-                total_records = sum(item.records_synced for item in results)
-                logger.info(
-                    "QNH full sync finished: success=%d failed=%d total_records=%d",
-                    ok,
-                    failed,
-                    total_records,
-                )
-            finally:
-                await client.close()
-        finally:
-            await pool.close()
-    except Exception:
-        logger.exception("QNH full sync failed")
+    """已迁移至 Chrome 扩展。"""
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_products_full_sync_task() -> None:
-    await meituan_full_sync_task(target="products", days_back=7)
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_orders_incremental_sync_task() -> None:
-    await meituan_full_sync_task(target="orders", days_back=7)
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_reviews_sync_task() -> None:
-    await meituan_full_sync_task(target="reviews", days_back=7)
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_metrics_sync_task() -> None:
-    await meituan_full_sync_task(target="metrics", days_back=7)
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_refunds_sync_task() -> None:
-    await meituan_full_sync_task(target="refunds", days_back=30)
-
-
-async def _run_meituan_db_only_etl(target: str) -> None:
-    logger.info("Starting Meituan DB-only ETL (target=%s)", target)
-    try:
-        import asyncpg
-
-        from src.sync.yiyao_syncer import YiyaoFullSyncer
-
-        dsn = _resolve_database_url()
-        if not dsn:
-            logger.warning("DATABASE_URL unavailable — skip DB-only ETL")
-            return
-
-        wm_poi_id = os.environ.get("WM_POI_ID", "")
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
-        try:
-            syncer = YiyaoFullSyncer(client=None, pool=pool, wm_poi_id=wm_poi_id or "db_etl", days_back=7)
-            if target == "daily_metrics":
-                result = await syncer.sync_daily_metrics()
-            elif target == "sales_history":
-                result = await syncer.sync_sales_history()
-            elif target == "review_analysis":
-                result = await syncer.sync_review_analysis()
-            elif target == "promotions":
-                result = await syncer.sync_promotions()
-            else:
-                raise ValueError(f"Unsupported Meituan DB-only ETL target: {target}")
-            logger.info(
-                "Meituan DB-only ETL done: target=%s success=%s records=%d pages=%d",
-                target,
-                result.success,
-                result.records,
-                result.pages,
-            )
-        finally:
-            await pool.close()
-    except Exception:
-        logger.exception("Meituan DB-only ETL failed (target=%s)", target)
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_daily_metrics_etl_task() -> None:
-    await _run_meituan_db_only_etl("daily_metrics")
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_sales_history_etl_task() -> None:
-    await _run_meituan_db_only_etl("sales_history")
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_review_analysis_etl_task() -> None:
-    await _run_meituan_db_only_etl("review_analysis")
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def meituan_promotions_stub_sync_task() -> None:
-    await _run_meituan_db_only_etl("promotions")
+    logger.info("Data collection now handled by Chrome extension — skipping")
 
 
 async def delivery_timeout_etl_task() -> None:
@@ -1042,16 +799,12 @@ async def effect_evaluation_etl_task() -> None:
 
 
 async def category_mapping_etl_task() -> None:
-    """类目映射 ETL — 从商品表/竞品表/QNH API 构建类目映射。"""
+    """类目映射 ETL — 从商品表/竞品表构建类目映射（仅本地数据）。"""
     logger.info("Starting category mapping ETL")
     try:
-        import time
-
         import asyncpg
 
         from src.sync.etl_category_mapping import run_category_mapping_etl
-        from src.sync.qnh_auth import QNHAuth
-        from src.sync.qnh_client import QNHClient
 
         dsn = _resolve_database_url()
         if not dsn:
@@ -1060,28 +813,8 @@ async def category_mapping_etl_task() -> None:
 
         pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
         try:
-            # 尝试创建 QNH client（用于 storeCategory API）
-            qnh_client = None
-            try:
-                row = await pool.fetchrow(
-                    "SELECT cookie_json FROM merchant_sync_cookies "
-                    "WHERE is_active = true ORDER BY updated_at DESC LIMIT 1"
-                )
-                if row and row["cookie_json"]:
-                    raw = row["cookie_json"]
-                    cookie_json = json.loads(raw) if isinstance(raw, str) else raw
-                    auth = QNHAuth()
-                    auth._cookies = {str(k): str(v) for k, v in cookie_json.items()}
-                    auth._session_expires = time.time() + 7200
-                    qnh_client = QNHClient(auth=auth)
-            except Exception:
-                logger.debug("无法创建 QNH client，仅使用本地数据")
-
-            results = await run_category_mapping_etl(pool, qnh_client)
+            results = await run_category_mapping_etl(pool, None)
             logger.info("Category mapping ETL done: %s", results)
-
-            if qnh_client:
-                await qnh_client.close()
         finally:
             await pool.close()
     except Exception:
@@ -1134,76 +867,8 @@ async def etl_pipeline_task() -> None:
 
 
 async def cookie_health_check_task() -> None:
-    """Cookie 健康检查任务（每 30 分钟）。
-
-    若美团同步超过 2 小时未成功，写入一条 SYNC_FAILURE 告警。
-    """
-    logger.info("Starting cookie health check task")
-    dsn = _resolve_database_url()
-    if not dsn:
-        logger.warning("DATABASE_URL unavailable — skip cookie health check")
-        return
-    try:
-        import asyncpg
-
-        from src.sync.cookie_health import check_cookie_health
-
-        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
-        try:
-            result = await check_cookie_health(pool)
-            logger.info(
-                "Cookie health: status=%s hours_since_last_sync=%s",
-                result["status"],
-                result.get("hours_since_last_sync"),
-            )
-
-            if result["status"] == "STALE":
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        """
-                        INSERT INTO alerts (
-                            alert_id, product_id, alert_type, severity,
-                            detection_method, metrics, title, description,
-                            status, created_at
-                        ) VALUES (
-                            'sync_cookie_stale', NULL, 'SYNC_FAILURE', 'critical',
-                            'scheduler',
-                            $1::jsonb,
-                            '美团数据同步中断 — Cookie 可能已过期',
-                            $2,
-                            'pending', NOW()
-                        )
-                        ON CONFLICT (alert_id) DO UPDATE SET
-                            severity     = 'critical',
-                            metrics      = EXCLUDED.metrics,
-                            description  = EXCLUDED.description,
-                            status       = 'pending',
-                            resolved_at  = NULL
-                        """,
-                        __import__("json").dumps({
-                            "hours_since_last_sync": result.get("hours_since_last_sync"),
-                            "stale_threshold_hours": result["stale_threshold_hours"],
-                            "last_success_at": result.get("last_success_at"),
-                        }),
-                        result["message"],
-                    )
-                logger.warning("SYNC_FAILURE alert written: %s", result["message"])
-            else:
-                # 若已恢复，自动 resolve 告警
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        """
-                        UPDATE alerts
-                        SET status = 'resolved', resolved_at = NOW()
-                        WHERE alert_id = 'sync_cookie_stale'
-                          AND status = 'pending'
-                        """
-                    )
-        finally:
-            await pool.close()
-
-    except Exception:
-        logger.exception("Cookie health check task failed")
+    """Cookie 健康检查 — 数据采集已迁移至 Chrome 扩展，此任务为空操作。"""
+    logger.info("Cookie health check skipped — data collection handled by Chrome extension")
 
 
 async def daily_insights_warmup_task() -> None:
@@ -1400,140 +1065,17 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
 
 def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
-    """Jobs that require local resources (browser/nodriver/agent warmups)."""
+    """Jobs enabled in local mode.
+
+    Note: browser/nodriver crawlers were removed. We only keep
+    model training and ETL jobs that run on uploaded/synced DB data.
+    """
 
     # Prophet 重训练 (每周日3:00)
     scheduler.add_job(
         _make_heartbeat_task("prophet_retrain", prophet_retrain_task),
         CronTrigger.from_crontab(tasks.get("prophet_retrain", "0 3 * * 0")),
         id="prophet_retrain",
-        replace_existing=True,
-    )
-
-    # 竞品采集 (8:00, 14:00)
-    scheduler.add_job(
-        _make_heartbeat_task("competitor_crawl_am", competitor_crawl_task),
-        CronTrigger.from_crontab(tasks.get("competitor_crawl_am", "0 8 * * *")),
-        id="competitor_crawl_am",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("competitor_crawl_pm", competitor_crawl_task),
-        CronTrigger.from_crontab(tasks.get("competitor_crawl_pm", "0 14 * * *")),
-        id="competitor_crawl_pm",
-        replace_existing=True,
-    )
-
-    # 美团买药商品同步 (凌晨1:30, CST) — 主数据源
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_product_sync", meituan_product_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_product_sync", "30 1 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_product_sync",
-        replace_existing=True,
-    )
-
-    # ── 美团 YiyaoFullSyncer 定时采集 ──────────────────────────────────
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_full_sync_products", meituan_products_full_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_full_sync_products", "0 2 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_full_sync_products",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("qnh_full_sync", qnh_full_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("qnh_full_sync", "0 3 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="qnh_full_sync",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_orders_hourly", meituan_orders_incremental_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_orders_hourly", "0 * * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_orders_hourly",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_reviews_6h", meituan_reviews_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_reviews_6h", "0 */6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_reviews_6h",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_metrics_daily", meituan_metrics_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_metrics_daily", "0 6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_metrics_daily",
-        replace_existing=True,
-    )
-
-    # 退款同步：每 6 小时
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_refunds", meituan_refunds_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_refunds", "0 */6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_refunds",
-        replace_existing=True,
-    )
-
-    # 日报指标 ETL：每天 7:00（在统计数据同步后）
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_daily_metrics_etl", meituan_daily_metrics_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_daily_metrics_etl", "0 7 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_daily_metrics_etl",
-        replace_existing=True,
-    )
-
-    # 销售历史聚合：每天 8:00
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sales_history_etl", meituan_sales_history_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sales_history_etl", "0 8 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sales_history_etl",
-        replace_existing=True,
-    )
-
-    # 评价分析 ETL：每天 8:30
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_review_analysis_etl", meituan_review_analysis_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_review_analysis_etl", "30 8 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_review_analysis_etl",
-        replace_existing=True,
-    )
-
-    # 促销表 stub 保活：每天 9:00
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_promotions_stub_sync", meituan_promotions_stub_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_promotions_stub_sync", "0 9 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_promotions_stub_sync",
         replace_existing=True,
     )
 
@@ -1548,112 +1090,64 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         replace_existing=True,
     )
 
-    # 配送超时检测：每天 05:00 CST
+    # ETL jobs based on existing DB data
     scheduler.add_job(
         _make_heartbeat_task("delivery_timeout_etl", delivery_timeout_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("delivery_timeout_etl", "0 5 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("delivery_timeout_etl", "0 5 * * *"), timezone=SH_TZ),
         id="delivery_timeout_etl",
         replace_existing=True,
     )
-
-    # 平台处罚检测：每 4 小时
     scheduler.add_job(
         _make_heartbeat_task("platform_penalties_etl", platform_penalties_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("platform_penalties_etl", "0 */4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("platform_penalties_etl", "0 */4 * * *"), timezone=SH_TZ),
         id="platform_penalties_etl",
         replace_existing=True,
     )
-
-    # 政策爬取：每周一 06:00 CST
     scheduler.add_job(
         _make_heartbeat_task("policy_crawler_etl", policy_crawler_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("policy_crawler_etl", "0 6 * * 1"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("policy_crawler_etl", "0 6 * * 1"), timezone=SH_TZ),
         id="policy_crawler_etl",
         replace_existing=True,
     )
-
-    # 竞品价格变动：每天 09:30 CST（竞品采集 08:00 之后）
     scheduler.add_job(
         _make_heartbeat_task("competitor_changes_etl", competitor_changes_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("competitor_changes_etl", "30 9 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("competitor_changes_etl", "30 9 * * *"), timezone=SH_TZ),
         id="competitor_changes_etl",
         replace_existing=True,
     )
-
-    # 关联购买矩阵：每天 04:00 CST（订单同步后）
     scheduler.add_job(
         _make_heartbeat_task("product_associations_etl", product_associations_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("product_associations_etl", "0 4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("product_associations_etl", "0 4 * * *"), timezone=SH_TZ),
         id="product_associations_etl",
         replace_existing=True,
     )
-
-    # 季节性趋势：每周日 05:00 CST
     scheduler.add_job(
         _make_heartbeat_task("seasonality_etl", seasonality_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("seasonality_etl", "0 5 * * 0"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("seasonality_etl", "0 5 * * 0"), timezone=SH_TZ),
         id="seasonality_etl",
         replace_existing=True,
     )
-
-    # FAQ 自动生成：每天 10:00 CST
     scheduler.add_job(
         _make_heartbeat_task("auto_faq_etl", auto_faq_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("auto_faq_etl", "0 10 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("auto_faq_etl", "0 10 * * *"), timezone=SH_TZ),
         id="auto_faq_etl",
         replace_existing=True,
     )
-
-    # 决策效果评估：每天 21:00 CST
     scheduler.add_job(
         _make_heartbeat_task("effect_evaluation_etl", effect_evaluation_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("effect_evaluation_etl", "0 21 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("effect_evaluation_etl", "0 21 * * *"), timezone=SH_TZ),
         id="effect_evaluation_etl",
         replace_existing=True,
     )
-
-    # 类目映射 ETL：每天 04:30 CST（商品同步后）
     scheduler.add_job(
         _make_heartbeat_task("category_mapping_etl", category_mapping_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("category_mapping_etl", "30 4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("category_mapping_etl", "30 4 * * *"), timezone=SH_TZ),
         id="category_mapping_etl",
         replace_existing=True,
     )
-
-    # PG -> Neo4j 图谱构建：每天 05:30 CST（在商品同步和 ETL 之后）
     scheduler.add_job(
         _make_heartbeat_task("graph_builder_etl", graph_builder_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("graph_builder_etl", "30 5 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("graph_builder_etl", "30 5 * * *"), timezone=SH_TZ),
         id="graph_builder_etl",
         replace_existing=True,
     )

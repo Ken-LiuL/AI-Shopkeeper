@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from .actionbook import ActionBookSkill
 from .calculator import CalculatorSkill
 from .database import DatabaseSkill
 
@@ -203,7 +202,6 @@ class SkillsContainer:
     """所有 skills 的统一容器。"""
 
     calculator: CalculatorSkill
-    actionbook: ActionBookSkill
     database: DatabaseSkill
     neo4j: Any  # Neo4jSkill or MockNeo4jSkill
     embedding: Any  # EmbeddingSkill or MockEmbeddingSkill
@@ -219,7 +217,6 @@ def create_skills(mode: str = "mock") -> SkillsContainer:
               "production" — 连接真实数据库和模型
     """
     calculator = CalculatorSkill()
-    actionbook = ActionBookSkill()
 
     if mode == "mock":
         database = DatabaseSkill(pool=None)  # no DB connection
@@ -263,7 +260,6 @@ def create_skills(mode: str = "mock") -> SkillsContainer:
 
     return SkillsContainer(
         calculator=calculator,
-        actionbook=actionbook,
         database=database,
         neo4j=neo4j,
         embedding=embedding,

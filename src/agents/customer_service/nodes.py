@@ -2,6 +2,14 @@
 CustomerService Agent 新版实现 - 完整检索管线
 
 管线：意图识别 → 向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富 → LLM 生成
+
+模块拆分:
+- fast_path.py   — 快速路径秒回
+- intent.py      — 意图识别 + 分流逻辑
+- search.py      — Hybrid Search + Reranker + GraphRAG 检索管线
+- nodes.py       — 主编排入口 (chat 函数) + 历史遗留代码
+
+TODO: 后续逐步将 nodes.py 中的内联实现替换为对子模块的调用。
 """
 
 from __future__ import annotations
@@ -26,6 +34,30 @@ from src.services.knowledge_service import (
 )
 
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
+
+# Re-export sub-modules for gradual migration
+from .fast_path import (  # noqa: F401
+    is_non_actionable_placeholder,
+    new_ai_reply_id,
+    try_fast_path,
+)
+from .intent import (  # noqa: F401
+    HUMAN_HANDOFF_INTENTS,
+    ORDER_INTENTS,
+    POLICY_INTENTS,
+    PRODUCT_INTENTS,
+    PROFILE_INTENTS,
+    PROMPT_ENHANCER_INTENTS,
+    quick_intent_guess,
+    select_context_by_intent,
+    should_run_product_pipeline,
+)
+from .search import (  # noqa: F401
+    build_retrieval_cache_key,
+    full_pipeline_search,
+    load_cached_retrieval,
+    store_cached_retrieval,
+)
 
 logger = logging.getLogger(__name__)
 

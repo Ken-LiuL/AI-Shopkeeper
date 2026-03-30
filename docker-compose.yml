@@ -24,7 +24,7 @@ services:
       - "7474:7474"
       - "7687:7687"
     environment:
-      NEO4J_AUTH: none
+      NEO4J_AUTH: neo4j/changeme123
       NEO4J_PLUGINS: '["apoc"]'
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
     volumes:
@@ -60,15 +60,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/ai_store
       NEO4J_URI: bolt://neo4j:7687
       REDIS_URL: redis://redis:6379
-      # 数据采集配置
-      SYNC_MODE: local
-      DISABLE_SYNC: "false"
-      WM_POI_ID: "${WM_POI_ID:-30850916}"
-      # Chrome / Xvfb (Dockerfile 已安装)
-      CHROME_EXECUTABLE_PATH: /usr/bin/chromium
-      DISPLAY: ":99"
-    volumes:
-      - cookie_data:/app/data/cookies
+      DISABLE_SYNC: "true"
     depends_on:
       postgres:
         condition: service_healthy
@@ -86,4 +78,3 @@ volumes:
   postgres_data:
   neo4j_data:
   redis_data:
-  cookie_data:

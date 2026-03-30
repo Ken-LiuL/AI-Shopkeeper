@@ -1,6 +1,5 @@
 """MCP Skills Layer for AI Store Manager."""
 
-from .actionbook import ActionBookSkill
 from .calculator import CalculatorSkill
 from .database import DatabaseSkill
 from .embedding import EmbeddingSkill
@@ -12,7 +11,6 @@ from .prophet_skill import ProphetSkill
 from .reranker import RerankerSkill
 
 __all__ = [
-    "ActionBookSkill",
     "Neo4jSkill",
     "PgVectorSkill",
     "DatabaseSkill",

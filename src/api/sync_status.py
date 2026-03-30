@@ -1,9 +1,7 @@
-"""同步健康状态 API。
+"""同步状态 API。
 
-提供 GET /api/sync/health 端点，返回：
-- Cookie 健康状态
-- 最后同步时间
-- 各数据源新鲜度
+提供 GET /api/sync/health 端点，返回同步状态信息。
+数据采集已迁移至 Chrome 扩展 + 手动上传模式。
 """
 
 from __future__ import annotations
@@ -57,34 +55,26 @@ async def get_syncer_status_list(pool) -> list[dict[str, Any]]:
 
 @router.get("/health", response_model=APIResponse[dict])
 async def sync_health() -> APIResponse[dict]:
-    """返回 Cookie 状态、最后同步时间及各数据源新鲜度。
+    """返回数据同步健康状态。
 
-    健康状态说明：
-    - OK: 最近 2 小时内有成功同步
-    - STALE: 超过 2 小时未成功同步，Cookie 可能已过期
-    - UNKNOWN: 没有任何同步记录，或无法连接数据库
+    数据采集已迁移至 Chrome 扩展 + 手动上传模式。
+    此端点返回最近的同步记录摘要。
     """
     try:
         pool = pg.get_pool()
-
-        from src.sync.cookie_health import check_cookie_health, get_sync_status
-
-        cookie_health, sync_status = await _gather(
-            check_cookie_health(pool),
-            get_sync_status(pool),
-        )
+        syncer_list = await get_syncer_status_list(pool)
 
         data = {
-            "cookie_health": cookie_health,
-            "sync_status": sync_status,
+            "mode": "chrome_extension",
+            "message": "数据采集已迁移至 Chrome 扩展 + 手动上传",
+            "syncer_count": len(syncer_list),
             "checked_at": datetime.utcnow().isoformat() + "Z",
         }
 
-        overall_ok = cookie_health["status"] == "OK"
         return APIResponse(
-            success=overall_ok,
+            success=True,
             data=data,
-            message=cookie_health["message"],
+            message="数据通过 Chrome 扩展或手动上传同步",
         )
 
     except Exception as e:
@@ -106,9 +96,3 @@ async def sync_status_list() -> APIResponse[list[dict[str, Any]]]:
     except Exception as e:
         logger.error("sync_status_list endpoint failed: %s", e, exc_info=True)
         return APIResponse(success=False, message=f"获取同步状态失败: {e}", data=[])
-
-
-async def _gather(*coros):
-    """Run coroutines concurrently."""
-    import asyncio
-    return await asyncio.gather(*coros)

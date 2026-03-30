@@ -569,27 +569,87 @@ async def gap_identification_node(state: SelectionState) -> dict:
 # =============================================================================
 
 
+async def _get_supplier_data_from_db(pool, keyword: str) -> str:
+    """从已上传/导入的供应商数据表查询供应链信息。"""
+    if not pool:
+        return "暂无数据（请通过手动导入或 Chrome 扩展上传供应商数据）"
+    try:
+        # 从 competitor_products 表查询同类商品作为市场参考
+        rows = await pool.fetch(
+            """SELECT name, price, source, monthly_sales
+               FROM competitor_products
+               WHERE name ILIKE $1 OR category ILIKE $1
+               ORDER BY monthly_sales DESC NULLS LAST
+               LIMIT 10""",
+            f"%{keyword}%",
+        )
+        if rows:
+            items = [
+                {
+                    "name": r["name"],
+                    "price": float(r["price"]) if r["price"] else None,
+                    "source": r["source"],
+                    "monthly_sales": r["monthly_sales"],
+                }
+                for r in rows
+            ]
+            return json.dumps(items, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.debug("Supplier DB query failed for %s: %s", keyword, e)
+
+    # 从已有商品数据中估算供应链信息
+    try:
+        rows = await pool.fetch(
+            """SELECT name, retail_price, cost_price, category
+               FROM qnh_products
+               WHERE name ILIKE $1 OR category ILIKE $1
+               ORDER BY monthly_sales DESC NULLS LAST
+               LIMIT 10""",
+            f"%{keyword}%",
+        )
+        if rows:
+            items = [
+                {
+                    "name": r["name"],
+                    "retail_price": float(r["retail_price"]) if r["retail_price"] else None,
+                    "cost_price": float(r["cost_price"]) if r["cost_price"] else None,
+                    "category": r["category"],
+                }
+                for r in rows
+            ]
+            return "现有商品参考（可用于估算供应链成本）:\n" + json.dumps(
+                items, ensure_ascii=False, default=str
+            )
+    except Exception:
+        pass
+
+    return "暂无数据（请通过手动导入上传供应商报价数据）"
+
+
 async def supplier_evaluation_node(state: SelectionState) -> dict:
-    """Supplier Sub-Agent: 双渠道供应链评估（并发执行）"""
+    """Supplier Sub-Agent: 供应链评估（基于 DB 数据）
+
+    数据来源：手动导入的供应商报价 / 竞品数据 / 已有商品成本价。
+    """
     import asyncio
 
     gap = state.get("gap_opportunities", {})
     opportunities = gap.get("opportunities", [])
     errors = list(state.get("errors", []))
+    pool = state.get("db_pool")
 
     valid_opps = [opp for opp in opportunities if opp.get("keyword", "")]
 
     async def _eval_one(opp: dict) -> dict | Exception:
         keyword = opp.get("keyword", "")
         try:
-            alibaba_data = state.get("raw_alibaba_results", {}).get(keyword, "暂无数据")
-            pdd_data = state.get("raw_pdd_results", {}).get(keyword, "暂无数据")
+            supplier_data = await _get_supplier_data_from_db(pool, keyword)
             prompt = supplier_evaluation_prompt(
                 keyword=keyword,
-                market_price=opp.get("market_heat_score", 0) * 3,  # 估算
+                market_price=opp.get("market_heat_score", 0) * 3,
                 monthly_demand=100,
-                alibaba_results=alibaba_data,
-                pdd_results=pdd_data,
+                alibaba_results=supplier_data,
+                pdd_results="暂无数据（供应链数据通过手动导入获取）",
             )
             return await call_tool(prompt, SUPPLIER_EVALUATION_TOOL, model=MODEL_PRO)
         except Exception as e:

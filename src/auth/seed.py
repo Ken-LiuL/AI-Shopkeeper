@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from src.auth.utils import get_password_hash
 from src.db import postgres as pg_db
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_ADMIN_USERNAME = "admin"
-DEFAULT_ADMIN_PASSWORD = "admin"
+DEFAULT_ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+DEFAULT_ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 
 
 async def seed_admin_user() -> None:
-    """Ensure the default admin user exists with the correct password hash."""
+    """Ensure the default admin user exists with the correct password hash.
+
+    Password is read from ADMIN_PASSWORD env var. If not set, a random
+    password is generated and logged (first-run only).
+    """
     try:
         # Ensure users table exists (migration may have been skipped/rolled back)
         await pg_db.execute("""
@@ -28,8 +33,27 @@ async def seed_admin_user() -> None:
                 updated_at  TIMESTAMPTZ DEFAULT now()
             )
         """)
-        hashed = get_password_hash(DEFAULT_ADMIN_PASSWORD)
-        # Always upsert: insert or update password hash (handles __PLACEHOLDER__ and first run)
+
+        # Check if admin already exists with a valid password
+        existing = await pg_db.fetchrow(
+            "SELECT password_hash FROM users WHERE username = $1",
+            DEFAULT_ADMIN_USERNAME,
+        )
+        if existing and existing["password_hash"].startswith("$2"):
+            logger.info("管理员账号已存在，跳过 seed")
+            return
+
+        # Determine password
+        password = DEFAULT_ADMIN_PASSWORD
+        if not password:
+            import secrets
+            password = secrets.token_urlsafe(16)
+            logger.warning(
+                "⚠️  ADMIN_PASSWORD 未设置，生成随机密码: %s （请立即修改或设置环境变量）",
+                password,
+            )
+
+        hashed = get_password_hash(password)
         await pg_db.execute(
             """
             INSERT INTO users (user_id, username, password_hash, tenant_id, role)

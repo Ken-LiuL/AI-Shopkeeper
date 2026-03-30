@@ -6,6 +6,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+# .env.production should NEVER be committed — use CI secrets instead
 .venv/
 venv/
 *.egg-info/

@@ -147,20 +147,16 @@ async def delete_listing(listing_id: str) -> APIResponse[dict]:
 
 @router.post("/parse", response_model=APIResponse[dict])
 async def parse_url(request: ListingParseRequest) -> APIResponse[dict]:
-    """Quick parse of a product URL — returns extracted raw data."""
-    try:
-        from src.skills.actionbook import ActionBookSkill
+    """Quick parse of a product URL — returns extracted raw data.
 
-        skill = ActionBookSkill()
-        if request.platform == "alibaba":
-            data = await skill.alibaba_detail(request.url)
-        else:
-            data = await skill.pdd_detail(request.url)
-        return APIResponse(data=data.model_dump())
-    except Exception as e:
-        logger.error("Failed to parse URL %s: %s", request.url, e)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail=f"Failed to parse URL: {e}") from e
+    Note: Direct URL parsing has been removed. Please use Chrome extension
+    or manual import to add product data.
+    """
+    from fastapi import HTTPException
+    raise HTTPException(
+        status_code=501,
+        detail="URL 解析功能已迁移至 Chrome 扩展，请使用手动导入或 Chrome 扩展添加商品数据",
+    )
 
 
 async def _run_listing_create(
