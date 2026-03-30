@@ -1514,7 +1514,7 @@ async def chat(
     global _knowledge_base_cache, _cache_loaded
 
     _t0 = time.time()
-    ai_reply_id = _new_ai_reply_id()
+    ai_reply_id = new_ai_reply_id()
     context_trace: dict[str, Any] = {
         "has_extension_context": False,
         "has_extension_order_fields": False,
@@ -1523,7 +1523,7 @@ async def chat(
     }
 
     try:
-        if _is_non_actionable_placeholder_message(message):
+        if is_non_actionable_placeholder(message):
             logger.info("[CS] Placeholder message skip LLM: session=%s message=%s", session_id, message[:80])
             return {
                 "session_id": session_id,
@@ -1538,7 +1538,7 @@ async def chat(
             }
 
         # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
-        _fast = _fast_path_reply(
+        _fast = try_fast_path(
             session_id,
             message,
             ai_reply_id=ai_reply_id,
@@ -1596,12 +1596,12 @@ async def chat(
         intent_result = {}
         sentiment = "neutral"
         emotion_instruction = ""
-        quick_intent_hint = _quick_intent_guess(message, conversation_history)
-        should_load_products = _should_run_product_pipeline(quick_intent_hint, conversation_history)
-        should_load_order_context = quick_intent_hint in _ORDER_INTENTS
-        should_load_profile_context = quick_intent_hint in _PROFILE_INTENTS
-        should_load_policy_context = quick_intent_hint in _POLICY_INTENTS
-        should_load_prompt_enhancers = quick_intent_hint in _PROMPT_ENHANCER_INTENTS
+        quick_intent_hint = quick_intent_guess(message, conversation_history)
+        should_load_products = should_run_product_pipeline(quick_intent_hint, conversation_history)
+        should_load_order_context = quick_intent_hint in ORDER_INTENTS
+        should_load_profile_context = quick_intent_hint in PROFILE_INTENTS
+        should_load_policy_context = quick_intent_hint in POLICY_INTENTS
+        should_load_prompt_enhancers = quick_intent_hint in PROMPT_ENHANCER_INTENTS
         should_load_memory = should_load_prompt_enhancers or bool(conversation_history and len(conversation_history) >= 4)
 
         summary_task = None
@@ -1656,7 +1656,7 @@ async def chat(
 
             if should_load_products:
                 async def _run_product_pipeline() -> list[dict]:
-                    cache_key = _build_retrieval_cache_key(
+                    cache_key = build_retrieval_cache_key(
                         session_id=session_id,
                         message=message,
                         conversation_history=conversation_history,
