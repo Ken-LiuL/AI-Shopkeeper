@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   detect-changes:
     name: Detect changed areas
@@ -75,42 +79,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Prepare image metadata
+        id: image-meta
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          owner="$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
+          echo "image_repo=ghcr.io/${owner}/ai-shopkeeper-backend" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build & Push backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile.backend
+          push: true
+          tags: |
+            ${{ steps.image-meta.outputs.image_repo }}:${{ github.sha }}
+            ${{ steps.image-meta.outputs.image_repo }}:latest
+          cache-from: type=gha,scope=backend-image
+          cache-to: type=gha,mode=max,scope=backend-image
+
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} 'command -v rsync >/dev/null'
+          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} 'mkdir -p /opt/aishop'
 
-      - name: Sync code to VPS
+      - name: Sync docker-compose.yml to VPS
         run: |
-          set -euo pipefail
-          rsync -az --delete \
-            --delete-excluded \
-            --rsync-path="mkdir -p /opt/aishop/repo && rsync" \
-            -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes" \
-            --exclude='__pycache__/' \
-            --exclude='*.pyc' \
-            --exclude='.DS_Store' \
-            --exclude='.pytest_cache/' \
-            --exclude='.mypy_cache/' \
-            --exclude='.ruff_cache/' \
-            --exclude='.venv/' \
-            --include='/Dockerfile.backend' \
-            --include='/.dockerignore' \
-            --include='/docker-compose.yml' \
-            --include='/pyproject.toml' \
-            --include='/requirements.backend.txt' \
-            --include='/uv.lock' \
-            --include='/src/***' \
-            --include='/config/***' \
-            --include='/migrations/***' \
-            --include='/scripts/***' \
-            --include='/data/***' \
-            --include='/sample/***' \
-            --exclude='*' \
-            ./ root@${{ secrets.VPS_HOST }}:/opt/aishop/repo/
+          scp -i ~/.ssh/id_rsa docker-compose.yml root@${{ secrets.VPS_HOST }}:/opt/aishop/docker-compose.yml
 
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
@@ -122,25 +129,15 @@ jobs:
           command_timeout: 40m
           script: |
             set -e
-            echo "=== Preparing code ==="
-            mkdir -p /opt/aishop/repo
+            IMAGE_REPO="${{ steps.image-meta.outputs.image_repo }}"
+            IMAGE_TAG="${{ github.sha }}"
 
-            echo "=== Syncing docker-compose.yml ==="
-            cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
-
-            echo "=== Building Docker image ==="
-            # Try BuildKit first, fallback to legacy builder
-            if docker buildx version &>/dev/null; then
-              DOCKER_BUILDKIT=1 docker build \
-                --build-arg BUILDKIT_INLINE_CACHE=1 \
-                --cache-from aishop-app:latest \
-                -f /opt/aishop/repo/Dockerfile.backend \
-                -t aishop-app:latest /opt/aishop/repo/
-            else
-              echo "(BuildKit unavailable, using legacy builder)"
-              docker build -f /opt/aishop/repo/Dockerfile.backend -t aishop-app:latest /opt/aishop/repo/
-            fi
-            echo "✅ Build done"
+            echo "=== Pulling backend image from GHCR ==="
+            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker pull "${IMAGE_REPO}:${IMAGE_TAG}"
+            docker logout ghcr.io
+            docker tag "${IMAGE_REPO}:${IMAGE_TAG}" aishop-app:latest
+            echo "✅ Image ready"
 
             echo "=== Verifying built image ==="
             docker run --rm --entrypoint /bin/sh aishop-app:latest -lc '
