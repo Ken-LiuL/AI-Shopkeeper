@@ -2163,4 +2163,193 @@
   });
 
   initPanel();
+
+  /* ═══════════════════ Review Page Scraper ═══════════════════ */
+
+  const reviewSyncState = {
+    lastSyncAt: 0,
+    syncedIds: new Set(),
+    syncIntervalMs: 30000, // 30s 轮询
+    maxSyncedIds: 500,
+    timer: null,
+  };
+
+  function isReviewPage() {
+    const url = window.location.href.toLowerCase();
+    const path = window.location.pathname.toLowerCase();
+    const keywords = ['review', 'comment', 'evaluate', 'rating', 'appraise', 'pingjia', '评价'];
+    return keywords.some((kw) => url.includes(kw) || path.includes(kw));
+  }
+
+  function extractStarRating(card) {
+    // 1. 填满的星形 icon
+    const filled = card.querySelectorAll(
+      '[class*="star-filled"],[class*="starFilled"],[class*="star-on"],[class*="icon-star"]'
+    );
+    if (filled.length > 0 && filled.length <= 5) return filled.length;
+    // 2. data 属性
+    const ratingEl = card.querySelector('[data-score],[data-rating],[data-star]');
+    if (ratingEl) {
+      const v = parseInt(ratingEl.dataset.score || ratingEl.dataset.rating || ratingEl.dataset.star || '', 10);
+      if (v >= 1 && v <= 5) return v;
+    }
+    // 3. "X分" / "X星" 文本
+    const m = (card.textContent || '').match(/([1-5])[分星]/);
+    if (m) return parseInt(m[1], 10);
+    return null;
+  }
+
+  function extractReviewItems() {
+    const reviews = [];
+    const cardSelectors = [
+      '[class*="review-item"]', '[class*="reviewItem"]',
+      '[class*="comment-item"]', '[class*="commentItem"]',
+      '[class*="evaluate-item"]', '[class*="evaluateItem"]',
+      '[class*="appraise-item"]', '[class*="appraiseItem"]',
+      '[class*="review-card"]', '[class*="ReviewCard"]',
+    ];
+
+    let cards = [];
+    for (const sel of cardSelectors) {
+      const found = document.querySelectorAll(sel);
+      if (found.length > 0) { cards = Array.from(found); break; }
+    }
+    if (cards.length === 0) return reviews;
+
+    for (const card of cards.slice(0, 50)) {
+      try {
+        const idAttr = card.getAttribute('data-id')
+          || card.getAttribute('data-review-id')
+          || card.getAttribute('data-comment-id')
+          || card.getAttribute('id')
+          || '';
+
+        // 评价内容
+        const contentEl = card.querySelector(
+          '[class*="review-content"],[class*="reviewContent"],'
+          + '[class*="comment-content"],[class*="commentContent"],'
+          + '[class*="content"],[class*="review-text"],[class*="reviewText"]'
+        );
+        const content = (contentEl?.textContent || '').trim().slice(0, 1000);
+        if (!content) continue;
+
+        const rating = extractStarRating(card);
+
+        const userEl = card.querySelector(
+          '[class*="username"],[class*="userName"],[class*="nick"],'
+          + '[class*="customer-name"],[class*="customerName"],[class*="user-name"]'
+        );
+        const username = (userEl?.textContent || '').trim().slice(0, 100) || null;
+
+        const timeEl = card.querySelector(
+          '[class*="time"],[class*="date"],[class*="create-time"],[class*="createTime"],time,[datetime]'
+        );
+        const reviewTime = timeEl?.getAttribute('datetime')
+          || (timeEl?.textContent || '').trim().slice(0, 50)
+          || null;
+
+        const productEl = card.querySelector(
+          '[class*="product-name"],[class*="productName"],[class*="goods-name"],'
+          + '[class*="goodsName"],[class*="item-name"],[class*="itemName"],'
+          + '[class*="sku-name"],[class*="skuName"]'
+        );
+        const productName = (productEl?.textContent || '').trim().slice(0, 200) || null;
+
+        const orderEl = card.querySelector('[class*="order-id"],[class*="orderId"],[data-order-id]');
+        const orderId = orderEl?.getAttribute('data-order-id')
+          || (orderEl?.textContent || '').trim().slice(0, 50)
+          || null;
+
+        const reviewId = idAttr || `review-${hashCode(`${content}${reviewTime || ''}${username || ''}`)}`;
+        if (reviewSyncState.syncedIds.has(reviewId)) continue;
+
+        reviews.push({
+          review_id: reviewId,
+          content,
+          rating: rating || null,
+          username,
+          product_name: productName,
+          order_id: orderId,
+          review_time: reviewTime,
+          page_url: window.location.href,
+          scraped_at: new Date().toISOString(),
+        });
+      } catch (_) {}
+    }
+    return reviews;
+  }
+
+  function syncReviews() {
+    if (!isReviewPage()) return;
+    const reviews = extractReviewItems();
+    if (reviews.length === 0) return;
+
+    for (const r of reviews) {
+      reviewSyncState.syncedIds.add(r.review_id);
+      if (reviewSyncState.syncedIds.size > reviewSyncState.maxSyncedIds) {
+        reviewSyncState.syncedIds.delete(reviewSyncState.syncedIds.values().next().value);
+      }
+    }
+    reviewSyncState.lastSyncAt = Date.now();
+    console.log(`[AI店长] 📊 评价数据准备上传: ${reviews.length} 条`);
+
+    chrome.runtime.sendMessage({
+      type: 'PUSH_SYNC_DATA',
+      payload: {
+        source: 'reviews',
+        data: reviews,
+        timestamp: new Date().toISOString(),
+        metadata: { page_url: window.location.href, total_on_page: reviews.length },
+      },
+    }, (response) => {
+      if (chrome.runtime.lastError) return;
+      if (response?.success) {
+        console.log(`[AI店长] ✅ 评价数据已上传: ${response.records} 条`);
+        chrome.storage.local.set({
+          reviewSyncStatus: {
+            lastSyncAt: new Date().toISOString(),
+            lastCount: response.records || reviews.length,
+            ok: true,
+          },
+        });
+      } else {
+        chrome.storage.local.set({
+          reviewSyncStatus: { lastSyncAt: new Date().toISOString(), lastCount: 0, ok: false },
+        });
+      }
+    });
+  }
+
+  function startReviewSync() {
+    if (reviewSyncState.timer) return;
+    // 页面稳定后首次抓取
+    setTimeout(syncReviews, 2000);
+    reviewSyncState.timer = setInterval(() => {
+      if (isReviewPage()) {
+        syncReviews();
+      } else {
+        clearInterval(reviewSyncState.timer);
+        reviewSyncState.timer = null;
+      }
+    }, reviewSyncState.syncIntervalMs);
+  }
+
+  // SPA 路由变化监听
+  let _lastReviewUrl = window.location.href;
+  function watchUrlForReviews() {
+    const obs = new MutationObserver(() => {
+      const cur = window.location.href;
+      if (cur !== _lastReviewUrl) {
+        _lastReviewUrl = cur;
+        if (isReviewPage()) {
+          reviewSyncState.syncedIds.clear();
+          startReviewSync();
+        }
+      }
+    });
+    obs.observe(document.documentElement, { subtree: true, childList: true });
+  }
+
+  if (isReviewPage()) startReviewSync();
+  watchUrlForReviews();
 })();

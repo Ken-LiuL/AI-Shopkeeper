@@ -62,6 +62,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add('active');
     if (tab.dataset.tab === 'debug') refreshLogs();
     if (tab.dataset.tab === 'stats') refreshStats();
+    if (tab.dataset.tab === 'reviews') refreshReviewStatus();
   });
 });
 
@@ -203,9 +204,41 @@ document.getElementById('testConn').addEventListener('click', () => {
   });
 });
 
+/* ═══════════════════ Review Sync Status ═══════════════════ */
+function refreshReviewStatus() {
+  chrome.storage.local.get(['reviewSyncStatus'], (data) => {
+    const s = data.reviewSyncStatus;
+    const dot = document.getElementById('reviewDot');
+    const statusText = document.getElementById('reviewStatusText');
+    const lastSync = document.getElementById('reviewLastSync');
+    const lastCount = document.getElementById('reviewLastCount');
+    if (!s) {
+      if (dot) dot.style.background = '#aaa';
+      if (statusText) statusText.textContent = '未同步';
+      if (lastSync) lastSync.textContent = '—';
+      if (lastCount) lastCount.textContent = '—';
+      return;
+    }
+    const ok = s.ok !== false;
+    if (dot) dot.style.background = ok ? '#4caf50' : '#e53935';
+    if (statusText) statusText.textContent = ok ? '已同步' : '同步失败';
+    if (lastSync) lastSync.textContent = s.lastSyncAt ? new Date(s.lastSyncAt).toLocaleString() : '—';
+    if (lastCount) lastCount.textContent = s.lastCount != null ? `${s.lastCount} 条评价` : '—';
+  });
+}
+
+const reviewRefreshBtn = document.getElementById('reviewRefresh');
+if (reviewRefreshBtn) {
+  reviewRefreshBtn.addEventListener('click', () => {
+    refreshReviewStatus();
+    showStatus('reviewStatus', '已刷新');
+  });
+}
+
 /* ═══════════════════ Init ═══════════════════ */
 refreshLogs();
 refreshStats();
+refreshReviewStatus();
 chrome.runtime.sendMessage({ type: 'TEST_CONNECTION' }, (result) => {
   setConnDot(result?.success ?? null);
 });

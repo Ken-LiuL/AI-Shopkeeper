@@ -179,6 +179,7 @@
 
   <div class="tabs">
     <div class="tab active" data-tab="cs">客服设置</div>
+    <div class="tab" data-tab="reviews">评价数据</div>
     <div class="tab" data-tab="stats">反馈统计</div>
     <div class="tab" data-tab="debug">调试日志</div>
   </div>
@@ -213,6 +214,30 @@
     <button class="primary" id="save">保存客服设置</button>
     <button class="secondary" id="testConn">🔌 测试连接</button>
     <div class="status" id="csStatus"></div>
+  </div>
+
+  <!-- 评价数据 -->
+  <div class="tab-panel" id="tab-reviews">
+    <div style="margin-bottom:10px">
+      <div style="font-size:11px;font-weight:600;color:#555;margin-bottom:6px">评价数据同步状态</div>
+      <div class="stat-card" style="text-align:left;padding:10px 12px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="conn-dot" id="reviewDot" style="background:#aaa"></span>
+          <span style="font-size:12px;font-weight:600" id="reviewStatusText">未检测</span>
+        </div>
+        <div style="font-size:11px;color:#888">上次同步：<span id="reviewLastSync">—</span></div>
+        <div style="font-size:11px;color:#888">本次上传：<span id="reviewLastCount">—</span></div>
+      </div>
+    </div>
+    <div style="font-size:11px;color:#888;line-height:1.6;padding:0 2px">
+      <b>使用说明：</b><br>
+      1. 打开美团商家后台评价/评论页面<br>
+      2. 扩展自动检测并抓取评价数据<br>
+      3. 每 30 秒自动上传新评价到系统<br>
+      4. 后端存储在 <code>meituan_reviews</code> 表
+    </div>
+    <button class="secondary" id="reviewRefresh" style="margin-top:10px">🔄 刷新状态</button>
+    <div class="status" id="reviewStatus"></div>
   </div>
 
   <!-- 反馈统计 -->

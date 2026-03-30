@@ -103,6 +103,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'PUSH_SYNC_DATA') {
+    pushSyncData(message.payload)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true; // async
+  }
+
   return false;
 });
 
@@ -367,6 +374,51 @@ async function handleLogChat(payload) {
     // Silent fail — chat log is best-effort
     addLog('error', `聊天记录上报异常: ${err.message}`);
     return { success: false, error: err.message };
+  }
+}
+
+/* ═══════════════════ Sync Data Push (评价等结构化数据) ═══════════════════ */
+async function pushSyncData(payload) {
+  const settings = await getApiSettings();
+  const pushUrl = `${settings.chatBase}/api/sync/push`;
+
+  const body = {
+    source: payload.source || 'reviews',
+    data: payload.data || [],
+    timestamp: payload.timestamp || new Date().toISOString(),
+    metadata: payload.metadata || {},
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (settings.apiKey) headers['X-API-Key'] = settings.apiKey;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+
+  try {
+    const response = await fetch(pushUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      const msg = `同步推送失败: HTTP ${response.status}${errText ? ` - ${errText.slice(0, 80)}` : ''}`;
+      addLog('error', msg);
+      return { success: false, error: msg };
+    }
+
+    const data = await response.json();
+    addLog('success', `${body.source} 数据已推送: ${data.records || body.data.length} 条`, pushUrl);
+    return { success: true, records: data.records || body.data.length, source: body.source };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const msg = `同步推送异常: ${err.message}`;
+    addLog('error', msg);
+    return { success: false, error: msg };
   }
 }
 
