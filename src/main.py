@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.ab_testing import router as ab_testing_router
+from src.api.export import router as export_router
 from src.api.alerts import router as alerts_router
 from src.api.boss_assistant import router as boss_assistant_router
 from src.api.bundles import router as bundles_router
@@ -471,6 +472,7 @@ app.include_router(insights_router)
 app.include_router(stores_router)
 app.include_router(ab_testing_router)
 app.include_router(boss_assistant_router)
+app.include_router(export_router)
 
 
 # ─── Frontend static files ──────────────────────────────────

@@ -446,9 +446,13 @@ function ProductsPage() {
           <p className="text-muted-foreground">先补齐主档和价格缺口，再处理断货和补货动作，商品数据才足够支撑 AI。</p>
         </div>
         <div className="flex gap-2">
-          <a href="/api/products/export" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
-            导出商品
-          </a>
+          <button
+            type="button"
+            onClick={() => window.open('/api/export/products')}
+            className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+          >
+            导出 Excel
+          </button>
           <a href="/imports" className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
             导入商品
           </a>

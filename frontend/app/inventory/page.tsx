@@ -179,9 +179,18 @@ export default function InventoryPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">库存管理</h1>
-        <p className="text-muted-foreground">优先处理断货热销，再处理低库存高动销商品</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">库存管理</h1>
+          <p className="text-muted-foreground">优先处理断货热销，再处理低库存高动销商品</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => window.open('/api/export/inventory')}
+          className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+        >
+          导出 Excel
+        </button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">

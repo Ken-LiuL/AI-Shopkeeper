@@ -255,7 +255,16 @@ export default function OrdersPage() {
           <h1 className="text-2xl font-bold text-gray-900">📋 异常订单工作池</h1>
           <p className="mt-1 text-sm text-gray-500">优先看金额异常、退款和处理中订单，不再把订单页当作纯流水列表。</p>
         </div>
-        <div className="text-sm text-gray-500">共 {total} 条订单</div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-gray-500">共 {total} 条订单</span>
+          <button
+            type="button"
+            onClick={() => window.open('/api/export/orders')}
+            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent"
+          >
+            导出 Excel
+          </button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">
