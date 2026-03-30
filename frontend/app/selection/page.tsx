@@ -1,281 +1,206 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { withErrorBoundary } from '@/components/error-boundary';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-
-import { withErrorBoundary } from '@/components/error-boundary';
-import { AICapabilityHeader } from '@/components/ai-capability-badge';
-import { fetchAPI } from '@/lib/api';
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
-import { AIActionButton } from '@/components/ai-action-button';
+import { fetchAPI, lookupIssueActions, updateIssueAction, type IssueActionRecord } from '@/lib/api';
 
 interface SelectionProduct {
   product_id: string;
   name: string;
   category: string;
+  brand?: string;
   price: number;
   profit_margin: number;
   demand_score: number;
-  competition_level: 'low' | 'medium' | 'high';
   recommendation_score: number;
-  pros: string[];
-  cons: string[];
-  market_trend: 'rising' | 'stable' | 'declining';
+  monthly_sales: number;
+  stock: number;
+  stock_days?: number | null;
+  knowledge_count: number;
+  knowledge_ready: boolean;
   status: 'recommended' | 'considering' | 'selected' | 'rejected';
-  // Optional enriched fields from AI backend
+  reason: string;
+  risk_warning?: string;
   score_breakdown?: Record<string, number>;
   data_source?: string[];
 }
 
-interface SelectionSummary {
-  total_candidates: number;
-  recommended_count: number;
-  selected_count: number;
-  avg_profit_margin: number;
-  categories_covered: number;
+function getUiStatus(product: SelectionProduct, action?: IssueActionRecord | null) {
+  if (!action) {
+    return product.status;
+  }
+  if (action.status === 'resolved') {
+    return 'selected';
+  }
+  if (action.status === 'ignored') {
+    return 'rejected';
+  }
+  return 'considering';
 }
 
-function buildSelectionReasoningSteps(product: SelectionProduct) {
-  return [
-    { icon: '📊', title: '数据收集', detail: `价格 ¥${product.price}，毛利率 ${product.profit_margin}%`, status: 'completed' as const },
-    { icon: '🔍', title: '竞争分析', detail: `竞争程度：${product.competition_level === 'low' ? '低' : product.competition_level === 'medium' ? '中' : '高'}`, status: 'completed' as const },
-    { icon: '📈', title: '需求预测', detail: `需求评分 ${product.demand_score}/10，市场趋势：${product.market_trend === 'rising' ? '上升' : product.market_trend === 'stable' ? '平稳' : '下降'}`, status: 'completed' as const },
-    { icon: '✔️', title: '综合评分', detail: `推荐分 ${product.recommendation_score}/10，已通过多因子验证`, status: 'completed' as const },
-  ];
+function statusBadge(status: string) {
+  switch (status) {
+    case 'recommended':
+      return 'bg-green-100 text-green-700';
+    case 'considering':
+      return 'bg-amber-100 text-amber-700';
+    case 'selected':
+      return 'bg-blue-100 text-blue-700';
+    case 'rejected':
+      return 'bg-slate-100 text-slate-600';
+    default:
+      return 'bg-slate-100 text-slate-600';
+  }
 }
 
-/** Simple horizontal progress bar for score breakdown */
-function ScoreBar({ label, value, max = 10 }: { label: string; value: number; max?: number }) {
-  const pct = Math.min(100, Math.round((value / max) * 100));
-  const color = pct >= 70 ? 'bg-green-500' : pct >= 50 ? 'bg-yellow-400' : 'bg-red-400';
-  return (
-    <div className="flex items-center gap-2 text-xs">
-      <span className="w-16 shrink-0 text-gray-500">{label}</span>
-      <div className="flex-1 bg-gray-200 rounded-full h-2">
-        <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="w-8 text-right text-gray-600 font-medium">{value}</span>
-    </div>
-  );
+function statusText(status: string) {
+  switch (status) {
+    case 'recommended':
+      return '优先运营';
+    case 'considering':
+      return '继续观察';
+    case 'selected':
+      return '已纳入重点';
+    case 'rejected':
+      return '暂不考虑';
+    default:
+      return status;
+  }
+}
+
+function scoreColor(score: number) {
+  if (score >= 8) {
+    return 'text-green-600';
+  }
+  if (score >= 6) {
+    return 'text-amber-600';
+  }
+  return 'text-slate-500';
 }
 
 function SelectionPage() {
   const [products, setProducts] = useState<SelectionProduct[]>([]);
-  const [summary, setSummary] = useState<SelectionSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
-  const [filterCategory, setFilterCategory] = useState<string>('');
-  const [filterStatus, setFilterStatus] = useState<string>('');
-  const [batchProcessing, setBatchProcessing] = useState(false);
-  const [candidateIds, setCandidateIds] = useState<Set<string>>(new Set());
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [message, setMessage] = useState<string | null>(null);
+  const [processingKey, setProcessingKey] = useState<string | null>(null);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, []);
 
-  const loadData = async () => {
+  async function loadData() {
     try {
       setLoading(true);
       setError(null);
-
-      type SelectionApiResponse = SelectionProduct[] | { products?: SelectionProduct[]; recommendations?: SelectionProduct[]; summary?: SelectionSummary };
-      const data = await fetchAPI<SelectionApiResponse>('/selection/recommendations');
-
-      const productList: SelectionProduct[] = Array.isArray(data)
-        ? data
-        : (data as { products?: SelectionProduct[]; recommendations?: SelectionProduct[] }).products || (data as { products?: SelectionProduct[]; recommendations?: SelectionProduct[] }).recommendations || [];
-
-      const calcSummary: SelectionSummary = {
-        total_candidates: productList.length,
-        recommended_count: productList.filter((p: SelectionProduct) => p.status === 'recommended').length,
-        selected_count: productList.filter((p: SelectionProduct) => p.status === 'selected').length,
-        avg_profit_margin: productList.length > 0
-          ? parseFloat((productList.reduce((s: number, p: SelectionProduct) => s + (p.profit_margin || 0), 0) / productList.length).toFixed(1))
-          : 0,
-        categories_covered: new Set(productList.map((p: SelectionProduct) => p.category)).size
-      };
-
-      setProducts(productList);
-      setSummary((!Array.isArray(data) && (data as { summary?: SelectionSummary }).summary) || calcSummary);
+      const raw = await fetchAPI<SelectionProduct[]>('/selection/recommendations');
+      const issues = raw.length > 0
+        ? await lookupIssueActions(
+            raw.map((item) => ({
+              issue_type: 'selection_candidate',
+              issue_key: item.product_id,
+            })),
+          )
+        : [];
+      const issueMap = new Map(issues.map((item) => [item.issue_key, item]));
+      setProducts(
+        raw.map((item) => ({
+          ...item,
+          status: getUiStatus(item, issueMap.get(item.product_id)),
+        })),
+      );
+      setMessage(null);
     } catch (err) {
-      setError('加载选品数据失败，请稍后重试');
-      console.error('Error loading selection data:', err);
+      setError(err instanceof Error ? err.message : '加载重点候选商品失败');
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleSelectProduct = (productId: string, checked: boolean) => {
-    setSelectedProducts(prev => {
-      const newSet = new Set(prev);
-      if (checked) {
-        newSet.add(productId);
-      } else {
-        newSet.delete(productId);
-      }
-      return newSet;
-    });
-  };
-
-  const handleSelectAll = (checked: boolean) => {
-    if (checked) {
-      setSelectedProducts(new Set(filteredProducts.map(p => p.product_id)));
-    } else {
-      setSelectedProducts(new Set());
-    }
-  };
-
-  const handleBatchOperation = async (operation: 'select' | 'reject', singleProductId?: string) => {
-    const targetIds = singleProductId
-      ? new Set([singleProductId])
-      : selectedProducts;
-
-    if (targetIds.size === 0) {
-      alert('请选择要操作的商品');
+  async function applySelectionAction(
+    productIds: string[],
+    action: 'select' | 'reject',
+  ) {
+    if (productIds.length === 0) {
+      setMessage('请先选择要处理的商品。');
       return;
     }
 
-    setBatchProcessing(true);
+    const nextStatus = action === 'select' ? 'resolved' : 'ignored';
+    setProcessingKey(action);
     try {
-      // Call real API for each selected product
-      const promises = Array.from(targetIds).map(async (productId) => {
-        if (operation === 'select') {
-          await fetchAPI('/selection/runs', {
-            method: 'POST',
-            body: JSON.stringify({ product_id: productId, action: 'select' }),
+      await Promise.all(
+        productIds.map((productId) => {
+          const product = products.find((item) => item.product_id === productId);
+          return updateIssueAction({
+            issue_type: 'selection_candidate',
+            issue_key: productId,
+            title: product?.name || '重点运营候选',
+            status: nextStatus,
+            metadata: {
+              product_id: productId,
+              category: product?.category || '',
+              decision: action,
+            },
           });
-        } else {
-          await fetchAPI('/selection/runs', {
-            method: 'POST',
-            body: JSON.stringify({ product_id: productId, action: 'reject' }),
-          });
-        }
-      });
+        }),
+      );
 
-      await Promise.all(promises);
-
-      setProducts(prev => prev.map(p =>
-        targetIds.has(p.product_id)
-          ? { ...p, status: operation === 'select' ? 'selected' as const : 'rejected' as const }
-          : p
-      ));
-
-      if (!singleProductId) {
-        setSelectedProducts(new Set());
-        const actionText = operation === 'select' ? '选中' : '拒绝';
-        alert(`成功${actionText} ${targetIds.size} 个商品`);
-      }
+      setProducts((prev) =>
+        prev.map((item) =>
+          productIds.includes(item.product_id)
+            ? { ...item, status: action === 'select' ? 'selected' : 'rejected' }
+            : item,
+        ),
+      );
+      setSelectedProducts(new Set());
+      setMessage(action === 'select' ? `已纳入 ${productIds.length} 个重点运营商品` : `已标记 ${productIds.length} 个商品为暂不考虑`);
     } catch (err) {
-      console.error('Operation failed:', err);
-      // Optimistic update even on API error for better UX
-      setProducts(prev => prev.map(p =>
-        targetIds.has(p.product_id)
-          ? { ...p, status: operation === 'select' ? 'selected' as const : 'rejected' as const }
-          : p
-      ));
-      if (!singleProductId) setSelectedProducts(new Set());
+      setMessage(err instanceof Error ? err.message : '操作失败');
     } finally {
-      setBatchProcessing(false);
+      setProcessingKey(null);
     }
-  };
+  }
 
-  const getCompetitionColor = (level: string) => {
-    switch (level) {
-      case 'low': return 'text-green-600 bg-green-100';
-      case 'medium': return 'text-yellow-600 bg-yellow-100';
-      case 'high': return 'text-red-600 bg-red-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
-
-  const getCompetitionText = (level: string) => {
-    switch (level) {
-      case 'low': return '低';
-      case 'medium': return '中';
-      case 'high': return '高';
-      default: return level;
-    }
-  };
-
-  const getTrendColor = (trend: string) => {
-    switch (trend) {
-      case 'rising': return 'text-green-600';
-      case 'stable': return 'text-blue-600';
-      case 'declining': return 'text-red-600';
-      default: return 'text-gray-600';
-    }
-  };
-
-  const getTrendIcon = (trend: string) => {
-    switch (trend) {
-      case 'rising': return '📈';
-      case 'stable': return '➡️';
-      case 'declining': return '📉';
-      default: return '➡️';
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'recommended': return 'text-green-600 bg-green-100';
-      case 'considering': return 'text-yellow-600 bg-yellow-100';
-      case 'selected': return 'text-blue-600 bg-blue-100';
-      case 'rejected': return 'text-red-600 bg-red-100';
-      default: return 'text-gray-600 bg-gray-100';
-    }
-  };
-
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case 'recommended': return '推荐';
-      case 'considering': return '考虑中';
-      case 'selected': return '已选中';
-      case 'rejected': return '已拒绝';
-      default: return status;
-    }
-  };
-
-  const categories = Array.from(new Set(products.map(p => p.category)));
+  const categories = Array.from(new Set(products.map((product) => product.category).filter(Boolean)));
   const statuses = ['recommended', 'considering', 'selected', 'rejected'];
 
-  const filteredProducts = products.filter(product => {
+  const filteredProducts = products.filter((product) => {
     const categoryMatch = !filterCategory || product.category === filterCategory;
     const statusMatch = !filterStatus || product.status === filterStatus;
     return categoryMatch && statusMatch;
   });
 
+  const summary = {
+    total: products.length,
+    recommended: products.filter((item) => item.status === 'recommended').length,
+    selected: products.filter((item) => item.status === 'selected').length,
+    avgScore:
+      products.length > 0
+        ? (products.reduce((sum, item) => sum + item.recommendation_score, 0) / products.length).toFixed(1)
+        : '0.0',
+    avgMargin:
+      products.length > 0
+        ? (products.reduce((sum, item) => sum + item.profit_margin, 0) / products.length).toFixed(1)
+        : '0.0',
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="h-10 bg-muted animate-pulse rounded"></div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map(i => (
-            <Card key={i}>
-              <CardContent className="p-6">
-                <div className="h-20 bg-muted animate-pulse rounded"></div>
-              </CardContent>
-            </Card>
-          ))}
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">重点运营候选池</h1>
+          <p className="text-muted-foreground">基于当前商品、订单、库存和知识完整度给出优先运营候选。</p>
         </div>
         <Card>
           <CardContent className="p-6">
-            <div className="space-y-3">
-              {[1, 2, 3, 4, 5].map(i => (
-                <div key={i} className="h-16 bg-muted animate-pulse rounded"></div>
-              ))}
-            </div>
+            <div className="h-40 animate-pulse rounded bg-muted" />
           </CardContent>
         </Card>
       </div>
@@ -286,17 +211,14 @@ function SelectionPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">智能选品</h1>
-          <p className="text-muted-foreground">AI 驱动的商品选择建议</p>
+          <h1 className="text-3xl font-bold tracking-tight">重点运营候选池</h1>
+          <p className="text-muted-foreground">基于当前商品、订单、库存和知识完整度给出优先运营候选。</p>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
-            <div className="text-red-500 text-4xl mb-4">⚠️</div>
-            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
-            <p className="text-red-600 mb-4">{error}</p>
-            <Button onClick={loadData} variant="destructive">
-              重新加载
-            </Button>
+            <div className="text-lg text-red-700">加载失败</div>
+            <p className="mt-2 text-sm text-red-600">{error}</p>
+            <Button className="mt-4" onClick={() => void loadData()}>重试</Button>
           </CardContent>
         </Card>
       </div>
@@ -305,273 +227,197 @@ function SelectionPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">🎯 智能选品</h1>
-          <AICapabilityHeader
-            capabilities={['GraphRAG 知识图谱', 'Self-Reflection 自检', '反馈闭环', '多因子评分']}
-            description="AI 基于图谱关系、季节性、竞品数据、历史销量智能推荐选品方案"
-          />
+          <h1 className="text-3xl font-bold tracking-tight">重点运营候选池</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            这里不是“选新品”，而是从现有商品里找出更值得重点运营的对象。
+          </p>
+        </div>
+        <a href="/imports">
+          <Button variant="outline">刷新数据基础</Button>
+        </a>
+      </div>
+
+      {message && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          {message}
+        </div>
+      )}
+
+      <Card className="border-slate-200 bg-slate-50">
+        <CardContent className="grid gap-4 p-5 md:grid-cols-4">
+          <div>
+            <div className="text-sm text-muted-foreground">数据边界</div>
+            <div className="mt-1 text-sm text-slate-700">只基于现有商品、订单、库存和知识完整度，不做外部市场判断。</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">候选总数</div>
+            <div className="mt-1 text-2xl font-bold">{summary.total}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">优先运营</div>
+            <div className="mt-1 text-2xl font-bold text-green-600">{summary.recommended}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">已纳入重点</div>
+            <div className="mt-1 text-2xl font-bold text-blue-600">{summary.selected}</div>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-5">
+        <Card><CardContent className="p-5"><div className="text-sm text-muted-foreground">平均推荐分</div><div className="mt-2 text-3xl font-bold">{summary.avgScore}</div></CardContent></Card>
+        <Card><CardContent className="p-5"><div className="text-sm text-muted-foreground">平均毛利率</div><div className="mt-2 text-3xl font-bold">{summary.avgMargin}%</div></CardContent></Card>
+        <Card><CardContent className="p-5"><div className="text-sm text-muted-foreground">有知识支撑</div><div className="mt-2 text-3xl font-bold">{products.filter((item) => item.knowledge_ready).length}</div></CardContent></Card>
+        <Card><CardContent className="p-5"><div className="text-sm text-muted-foreground">库存为 0</div><div className="mt-2 text-3xl font-bold">{products.filter((item) => item.stock === 0).length}</div></CardContent></Card>
+        <Card><CardContent className="p-5"><div className="text-sm text-muted-foreground">高销量商品</div><div className="mt-2 text-3xl font-bold">{products.filter((item) => item.monthly_sales >= 30).length}</div></CardContent></Card>
+      </div>
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row">
+          <select
+            value={filterCategory}
+            onChange={(e) => setFilterCategory(e.target.value)}
+            className="max-w-xs rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">所有品类</option>
+            {categories.map((category) => (
+              <option key={category} value={category}>{category}</option>
+            ))}
+          </select>
+          <select
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value)}
+            className="max-w-xs rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="">所有状态</option>
+            {statuses.map((status) => (
+              <option key={status} value={status}>{statusText(status)}</option>
+            ))}
+          </select>
         </div>
         {selectedProducts.size > 0 && (
           <div className="flex gap-2">
             <Button
-              onClick={() => handleBatchOperation('select')}
-              disabled={batchProcessing}
-              className="bg-green-600 hover:bg-green-700"
+              disabled={processingKey !== null}
+              onClick={() => void applySelectionAction(Array.from(selectedProducts), 'select')}
             >
-              {batchProcessing ? '处理中...' : `批量选中 (${selectedProducts.size})`}
+              {processingKey === 'select' ? '处理中...' : `纳入重点 (${selectedProducts.size})`}
             </Button>
             <Button
-              onClick={() => handleBatchOperation('reject')}
-              disabled={batchProcessing}
-              variant="destructive"
+              variant="outline"
+              disabled={processingKey !== null}
+              onClick={() => void applySelectionAction(Array.from(selectedProducts), 'reject')}
             >
-              {batchProcessing ? '处理中...' : `批量拒绝 (${selectedProducts.size})`}
+              {processingKey === 'reject' ? '处理中...' : `暂不考虑 (${selectedProducts.size})`}
             </Button>
           </div>
         )}
       </div>
 
-      {/* Summary Cards */}
-      {summary && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">候选商品</p>
-                  <p className="text-2xl font-bold">{summary.total_candidates}</p>
-                </div>
-                <div className="text-3xl opacity-80">📋</div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">推荐商品</p>
-                  <p className="text-2xl font-bold text-green-600">{summary.recommended_count}</p>
-                </div>
-                <div className="text-3xl opacity-80">✅</div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">已选中</p>
-                  <p className="text-2xl font-bold text-blue-600">{summary.selected_count}</p>
-                </div>
-                <div className="text-3xl opacity-80">🎯</div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">平均毛利率</p>
-                  <p className="text-2xl font-bold text-purple-600">{summary.avg_profit_margin}%</p>
-                </div>
-                <div className="text-3xl opacity-80">💰</div>
-              </div>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-muted-foreground">覆盖品类</p>
-                  <p className="text-2xl font-bold">{summary.categories_covered}</p>
-                </div>
-                <div className="text-3xl opacity-80">🏷️</div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-4">
-        <select
-          value={filterCategory}
-          onChange={(e) => setFilterCategory(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
-        >
-          <option value="">所有品类</option>
-          {categories.map(category => (
-            <option key={category} value={category}>{category}</option>
-          ))}
-        </select>
-
-        <select
-          value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 max-w-xs"
-        >
-          <option value="">所有状态</option>
-          {statuses.map(status => (
-            <option key={status} value={status}>{getStatusText(status)}</option>
-          ))}
-        </select>
-
-        <div className="text-sm text-muted-foreground flex items-center">
-          显示 {filteredProducts.length} 个商品
-        </div>
-      </div>
-
-      {/* Products Table */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <span>🎯</span>
-            选品建议
-          </CardTitle>
+          <CardTitle>候选商品工作池</CardTitle>
         </CardHeader>
         <CardContent>
-          {filteredProducts.length > 0 ? (
-            <Table>
-              <TableCaption>基于市场分析和竞争情况的智能选品建议</TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="w-12">
-                    <input
-                      type="checkbox"
-                      checked={selectedProducts.size === filteredProducts.length && filteredProducts.length > 0}
-                      onChange={(e) => handleSelectAll(e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                  </TableHead>
-                  <TableHead>商品名称</TableHead>
-                  <TableHead>品类</TableHead>
-                  <TableHead className="text-right">价格</TableHead>
-                  <TableHead className="text-right">毛利率</TableHead>
-                  <TableHead className="text-right">需求评分</TableHead>
-                  <TableHead>竞争程度</TableHead>
-                  <TableHead>市场趋势</TableHead>
-                  <TableHead className="text-right">推荐分</TableHead>
-                  <TableHead>状态</TableHead>
-                  <TableHead className="text-right">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredProducts.map((product) => (
-                  <TableRow key={product.product_id} className="hover:bg-gray-50">
-                    <TableCell>
-                      <input
-                        type="checkbox"
-                        checked={selectedProducts.has(product.product_id)}
-                        onChange={(e) => handleSelectProduct(product.product_id, e.target.checked)}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </TableCell>
-                    <TableCell className="max-w-xs">
-                      <div className="font-medium mb-1">{product.name}</div>
-                      <Badge variant="outline" className="text-xs">{product.category}</Badge>
-                      {/* Score breakdown */}
-                      <div className="mt-2 space-y-1">
-                        <ScoreBar label="需求" value={product.demand_score} max={10} />
-                        <ScoreBar label="推荐分" value={product.recommendation_score} max={10} />
-                        {product.score_breakdown && Object.entries(product.score_breakdown).slice(0, 2).map(([k, v]) => (
-                          <ScoreBar key={k} label={k} value={v} max={10} />
-                        ))}
-                      </div>
-                      {/* Data source */}
-                      {product.data_source && product.data_source.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {product.data_source.map((src, i) => (
-                            <span key={i} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded">
-                              {src}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                      {/* AI Reasoning */}
-                      <div className="mt-2">
-                        <AIReasoningPanel
-                          steps={buildSelectionReasoningSteps(product)}
-                          confidence={Math.round(product.recommendation_score * 10)}
+          {filteredProducts.length === 0 ? (
+            <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+              当前筛选条件下没有候选商品。
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {filteredProducts.map((product) => (
+                <div key={product.product_id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={selectedProducts.has(product.product_id)}
+                          onChange={(e) => {
+                            setSelectedProducts((prev) => {
+                              const next = new Set(prev);
+                              if (e.target.checked) {
+                                next.add(product.product_id);
+                              } else {
+                                next.delete(product.product_id);
+                              }
+                              return next;
+                            });
+                          }}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-right font-semibold">
-                      ¥{product.price.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <span className={`font-medium ${
-                        product.profit_margin >= 35 ? 'text-green-600' :
-                        product.profit_margin >= 25 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {product.profit_margin}%
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <span className={`font-medium ${
-                        product.demand_score >= 8 ? 'text-green-600' :
-                        product.demand_score >= 6 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {product.demand_score}/10
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getCompetitionColor(product.competition_level)}>
-                        {getCompetitionText(product.competition_level)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        <span className={getTrendColor(product.market_trend)}>
-                          {getTrendIcon(product.market_trend)}
+                        <div className="font-medium text-slate-900">{product.name}</div>
+                        <Badge variant="outline">{product.category || '未分类'}</Badge>
+                        <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${statusBadge(product.status)}`}>
+                          {statusText(product.status)}
                         </span>
                       </div>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <span className={`font-bold ${
-                        product.recommendation_score >= 8 ? 'text-green-600' :
-                        product.recommendation_score >= 6 ? 'text-yellow-600' : 'text-red-600'
-                      }`}>
-                        {product.recommendation_score}/10
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <Badge className={getStatusColor(product.status)}>
-                        {getStatusText(product.status)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex flex-col gap-1 items-end">
-                        <AIActionButton
-                          label="加入候选"
-                          confirmed={candidateIds.has(product.product_id) || product.status === 'selected'}
-                          loading={batchProcessing}
-                          onAction={async () => {
-                            await handleBatchOperation('select', product.product_id);
-                            setCandidateIds(prev => new Set(prev).add(product.product_id));
-                          }}
-                        />
-                        {product.status !== 'rejected' && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => handleBatchOperation('reject', product.product_id)}
-                            disabled={batchProcessing}
-                            className="text-red-600 hover:text-red-700 text-xs"
-                          >
-                            拒绝
-                          </Button>
-                        )}
+
+                      <div className="mt-3 grid gap-3 text-sm md:grid-cols-5">
+                        <div>
+                          <div className="text-muted-foreground">售价</div>
+                          <div className="font-medium">¥{product.price.toFixed(2)}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">近 30 天销量</div>
+                          <div className="font-medium">{product.monthly_sales}</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">当前库存</div>
+                          <div className="font-medium">
+                            {product.stock}
+                            {product.stock_days != null ? ` / ${product.stock_days} 天` : ''}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">毛利率</div>
+                          <div className="font-medium">{product.profit_margin}%</div>
+                        </div>
+                        <div>
+                          <div className="text-muted-foreground">推荐分</div>
+                          <div className={`font-bold ${scoreColor(product.recommendation_score)}`}>
+                            {product.recommendation_score} / 10
+                          </div>
+                        </div>
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          ) : (
-            <div className="text-center py-8 text-muted-foreground">
-              暂无选品数据
+
+                      <div className="mt-3 text-sm text-slate-700">{product.reason}</div>
+                      {product.risk_warning ? (
+                        <div className="mt-2 text-sm text-amber-700">{product.risk_warning}</div>
+                      ) : null}
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {(product.data_source || []).map((item) => (
+                          <span key={item} className="rounded bg-slate-100 px-2 py-1 text-xs text-slate-600">
+                            {item}
+                          </span>
+                        ))}
+                        <span className={`rounded px-2 py-1 text-xs ${product.knowledge_ready ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
+                          {product.knowledge_ready ? `知识条目 ${product.knowledge_count}` : '缺少知识支撑'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2 lg:w-[220px] lg:flex-col">
+                      <Button
+                        disabled={processingKey === product.product_id}
+                        onClick={() => void applySelectionAction([product.product_id], 'select')}
+                      >
+                        {processingKey === product.product_id ? '处理中...' : '纳入重点'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        disabled={processingKey === product.product_id}
+                        onClick={() => void applySelectionAction([product.product_id], 'reject')}
+                      >
+                        暂不考虑
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>

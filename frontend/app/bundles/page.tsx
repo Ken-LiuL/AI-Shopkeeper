@@ -1,137 +1,133 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { withErrorBoundary } from '@/components/error-boundary';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { withErrorBoundary } from '@/components/error-boundary';
-import { AICapabilityHeader } from '@/components/ai-capability-badge';
-import { fetchAPI } from '@/lib/api';
-import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
-import { AIActionButton } from '@/components/ai-action-button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { fetchAPI, lookupIssueActions, updateIssueAction, type IssueActionRecord } from '@/lib/api';
+
+interface BundleProduct {
+  product_id: string;
+  name: string;
+  unit_price: number;
+  monthly_sales?: number;
+}
 
 interface BundleRecommendation {
   id: string;
   name: string;
   product_ids: string[];
+  products?: BundleProduct[];
   confidence: number;
   lift_value: number;
   bundle_price: number;
-  estimated_profit_margin: number;
+  estimated_profit_margin?: number | null;
+  pair_orders?: number;
+  reason?: string;
+  data_source?: string;
   status?: string;
 }
 
-function buildBundleReasoningSteps(bundle: BundleRecommendation) {
-  const liftStr = bundle.lift_value != null ? bundle.lift_value.toFixed(2) : '—';
-  const confPct = bundle.confidence != null
-    ? (bundle.confidence <= 1 ? (bundle.confidence * 100).toFixed(0) : bundle.confidence.toFixed(0))
-    : '—';
-  return [
-    { icon: '📦', title: '关联挖掘', detail: `发现 ${bundle.product_ids?.length ?? 0} 件商品强关联`, status: 'completed' as const },
-    { icon: '📊', title: '支持度分析', detail: `Lift 值 ${liftStr}，关联强度${Number(liftStr) >= 2 ? '高' : '中等'}`, status: 'completed' as const },
-    { icon: '💰', title: '定价优化', detail: `套餐价 ¥${bundle.bundle_price?.toFixed(2) ?? '—'}，利润率 ${bundle.estimated_profit_margin?.toFixed(1) ?? '—'}%`, status: 'completed' as const },
-    { icon: '✔️', title: '置信验证', detail: `置信度 ${confPct}%，已通过历史数据验证`, status: 'completed' as const },
-  ];
+function getBundleStatus(bundle: BundleRecommendation, action?: IssueActionRecord | null) {
+  if (!action) {
+    return bundle.status || 'pending';
+  }
+  if (action.status === 'resolved') {
+    return 'active';
+  }
+  if (action.status === 'ignored') {
+    return 'inactive';
+  }
+  return 'pending';
+}
+
+function statusBadge(status: string) {
+  switch (status) {
+    case 'active':
+      return <Badge className="bg-green-100 text-green-700">已纳入执行</Badge>;
+    case 'inactive':
+      return <Badge className="bg-slate-100 text-slate-600">暂不执行</Badge>;
+    default:
+      return <Badge className="bg-amber-100 text-amber-700">待复核</Badge>;
+  }
 }
 
 function BundlesPage() {
   const [bundles, setBundles] = useState<BundleRecommendation[]>([]);
   const [loading, setLoading] = useState(true);
-  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  const fetchBundles = async () => {
+  useEffect(() => {
+    void loadBundles();
+  }, []);
+
+  async function loadBundles() {
     try {
+      setLoading(true);
       setError(null);
-      type BundlesApiResponse = BundleRecommendation[] | { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] };
-      const data = await fetchAPI<BundlesApiResponse>('/bundles/recommendations');
-      setBundles(Array.isArray(data) ? data : (data as { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] }).bundles || (data as { bundles?: BundleRecommendation[]; recommendations?: BundleRecommendation[] }).recommendations || []);
+      const raw = await fetchAPI<BundleRecommendation[]>('/bundles/recommendations');
+      const issues = raw.length > 0
+        ? await lookupIssueActions(
+            raw.map((item) => ({
+              issue_type: 'bundle_candidate',
+              issue_key: item.id,
+            })),
+          )
+        : [];
+      const issueMap = new Map(issues.map((item) => [item.issue_key, item]));
+      setBundles(raw.map((item) => ({ ...item, status: getBundleStatus(item, issueMap.get(item.id)) })));
+      setMessage(null);
     } catch (err) {
-      console.error('Error fetching bundles:', err);
-      setError('加载套餐数据失败，请稍后重试');
+      setError(err instanceof Error ? err.message : '加载套餐建议失败');
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  useEffect(() => {
-    fetchBundles();
-  }, []);
-
-  const handleGenerate = async () => {
-    setGenerating(true);
+  async function applyBundleDecision(bundle: BundleRecommendation, action: 'activate' | 'deactivate') {
+    const status = action === 'activate' ? 'resolved' : 'ignored';
+    setActionLoading(`${bundle.id}:${action}`);
     try {
-      await fetchAPI('/bundles/generate', { method: 'POST' });
-      await fetchBundles();
-    } catch (err) {
-      console.error('Error generating bundles:', err);
-      alert('生成套餐建议失败，请稍后重试');
-    } finally {
-      setGenerating(false);
-    }
-  };
-
-  const handleActivate = async (id: string) => {
-    setActionLoading(id + '_activate');
-    try {
-      await fetchAPI(`/bundles/${id}/activate`, { method: 'POST' });
-      setBundles(prev =>
-        prev.map(b => b.id === id ? { ...b, status: 'active' } : b)
+      await updateIssueAction({
+        issue_type: 'bundle_candidate',
+        issue_key: bundle.id,
+        title: bundle.name,
+        status,
+        metadata: {
+          bundle_id: bundle.id,
+          decision: action,
+          product_ids: bundle.product_ids,
+          pair_orders: bundle.pair_orders || 0,
+        },
+      });
+      setBundles((prev) =>
+        prev.map((item) =>
+          item.id === bundle.id ? { ...item, status: action === 'activate' ? 'active' : 'inactive' } : item,
+        ),
       );
+      setMessage(action === 'activate' ? '套餐已纳入执行' : '套餐已标记为暂不执行');
     } catch (err) {
-      console.error('Error activating bundle:', err);
-      alert('上架失败，请稍后重试');
+      setMessage(err instanceof Error ? err.message : '操作失败');
     } finally {
       setActionLoading(null);
     }
-  };
-
-  const handleDeactivate = async (id: string) => {
-    setActionLoading(id + '_deactivate');
-    try {
-      await fetchAPI(`/bundles/${id}/deactivate`, { method: 'POST' });
-      setBundles(prev =>
-        prev.map(b => b.id === id ? { ...b, status: 'inactive' } : b)
-      );
-    } catch (err) {
-      console.error('Error deactivating bundle:', err);
-      alert('下架失败，请稍后重试');
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
-  const getStatusBadge = (status?: string) => {
-    switch (status) {
-      case 'active':
-        return <Badge className="bg-green-100 text-green-700">已上架</Badge>;
-      case 'inactive':
-        return <Badge className="bg-gray-100 text-gray-600">已下架</Badge>;
-      default:
-        return <Badge className="bg-yellow-100 text-yellow-700">待上架</Badge>;
-    }
-  };
+  }
 
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-            <p className="text-muted-foreground">AI 分析商品关联购买数据，自动发现套餐机会并优化定价</p>
-          </div>
-          <Button disabled>生成套餐建议</Button>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">套餐候选池</h1>
+          <p className="text-muted-foreground">优先基于真实订单共购关系推荐套餐。</p>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[1, 2, 3].map(i => (
-            <Card key={i}>
-              <CardContent className="p-6">
-                <div className="h-40 bg-muted animate-pulse rounded"></div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <Card>
+          <CardContent className="p-6">
+            <div className="h-40 animate-pulse rounded bg-muted" />
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -139,190 +135,142 @@ function BundlesPage() {
   if (error) {
     return (
       <div className="space-y-6">
-        <div className="flex justify-between items-center">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-            <p className="text-muted-foreground">AI 分析商品关联购买数据，自动发现套餐机会并优化定价</p>
-          </div>
-          <Button onClick={handleGenerate} disabled={generating}>
-            {generating ? '生成中...' : '生成套餐建议'}
-          </Button>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">套餐候选池</h1>
+          <p className="text-muted-foreground">优先基于真实订单共购关系推荐套餐。</p>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
-            <div className="text-red-500 text-4xl mb-4">⚠️</div>
-            <h3 className="text-lg font-medium text-red-800 mb-2">数据加载失败</h3>
-            <p className="text-red-600 mb-4">{error}</p>
-            <Button onClick={fetchBundles} variant="destructive">重新加载</Button>
+            <div className="text-lg text-red-700">加载失败</div>
+            <p className="mt-2 text-sm text-red-600">{error}</p>
+            <Button className="mt-4" onClick={() => void loadBundles()}>重试</Button>
           </CardContent>
         </Card>
       </div>
     );
   }
 
+  const activeCount = bundles.filter((bundle) => bundle.status === 'active').length;
+  const avgConfidence =
+    bundles.length > 0
+      ? ((bundles.reduce((sum, bundle) => sum + (bundle.confidence || 0), 0) / bundles.length) * 100).toFixed(1)
+      : '0.0';
+
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">🎁 智能套餐</h1>
-          <AICapabilityHeader
-            capabilities={['关联规则挖掘', 'GraphRAG 知识图谱', 'Self-Reflection 自检', '事实核查']}
-            description="AI 分析商品关联购买数据，自动发现套餐机会并优化定价"
-          />
+          <h1 className="text-3xl font-bold tracking-tight">套餐候选池</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            套餐建议优先基于近 30 天真实订单共购，不再只靠品类规则做展示。
+          </p>
         </div>
-        <Button onClick={handleGenerate} disabled={generating}>
-          {generating ? (
-            <span className="flex items-center gap-2">
-              <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
-              生成中...
-            </span>
-          ) : '✨ 生成套餐建议'}
+        <Button variant="outline" onClick={() => void loadBundles()}>
+          重新计算
         </Button>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">套餐总数</p>
-                <p className="text-2xl font-bold">{bundles.length}</p>
-              </div>
-              <div className="text-3xl">🎁</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">已上架</p>
-                <p className="text-2xl font-bold text-green-600">
-                  {bundles.filter(b => b.status === 'active').length}
-                </p>
-              </div>
-              <div className="text-3xl">✅</div>
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-muted-foreground">平均置信度</p>
-                <p className="text-2xl font-bold text-blue-600">
-                  {bundles.length > 0
-                    ? (bundles.reduce((sum, b) => sum + (b.confidence || 0), 0) / bundles.length * 100).toFixed(1) + '%'
-                    : '—'}
-                </p>
-              </div>
-              <div className="text-3xl">📊</div>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+      {message && (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          {message}
+        </div>
+      )}
 
-      {/* Bundles List */}
+      <Card className="border-slate-200 bg-slate-50">
+        <CardContent className="grid gap-4 p-5 md:grid-cols-4">
+          <div>
+            <div className="text-sm text-muted-foreground">数据边界</div>
+            <div className="mt-1 text-sm text-slate-700">仅基于近 30 天订单共购，不做竞品或外部流量推断。</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">套餐候选</div>
+            <div className="mt-1 text-2xl font-bold">{bundles.length}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">已纳入执行</div>
+            <div className="mt-1 text-2xl font-bold text-green-600">{activeCount}</div>
+          </div>
+          <div>
+            <div className="text-sm text-muted-foreground">平均置信度</div>
+            <div className="mt-1 text-2xl font-bold">{avgConfidence}%</div>
+          </div>
+        </CardContent>
+      </Card>
+
       {bundles.length === 0 ? (
         <Card>
-          <CardContent className="p-12 text-center">
-            <div className="text-5xl mb-4">🎁</div>
-            <h3 className="text-lg font-medium text-gray-700 mb-2">暂无套餐建议</h3>
-            <p className="text-muted-foreground mb-6">点击「生成套餐建议」按钮，AI 将基于历史订单分析商品关联关系</p>
-            <Button onClick={handleGenerate} disabled={generating}>
-              {generating ? '生成中...' : '生成套餐建议'}
-            </Button>
+          <CardContent className="p-10 text-center text-sm text-muted-foreground">
+            近 30 天订单共购数据不足，暂时无法生成可信套餐。
           </CardContent>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
           {bundles.map((bundle) => (
-            <Card key={bundle.id} className="hover:shadow-md transition-shadow">
+            <Card key={bundle.id} className="border-slate-200">
               <CardHeader className="pb-3">
-                <div className="flex items-start justify-between gap-2">
-                  <CardTitle className="text-base font-semibold leading-snug">
-                    {bundle.name || `套餐 #${bundle.id}`}
-                  </CardTitle>
-                  {getStatusBadge(bundle.status)}
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base leading-snug">{bundle.name}</CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">{bundle.data_source || '真实订单共购'}</p>
+                  </div>
+                  {statusBadge(bundle.status || 'pending')}
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Products */}
-                <div>
-                  <p className="text-xs font-medium text-muted-foreground mb-2">包含商品</p>
-                  <div className="flex flex-wrap gap-1">
-                    {(bundle.product_ids || []).map((pid, idx) => (
-                      <Badge key={idx} variant="outline" className="text-xs">
-                        {pid}
-                      </Badge>
-                    ))}
-                  </div>
+                <div className="space-y-2">
+                  {(bundle.products || []).map((product) => (
+                    <div key={product.product_id} className="rounded-lg border bg-slate-50 p-3">
+                      <div className="font-medium text-slate-900">{product.name}</div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        单价 ¥{product.unit_price.toFixed(2)}
+                        {product.monthly_sales != null ? ` / 月销 ${product.monthly_sales}` : ''}
+                      </div>
+                    </div>
+                  ))}
                 </div>
 
-                {/* Metrics */}
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="bg-blue-50 rounded-lg p-3">
-                    <p className="text-xs text-blue-600 font-medium">置信度</p>
-                    <p className="text-lg font-bold text-blue-700">
-                      {bundle.confidence != null
-                        ? (bundle.confidence <= 1
-                          ? (bundle.confidence * 100).toFixed(1) + '%'
-                          : bundle.confidence.toFixed(1) + '%')
-                        : '—'}
-                    </p>
+                  <div className="rounded-lg bg-blue-50 p-3">
+                    <div className="text-xs text-blue-600">同单共购</div>
+                    <div className="text-lg font-bold text-blue-700">{bundle.pair_orders || 0} 单</div>
                   </div>
-                  <div className="bg-purple-50 rounded-lg p-3">
-                    <p className="text-xs text-purple-600 font-medium">Lift 值</p>
-                    <p className="text-lg font-bold text-purple-700">
-                      {bundle.lift_value != null ? bundle.lift_value.toFixed(2) : '—'}
-                    </p>
+                  <div className="rounded-lg bg-purple-50 p-3">
+                    <div className="text-xs text-purple-600">Lift 值</div>
+                    <div className="text-lg font-bold text-purple-700">{bundle.lift_value.toFixed(2)}</div>
                   </div>
-                  <div className="bg-green-50 rounded-lg p-3">
-                    <p className="text-xs text-green-600 font-medium">套餐价格</p>
-                    <p className="text-lg font-bold text-green-700">
-                      {bundle.bundle_price != null ? `¥${bundle.bundle_price.toFixed(2)}` : '—'}
-                    </p>
+                  <div className="rounded-lg bg-green-50 p-3">
+                    <div className="text-xs text-green-600">套餐价</div>
+                    <div className="text-lg font-bold text-green-700">¥{bundle.bundle_price.toFixed(2)}</div>
                   </div>
-                  <div className="bg-orange-50 rounded-lg p-3">
-                    <p className="text-xs text-orange-600 font-medium">预计利润率</p>
-                    <p className="text-lg font-bold text-orange-700">
-                      {bundle.estimated_profit_margin != null
-                        ? bundle.estimated_profit_margin.toFixed(1) + '%'
-                        : '—'}
-                    </p>
+                  <div className="rounded-lg bg-orange-50 p-3">
+                    <div className="text-xs text-orange-600">预计利润率</div>
+                    <div className="text-lg font-bold text-orange-700">
+                      {bundle.estimated_profit_margin != null ? `${bundle.estimated_profit_margin.toFixed(1)}%` : '—'}
+                    </div>
                   </div>
                 </div>
 
-                {/* AI Reasoning */}
-                <AIReasoningPanel
-                  steps={buildBundleReasoningSteps(bundle)}
-                  confidence={bundle.confidence != null
-                    ? Math.round(bundle.confidence <= 1 ? bundle.confidence * 100 : bundle.confidence)
-                    : undefined}
-                />
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  {bundle.reason || '订单共购关系明显，值得做套餐试卖。'}
+                </div>
 
-                {/* Actions */}
-                <div className="flex gap-2 pt-1 flex-wrap">
-                  {bundle.status !== 'active' && (
-                    <AIActionButton
-                      label="创建套餐"
-                      loading={actionLoading === bundle.id + '_activate'}
-                      confirmed={bundle.status === 'active'}
-                      onAction={() => handleActivate(bundle.id)}
-                      className="flex-1"
-                    />
-                  )}
-                  {bundle.status === 'active' && (
+                <div className="flex gap-2">
+                  {bundle.status !== 'active' ? (
                     <Button
-                      size="sm"
-                      variant="outline"
-                      className="flex-1 border-red-300 text-red-600 hover:bg-red-50"
-                      onClick={() => handleDeactivate(bundle.id)}
-                      disabled={actionLoading === bundle.id + '_deactivate'}
+                      className="flex-1"
+                      disabled={actionLoading === `${bundle.id}:activate`}
+                      onClick={() => void applyBundleDecision(bundle, 'activate')}
                     >
-                      {actionLoading === bundle.id + '_deactivate' ? '下架中...' : '⬇ 下架'}
+                      {actionLoading === `${bundle.id}:activate` ? '处理中...' : '纳入执行'}
+                    </Button>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      className="flex-1"
+                      disabled={actionLoading === `${bundle.id}:deactivate`}
+                      onClick={() => void applyBundleDecision(bundle, 'deactivate')}
+                    >
+                      {actionLoading === `${bundle.id}:deactivate` ? '处理中...' : '暂不执行'}
                     </Button>
                   )}
                 </div>

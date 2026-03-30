@@ -29,12 +29,23 @@ class RestockSuggestion(BaseModel):
     supplier_info: str
     lead_time_days: int
     safety_stock_days: int
+    data_source: str | None = None
+    confidence: str | None = None
+    note: str | None = None
 
 
 class InventoryListItem(BaseModel):
     product_id: str
     name: str
     stock: int
+    available_stock: int | None = None
+    locked_stock: int | None = None
+    category: str | None = None
+    monthly_sales: int = 0
+    retail_price: float | None = None
+    stock_value: float | None = None
+    coverage_days: float | None = None
+    risk_level: str = "normal"
     status: str  # normal | low_stock | out_of_stock
     source: str  # qnh_inventory | qnh_products
 
@@ -57,17 +68,40 @@ async def _table_exists(pool, table_name: str) -> bool:
 
 
 def _to_inventory_item(row: dict, source: str) -> InventoryListItem:
-    stock = int(row.get("stock") or 0)
-    if stock == 0:
+    stock = int(row.get("stock") or row.get("current_stock") or 0)
+    available_stock = row.get("available_stock")
+    locked_stock = row.get("locked_stock")
+    monthly_sales = int(row.get("monthly_sales") or 0)
+    daily_sales = (monthly_sales / 30.0) if monthly_sales > 0 else 0
+    coverage_days = round(stock / daily_sales, 1) if daily_sales > 0 else None
+
+    if stock == 0 and monthly_sales > 0:
         status = "out_of_stock"
+        risk_level = "stockout_but_selling"
+    elif stock == 0:
+        status = "out_of_stock"
+        risk_level = "stockout"
+    elif coverage_days is not None and coverage_days <= 7:
+        status = "low_stock"
+        risk_level = "high"
     elif stock < 10:
         status = "low_stock"
+        risk_level = "medium"
     else:
         status = "normal"
+        risk_level = "normal"
     return InventoryListItem(
         product_id=str(row.get("product_id") or row.get("sku_id") or ""),
         name=str(row.get("name") or row.get("product_name") or "未命名商品"),
         stock=stock,
+        available_stock=int(available_stock) if available_stock is not None else None,
+        locked_stock=int(locked_stock) if locked_stock is not None else None,
+        category=str(row.get("category") or "") or None,
+        monthly_sales=monthly_sales,
+        retail_price=float(row.get("retail_price") or 0) if row.get("retail_price") is not None else None,
+        stock_value=float(row.get("stock_value") or 0) if row.get("stock_value") is not None else None,
+        coverage_days=coverage_days,
+        risk_level=risk_level,
         status=status,
         source=source,
     )
@@ -83,9 +117,29 @@ async def _fetch_inventory_list(limit: int = 200, low_stock_first: bool = True) 
                 dict(row)
                 for row in await pool.fetch(
                     """
-                    SELECT *
-                    FROM qnh_inventory
-                    ORDER BY COALESCE(stock, 0) ASC
+                    SELECT
+                        qi.sku_id,
+                        qi.product_name,
+                        COALESCE(qi.stock, qi.current_stock, 0) AS stock,
+                        qi.available_stock,
+                        qi.locked_stock,
+                        qi.stock_value,
+                        COALESCE(p.category, '') AS category,
+                        COALESCE(p.monthly_sales, 0) AS monthly_sales,
+                        p.retail_price
+                    FROM qnh_inventory qi
+                    LEFT JOIN products p
+                      ON COALESCE(NULLIF(p.sku_id, ''), p.product_id) = qi.sku_id
+                    ORDER BY
+                        CASE
+                            WHEN COALESCE(qi.stock, qi.current_stock, 0) = 0 AND COALESCE(p.monthly_sales, 0) > 0 THEN 0
+                            WHEN COALESCE(qi.stock, qi.current_stock, 0) = 0 THEN 1
+                            WHEN COALESCE(p.monthly_sales, 0) > 0
+                                 AND COALESCE(qi.stock, qi.current_stock, 0) < GREATEST(CEIL(COALESCE(p.monthly_sales, 0) / 30.0 * 7), 5) THEN 2
+                            ELSE 3
+                        END,
+                        COALESCE(p.monthly_sales, 0) DESC,
+                        COALESCE(qi.stock, qi.current_stock, 0) ASC
                     LIMIT $1
                     """,
                     limit,
@@ -105,9 +159,27 @@ async def _fetch_inventory_list(limit: int = 200, low_stock_first: bool = True) 
                 dict(row)
                 for row in await pool.fetch(
                     """
-                    SELECT *
-                    FROM qnh_products
-                    ORDER BY COALESCE(stock, 0) ASC
+                    SELECT
+                        COALESCE(NULLIF(qp.sku_id, ''), qp.spu_id) AS sku_id,
+                        qp.name AS product_name,
+                        COALESCE(qp.stock, 0) AS stock,
+                        COALESCE(p.category, qp.category, '') AS category,
+                        COALESCE(p.monthly_sales, qp.monthly_sales, 0) AS monthly_sales,
+                        COALESCE(p.retail_price, qp.retail_price) AS retail_price,
+                        NULL::int AS available_stock,
+                        NULL::int AS locked_stock,
+                        NULL::numeric AS stock_value
+                    FROM qnh_products qp
+                    LEFT JOIN products p
+                      ON COALESCE(NULLIF(p.sku_id, ''), p.product_id) = COALESCE(NULLIF(qp.sku_id, ''), qp.spu_id)
+                    ORDER BY
+                        CASE
+                            WHEN COALESCE(qp.stock, 0) = 0 AND COALESCE(p.monthly_sales, qp.monthly_sales, 0) > 0 THEN 0
+                            WHEN COALESCE(qp.stock, 0) = 0 THEN 1
+                            ELSE 2
+                        END,
+                        COALESCE(p.monthly_sales, qp.monthly_sales, 0) DESC,
+                        COALESCE(qp.stock, 0) ASC
                     LIMIT $1
                     """,
                     limit,
@@ -125,10 +197,9 @@ async def _fetch_inventory_list(limit: int = 200, low_stock_first: bool = True) 
 
 
 async def _get_current_inventory(limit: int = 50):
-    """从 products 表获取当前库存数据（优化性能）"""
+    """从 products 表获取当前库存数据，保持人工导入后的真实库存口径。"""
     pool = pg.get_pool()
 
-    # 优化：只获取在售商品，限制数量，添加索引字段
     inventory = await pool.fetch(
         """
         SELECT
@@ -138,32 +209,24 @@ async def _get_current_inventory(limit: int = 50):
             cost_price,
             category,
             status,
-            stock
+            COALESCE(stock, 0) AS stock,
+            COALESCE(monthly_sales, 0) AS monthly_sales
         FROM products
-        WHERE retail_price > 0  -- 只查询有价格的商品
-        ORDER BY updated_at DESC NULLS LAST, retail_price DESC  -- 优先返回最新且高价值商品
+        WHERE retail_price > 0
+        ORDER BY
+            CASE
+                WHEN COALESCE(stock, 0) = 0 AND COALESCE(monthly_sales, 0) > 0 THEN 0
+                WHEN COALESCE(stock, 0) < 10 THEN 1
+                ELSE 2
+            END,
+            COALESCE(monthly_sales, 0) DESC,
+            updated_at DESC NULLS LAST
         LIMIT $1
     """,
         limit,
     )
 
-    # Convert to mutable dicts
-    inventory = [dict(row) for row in inventory]
-
-    # 为每个商品估算库存（缺失时使用价格估算）
-    for item in inventory:
-        price = float(item.get("retail_price") or 0)
-        stock = item.get("stock")
-        if stock is None or stock <= 0:
-            if price > 500:
-                stock = 20  # 高价商品库存较少
-            elif price > 100:
-                stock = 50  # 中价商品
-            else:
-                stock = 100  # 低价商品库存较多
-        item["stock"] = int(stock)
-
-    return inventory
+    return [dict(row) for row in inventory]
 
 
 async def _calculate_sales_velocity():
@@ -243,6 +306,8 @@ async def _get_supplier_info():
 
     pool = pg.get_pool()
     try:
+        if not await _table_exists(pool, "product_suppliers"):
+            return {}, default_suppliers
         # 尝试从数据库获取供应商信息
         suppliers = await pool.fetch("""
             SELECT product_id, supplier_name, lead_time_days, category
@@ -261,7 +326,7 @@ async def _get_supplier_info():
 
         return supplier_info, default_suppliers
     except Exception as e:
-        logger.warning(f"Failed to fetch supplier info: {e}")
+        logger.debug(f"Failed to fetch supplier info: {e}")
         return {}, default_suppliers
 
 
@@ -342,126 +407,108 @@ async def get_restock_suggestions(
     """基于销量趋势和安全库存生成补货建议（优化性能）"""
 
     try:
-        # 获取有限的库存数据以提升性能
-        inventory = await _get_current_inventory(limit=limit)
-        sales_velocity = await _calculate_sales_velocity()
-        supplier_info, default_suppliers = await _get_supplier_info()
-
-        # 准备分析数据
-        analysis_data = []
-        suggestions = []
-
-        for item in inventory:
-            product_id = item["product_id"]
-            name = item["name"]
-            current_stock = int(item["stock"]) if item["stock"] else 0
-            category = item["category"] or "其他"
-
-            # 销售速度
-            velocity = sales_velocity.get(product_id, {"avg_daily": 0, "total_30days": 0})
-            avg_daily_sales = velocity["avg_daily"]
-
-            # 如果没有销量数据，基于品类估算日均销量
-            if avg_daily_sales == 0:
-                price = float(item.get("retail_price") or 0)
-                if price > 500:
-                    avg_daily_sales = 0.3  # 高价医疗器械
-                elif price > 100:
-                    avg_daily_sales = 1.0
-                else:
-                    avg_daily_sales = 3.0  # 低价耗材
-
-            # 剩余天数
-            days_remaining = 0
-            if avg_daily_sales > 0:
-                days_remaining = int(current_stock / avg_daily_sales)
-            else:
-                days_remaining = 999
-
-            # 供应商信息
-            supplier = supplier_info.get(product_id)
-            if not supplier:
-                supplier = default_suppliers.get(category, {"name": "默认供应商", "lead_time": 7})
-
-            lead_time = supplier["lead_time"]
-
-            # 计算建议补货量
-            suggested_qty = 0
-            urgency = "low"
-
-            if days_remaining <= lead_time:
-                urgency = "high"
-                # 紧急补货：补到安全库存 + 一个周期的销量
-                suggested_qty = int((safety_days + lead_time * 2) * avg_daily_sales - current_stock)
-            elif days_remaining <= safety_days:
-                urgency = "medium"
-                # 常规补货：补到安全库存水平
-                suggested_qty = int((safety_days + lead_time) * avg_daily_sales - current_stock)
-            elif days_remaining <= safety_days * 2 and avg_daily_sales > 1:
-                urgency = "low"
-                # 预警补货：适量补货
-                suggested_qty = int(safety_days * avg_daily_sales)
-
-            if suggested_qty > 0:
-                analysis_data.append(
-                    {
-                        "product_id": product_id,
-                        "name": name,
-                        "category": category,
-                        "current_stock": current_stock,
-                        "avg_daily_sales": avg_daily_sales,
-                        "days_remaining": days_remaining,
-                        "lead_time": lead_time,
-                        "safety_days": safety_days,
-                        "suggested_qty": suggested_qty,
-                        "urgency": urgency,
-                    }
-                )
-
-                suggestions.append(
-                    RestockSuggestion(
-                        product_id=product_id,
-                        name=name,
-                        current_stock=current_stock,
-                        avg_daily_sales=round(avg_daily_sales, 2),
-                        days_remaining=days_remaining,
-                        suggested_restock_qty=max(suggested_qty, 0),
-                        urgency=urgency,
-                        supplier_info=supplier["name"],
-                        lead_time_days=lead_time,
-                        safety_stock_days=safety_days,
-                    )
-                )
-
-        # 简化：移除AI调用以避免超时，使用规则化逻辑
-        # 基于库存天数调整紧急程度
-        for suggestion in suggestions:
-            days_remaining = suggestion.days_remaining
-            if days_remaining <= 3:
-                suggestion.urgency = "high"
-            elif days_remaining <= 7:
-                suggestion.urgency = "medium"
-            else:
-                suggestion.urgency = "low"
-
-        # 按紧急程度排序
-        urgency_order = {"high": 3, "medium": 2, "low": 1}
-        suggestions.sort(key=lambda x: (urgency_order[x.urgency], -x.avg_daily_sales), reverse=True)
-
-        # 过滤最低紧急程度
-        if min_urgency != "low":
-            urgency_filter = {"high": ["high"], "medium": ["high", "medium"]}
-            suggestions = [
-                s for s in suggestions if s.urgency in urgency_filter.get(min_urgency, [])
-            ]
-
+        suggestions = await _build_restock_suggestions(
+            safety_days=int(safety_days),
+            min_urgency=str(min_urgency),
+            limit=int(limit),
+        )
         return APIResponse(data=suggestions)
-
     except Exception as e:
         logger.error(f"Failed to generate restock suggestions: {e}")
         return APIResponse(
             success=False, message=f"Failed to generate suggestions: {str(e)}", data=[]
         )
+
+
+async def _build_restock_suggestions(
+    *,
+    safety_days: int,
+    min_urgency: str,
+    limit: int,
+) -> list[RestockSuggestion]:
+    inventory = await _get_current_inventory(limit=limit)
+    sales_velocity = await _calculate_sales_velocity()
+    supplier_info, default_suppliers = await _get_supplier_info()
+
+    suggestions: list[RestockSuggestion] = []
+
+    for item in inventory:
+        product_id = item["product_id"]
+        name = item["name"]
+        current_stock = int(item["stock"]) if item["stock"] else 0
+        category = item["category"] or "其他"
+
+        velocity = sales_velocity.get(product_id, {"avg_daily": 0, "total_30days": 0})
+        avg_daily_sales = velocity["avg_daily"]
+        sales_source = "hotsale_goods" if avg_daily_sales > 0 else ""
+
+        if avg_daily_sales == 0:
+            monthly_sales = float(item.get("monthly_sales") or 0)
+            if monthly_sales > 0:
+                avg_daily_sales = round(monthly_sales / 30.0, 2)
+                sales_source = "monthly_sales"
+
+        if avg_daily_sales <= 0:
+            continue
+
+        days_remaining = int(current_stock / avg_daily_sales) if avg_daily_sales > 0 else 999
+
+        supplier = supplier_info.get(product_id)
+        if not supplier:
+            supplier = default_suppliers.get(category, {"name": "默认供应商", "lead_time": 7})
+
+        lead_time = supplier["lead_time"]
+        suggested_qty = 0
+        urgency = "low"
+
+        if days_remaining <= lead_time:
+            urgency = "high"
+            suggested_qty = int((safety_days + lead_time * 2) * avg_daily_sales - current_stock)
+        elif days_remaining <= safety_days:
+            urgency = "medium"
+            suggested_qty = int((safety_days + lead_time) * avg_daily_sales - current_stock)
+        elif days_remaining <= safety_days * 2 and avg_daily_sales > 1:
+            urgency = "low"
+            suggested_qty = int(safety_days * avg_daily_sales)
+
+        if suggested_qty <= 0:
+            continue
+
+        suggestions.append(
+            RestockSuggestion(
+                product_id=product_id,
+                name=name,
+                current_stock=current_stock,
+                avg_daily_sales=round(avg_daily_sales, 2),
+                days_remaining=days_remaining,
+                suggested_restock_qty=max(suggested_qty, 0),
+                urgency=urgency,
+                supplier_info=supplier["name"],
+                lead_time_days=lead_time,
+                safety_stock_days=safety_days,
+                data_source=sales_source or "verified_sales",
+                confidence="high" if velocity["avg_daily"] > 0 else "medium",
+                note="基于真实销量与当前库存生成",
+            )
+        )
+
+    for suggestion in suggestions:
+        days_remaining = suggestion.days_remaining
+        if days_remaining <= 3:
+            suggestion.urgency = "high"
+        elif days_remaining <= 7:
+            suggestion.urgency = "medium"
+        else:
+            suggestion.urgency = "low"
+
+    urgency_order = {"high": 3, "medium": 2, "low": 1}
+    suggestions.sort(key=lambda x: (urgency_order[x.urgency], -x.avg_daily_sales), reverse=True)
+
+    if min_urgency != "low":
+        urgency_filter = {"high": ["high"], "medium": ["high", "medium"]}
+        suggestions = [s for s in suggestions if s.urgency in urgency_filter.get(min_urgency, [])]
+
+    return suggestions
 
 
 @router.get("/overview", response_model=APIResponse[dict])
@@ -481,20 +528,25 @@ async def get_inventory_overview() -> APIResponse[dict]:
             FROM products
         """)
 
-        estimated_inventory = await pool.fetch("""
+        category_inventory = await pool.fetch("""
             SELECT
                 category,
                 COUNT(*) as product_count,
                 COUNT(*) FILTER (WHERE status = 'active') as active_count,
+                COUNT(*) FILTER (WHERE COALESCE(stock, 0) = 0) as out_of_stock_count,
                 SUM(COALESCE(stock, 0)) as total_stock,
-                AVG(retail_price) as avg_price
+                AVG(retail_price) as avg_price,
+                SUM(COALESCE(monthly_sales, 0)) as total_monthly_sales
             FROM products
             WHERE category IS NOT NULL AND category != ''
             GROUP BY category
             ORDER BY total_stock DESC NULLS LAST
         """)
 
-        total_estimated_stock = sum(int(row["total_stock"] or 0) for row in estimated_inventory)
+        total_stock = sum(int(row["total_stock"] or 0) for row in category_inventory)
+        total_monthly_sales = sum(int(row["total_monthly_sales"] or 0) for row in category_inventory)
+        stock_coverage_days = round(total_stock / max(total_monthly_sales / 30.0, 1), 1) if total_stock > 0 and total_monthly_sales > 0 else 0
+        turnover_rate = round((total_monthly_sales * 12) / max(total_stock, 1), 2) if total_stock > 0 and total_monthly_sales > 0 else 0
 
         low_stock_estimate = (
             await pool.fetchval("""
@@ -512,17 +564,21 @@ async def get_inventory_overview() -> APIResponse[dict]:
 
         # 计算补货建议
         try:
-            restock_result = await get_restock_suggestions()
-            high_priority = len([s for s in restock_result.data if s.urgency == "high"])
-            medium_priority = len([s for s in restock_result.data if s.urgency == "medium"])
-            total_suggestions = len(restock_result.data)
+            restock_suggestions = await _build_restock_suggestions(
+                safety_days=7,
+                min_urgency="low",
+                limit=20,
+            )
+            high_priority = len([s for s in restock_suggestions if s.urgency == "high"])
+            medium_priority = len([s for s in restock_suggestions if s.urgency == "medium"])
+            total_suggestions = len(restock_suggestions)
         except Exception:
             high_priority = medium_priority = total_suggestions = 0
 
         result = {
             "total_products": int(overview["total_products"] or 0),
             "active_products": int(overview["active_products"] or 0),
-            "total_stock": total_estimated_stock,
+            "total_stock": total_stock,
             "low_stock_count": int(low_stock_estimate),
             "out_of_stock_count": int(overview["out_of_stock_count"] or 0),
             "avg_stock": round(float(overview["avg_stock"] or 0), 2),
@@ -538,17 +594,13 @@ async def get_inventory_overview() -> APIResponse[dict]:
                     "active_count": int(row["active_count"]),
                     "estimated_stock": int(row["total_stock"] or 0),
                     "avg_price": round(float(row["avg_price"] or 0), 2),
-                    "out_of_stock": int(
-                        row["product_count"] - row["active_count"]
-                        if row["product_count"] and row["active_count"] is not None
-                        else 0
-                    ),
+                    "out_of_stock": int(row["out_of_stock_count"] or 0),
                 }
-                for row in estimated_inventory
+                for row in category_inventory
             ],
             "inventory_health": {
-                "stock_coverage_days": 45,  # 估算库存可用天数
-                "turnover_rate": 8.5,  # 年周转次数（估算）
+                "stock_coverage_days": stock_coverage_days,
+                "turnover_rate": turnover_rate,
                 "fill_rate": round(
                     (
                         int(overview["active_products"] or 0)
@@ -688,58 +740,17 @@ async def get_inventory_status() -> APIResponse[dict]:
                 }
             )
 
-        # Fallback：使用 products 表并根据动态阈值判定库存状态
-        fallback_rows = await pool.fetch("""
-            SELECT product_id, name, retail_price, status, stock,
-                   COALESCE(monthly_sales, 0) AS monthly_sales
-            FROM products
-            WHERE name IS NOT NULL AND name != ''
-        """)
-
-        normal_count, low_stock_list, out_of_stock_list = 0, [], []
-        for r in fallback_rows:
-            price = float(r["retail_price"] or 0)
-            stock = int(r["stock"] or 0)
-            status = r["status"]
-            monthly_sales = float(r["monthly_sales"] or 0)
-            if stock <= 0:
-                if price > 0:
-                    stock = 20 if price > 500 else 10
-                else:
-                    stock = 0
-
-            # Dynamic threshold
-            if monthly_sales >= 100:
-                threshold = int(monthly_sales * 0.5)
-            elif monthly_sales >= 30:
-                threshold = int(monthly_sales * 0.3)
-            else:
-                threshold = 5
-
-            item = {
-                "id": r["product_id"],
-                "name": r["name"],
-                "stock": stock,
-                "threshold": threshold,
-            }
-
-            if stock == 0 or status != "active":
-                out_of_stock_list.append(item)
-            elif stock < threshold:
-                low_stock_list.append(item)
-            else:
-                normal_count += 1
-
         return APIResponse(
             data={
                 "summary": {
-                    "normal": normal_count,
-                    "low_stock": len(low_stock_list),
-                    "out_of_stock": len(out_of_stock_list),
+                    "normal": 0,
+                    "low_stock": 0,
+                    "out_of_stock": 0,
                 },
-                "low_stock_products": low_stock_list[:50],
-                "out_of_stock_products": out_of_stock_list[:50],
-                "data_source": "products (estimated)",
+                "low_stock_products": [],
+                "out_of_stock_products": [],
+                "data_source": "products",
+                "note": "暂无可验证库存状态数据，请先导入商品和库存表。",
             }
         )
 

@@ -9,6 +9,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
 from src.agents.orchestrator import Orchestrator
 from src.db import postgres as pg
+from src.services.manual_import import ManualImportService
 
 from .deps import gen_id, get_orchestrator
 from .errors import NotFoundError
@@ -16,6 +17,66 @@ from .schemas import AlertScanResponse, AlertUpdateRequest, APIResponse
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 logger = logging.getLogger(__name__)
+
+
+async def _table_exists(pool, table_name: str) -> bool:
+    try:
+        exists = await pool.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )
+            """,
+            table_name,
+        )
+        return bool(exists)
+    except Exception:
+        return False
+
+
+def _normalize_severity(value: str | None) -> str:
+    mapping = {
+        "critical": "high",
+        "warning": "medium",
+        "info": "low",
+        "high": "high",
+        "medium": "medium",
+        "low": "low",
+    }
+    return mapping.get((value or "").lower(), "low")
+
+
+def _normalize_alert_row(row: dict) -> dict:
+    recommended_action = row.get("recommended_action") or row.get("suggestion")
+    alert_type = row.get("type") or row.get("alert_type") or "system"
+    metrics = row.get("metrics") if isinstance(row.get("metrics"), dict) else {}
+    suggestions = row.get("action_suggestions")
+    if not isinstance(suggestions, list):
+        suggestions = [recommended_action] if recommended_action else []
+    return {
+        **row,
+        "type": alert_type,
+        "severity": _normalize_severity(row.get("severity")),
+        "title": row.get("title") or row.get("alert_type") or "系统预警",
+        "description": row.get("description") or row.get("root_cause") or "",
+        "recommended_action": recommended_action,
+        "action_suggestions": suggestions,
+        "metrics": metrics,
+    }
+
+
+def _db_severity(value: str | None) -> str:
+    mapping = {
+        "high": "high",
+        "medium": "medium",
+        "low": "low",
+        "critical": "high",
+        "warning": "medium",
+        "info": "low",
+    }
+    return mapping.get((value or "").lower(), "low")
 
 
 def _extract_collaboration_from_metrics(metrics: object) -> list[dict]:
@@ -74,6 +135,180 @@ async def _extract_collaboration_from_scans(pool, alert_data: dict) -> list[dict
     return []
 
 
+def _issue_type(issue_key: str) -> str:
+    return {
+        "stockout_but_selling": "stockout",
+        "catalog_gaps": "catalog",
+        "products_missing_price": "pricing",
+        "order_amount_mismatch": "orders",
+        "inventory_missing_cost": "inventory",
+    }.get(issue_key, "data_quality")
+
+
+def _build_manual_review_description(issue: dict, rows: list[dict]) -> str:
+    base = issue.get("description") or ""
+    if not rows:
+        return base
+    sample = rows[0]
+    if issue.get("key") == "stockout_but_selling":
+        name = sample.get("name") or sample.get("product_id") or "商品"
+        sales = sample.get("monthly_sales") or 0
+        return f"{base} 当前最高风险商品是 {name}，近 30 天销量 {sales}。"
+    if issue.get("key") == "catalog_gaps":
+        name = sample.get("name") or sample.get("sku_id") or "商品"
+        return f"{base} 例如 {name} 已在业务数据出现，但主档未补齐。"
+    if issue.get("key") == "products_missing_price":
+        name = sample.get("name") or sample.get("product_id") or "商品"
+        return f"{base} 例如 {name} 当前缺少零售价。"
+    if issue.get("key") == "order_amount_mismatch":
+        order_id = sample.get("order_id") or "订单"
+        diff = sample.get("diff") or 0
+        return f"{base} 例如 {order_id} 的差额达到 {diff}。"
+    if issue.get("key") == "inventory_missing_cost":
+        name = sample.get("product_name") or sample.get("sku_id") or "SKU"
+        return f"{base} 例如 {name} 还没有成本价。"
+    return base
+
+
+def _build_manual_review_suggestions(issue: dict, rows: list[dict]) -> list[str]:
+    suggestions = []
+    recommended_action = issue.get("recommended_action")
+    if recommended_action:
+        suggestions.append(str(recommended_action))
+    if issue.get("key") == "stockout_but_selling" and rows:
+        names = [str(row.get("name") or row.get("product_id")) for row in rows[:3] if row.get("name") or row.get("product_id")]
+        if names:
+            suggestions.append(f"优先处理这批断货商品：{'、'.join(names)}")
+    if issue.get("key") == "catalog_gaps" and rows:
+        suggestions.append("明天导入前先补一版商品规格明细，避免继续生成孤儿商品。")
+    if issue.get("key") == "order_amount_mismatch":
+        suggestions.append("利润判断和客单价分析先排除异常订单，再补贴优惠拆分逻辑。")
+    if issue.get("key") == "inventory_missing_cost":
+        suggestions.append("先补热销和高库存 SKU 的成本价，先把毛利分析做准。")
+    return suggestions[:3]
+
+
+async def _generate_manual_review_alerts(pool, limit: int = 5) -> list[dict]:
+    service = ManualImportService(pool)
+    review = await service.get_review(limit=max(limit, 3))
+    summary = review.get("summary") if isinstance(review, dict) else {}
+    issues = review.get("issues") if isinstance(review, dict) else []
+    tables = review.get("tables") if isinstance(review, dict) else {}
+    if not isinstance(summary, dict) or not isinstance(issues, list) or not isinstance(tables, dict):
+        return []
+
+    alerts = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        count = int(issue.get("count") or 0)
+        if count <= 0:
+            continue
+        issue_key = str(issue.get("key") or "")
+        table_key = "missing_price" if issue_key == "products_missing_price" else issue_key
+        rows = tables.get(table_key) if isinstance(tables.get(table_key), list) else []
+        alerts.append(
+            {
+                "alert_id": f"manual_review_{issue_key}",
+                "type": _issue_type(issue_key),
+                "severity": _normalize_severity(issue.get("severity")),
+                "title": issue.get("title") or "数据质量问题",
+                "description": _build_manual_review_description(issue, rows),
+                "product_id": rows[0].get("product_id") if rows and isinstance(rows[0], dict) else None,
+                "status": "pending",
+                "created_at": None,
+                "resolved_at": None,
+                "actionable": True,
+                "recommended_action": issue.get("recommended_action") or "",
+                "action_suggestions": _build_manual_review_suggestions(issue, rows),
+                "metrics": {
+                    "count": count,
+                    "issue_key": issue_key,
+                    "summary_snapshot": {
+                        "products": int(summary.get("products") or 0),
+                        "orders": int(summary.get("orders") or 0),
+                        "inventory_rows": int(summary.get("inventory_rows") or 0),
+                    },
+                    "examples": rows[:3],
+                },
+            }
+        )
+    return alerts
+
+
+async def _load_persisted_alerts(pool) -> list[dict]:
+    if not await _table_exists(pool, "alerts"):
+        return []
+    try:
+        rows = await pool.fetch("SELECT * FROM alerts ORDER BY created_at DESC LIMIT 100")
+    except Exception as exc:
+        logger.error("Failed to query alerts table: %s", exc)
+        return []
+    return [_normalize_alert_row(dict(row)) for row in rows]
+
+
+def _merge_alerts(generated: list[dict], persisted: list[dict]) -> list[dict]:
+    persisted_by_id = {
+        str(alert.get("alert_id") or ""): alert
+        for alert in persisted
+        if alert.get("alert_id")
+    }
+    merged = []
+    seen = set()
+
+    for alert in generated:
+        alert_id = str(alert.get("alert_id") or "")
+        if not alert_id:
+            continue
+        override = persisted_by_id.get(alert_id)
+        if override:
+            merged_alert = {
+                **alert,
+                **override,
+                "type": override.get("type") or alert.get("type"),
+                "severity": _normalize_severity(override.get("severity") or alert.get("severity")),
+                "action_suggestions": override.get("action_suggestions") or alert.get("action_suggestions") or [],
+                "recommended_action": override.get("recommended_action") or alert.get("recommended_action"),
+            }
+        else:
+            merged_alert = alert
+        merged.append(merged_alert)
+        seen.add(alert_id)
+
+    for alert in persisted:
+        alert_id = str(alert.get("alert_id") or "")
+        if not alert_id or alert_id in seen:
+            continue
+        merged.append(alert)
+
+    severity_order = {"high": 0, "medium": 1, "low": 2}
+    merged.sort(
+        key=lambda item: (
+            0 if item.get("status") == "pending" else 1,
+            severity_order.get(str(item.get("severity") or ""), 3),
+            str(item.get("created_at") or ""),
+        )
+    )
+    return merged
+
+
+def _apply_alert_filters(
+    alerts: list[dict],
+    *,
+    severity: str | None,
+    status: str | None,
+    product_id: str | None,
+) -> list[dict]:
+    filtered = alerts
+    if severity:
+        filtered = [alert for alert in filtered if alert.get("severity") == severity]
+    if status:
+        filtered = [alert for alert in filtered if alert.get("status") == status]
+    if product_id:
+        filtered = [alert for alert in filtered if str(alert.get("product_id") or "") == product_id]
+    return filtered
+
+
 async def _generate_smart_alerts(pool) -> list[dict]:
     """Generate real-time alerts based on actual business data."""
     import contextlib
@@ -85,6 +320,9 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     now_str = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     alerts = []
     data = None  # raw metrics data (used below)
+
+    with contextlib.suppress(Exception):
+        alerts.extend(await _generate_manual_review_alerts(pool, limit=5))
 
     # 1. Stock-out and performance alerts — prefer qnh_dataset_records, fallback raw
     store_records = await _get_dataset_records(pool, "store_rank")
@@ -298,12 +536,21 @@ async def _generate_smart_alerts(pool) -> list[dict]:
 
     # Sort alerts by severity (high -> medium -> low) and actionable status
     severity_order = {"high": 0, "medium": 1, "low": 2}
-    alerts.sort(
+    deduped = []
+    seen = set()
+    for alert in alerts:
+        alert_id = str(alert.get("alert_id") or "")
+        if alert_id and alert_id in seen:
+            continue
+        if alert_id:
+            seen.add(alert_id)
+        deduped.append(alert)
+    deduped.sort(
         key=lambda x: (severity_order.get(x["severity"], 3), not x.get("actionable", False))
     )
 
     # Limit to top 10 alerts to reduce noise
-    return alerts[:10]
+    return deduped[:10]
 
 
 @router.get("", response_model=APIResponse[list[dict]])
@@ -313,54 +560,22 @@ async def list_alerts(
     product_id: str | None = Query(None),
 ) -> APIResponse[list[dict]]:
     pool = pg.get_pool()
-    conditions: list[str] = []
-    params: list[str] = []
-    idx = 1
-    if severity:
-        conditions.append(f"severity = ${idx}")
-        params.append(severity)
-        idx += 1
-    if status:
-        conditions.append(f"status = ${idx}")
-        params.append(status)
-        idx += 1
-    if product_id:
-        conditions.append(f"product_id = ${idx}")
-        params.append(product_id)
-        idx += 1
-
-    query = "SELECT * FROM alerts"
-    if conditions:
-        query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY created_at DESC LIMIT 100"
-
+    persisted = await _load_persisted_alerts(pool)
     try:
-        rows = await pool.fetch(query, *params)
+        generated = await _generate_smart_alerts(pool)
     except Exception as exc:
-        logger.error("Failed to query alerts table: %s", exc)
-        rows = []
+        logger.error("Failed to generate smart alerts: %s", exc)
+        generated = []
 
-    # If no structured alerts exist, generate smart alerts based on real data
-    if not rows:
-        logger.info("No structured alerts found, generating smart alerts from business data")
-        try:
-            smart_alerts = await _generate_smart_alerts(pool)
-        except Exception as exc:
-            logger.error("Failed to generate smart alerts: %s", exc)
-            return APIResponse(data=[])
-
-        # Apply filters to generated alerts
-        filtered_alerts = smart_alerts
-        if severity:
-            filtered_alerts = [a for a in filtered_alerts if a.get("severity") == severity]
-        if status:
-            filtered_alerts = [a for a in filtered_alerts if a.get("status") == status]
-        if product_id:
-            filtered_alerts = [a for a in filtered_alerts if a.get("product_id") == product_id]
-
-        return APIResponse(data=filtered_alerts)
-
-    return APIResponse(data=[dict(r) for r in rows])
+    merged = _merge_alerts(generated, persisted)
+    return APIResponse(
+        data=_apply_alert_filters(
+            merged,
+            severity=severity,
+            status=status,
+            product_id=product_id,
+        )[:100]
+    )
 
 
 @router.get("/{alert_id}", response_model=APIResponse[dict])
@@ -368,14 +583,21 @@ async def get_alert(alert_id: str) -> APIResponse[dict]:
     from fastapi import HTTPException
 
     pool = pg.get_pool()
-    try:
-        row = await pool.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
-    except Exception as exc:
-        logger.error("Failed to fetch alert %s: %s", alert_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to fetch alert") from exc
-    if not row:
-        raise NotFoundError("Alert", alert_id)
-    data = dict(row)
+    row = None
+    if await _table_exists(pool, "alerts"):
+        try:
+            row = await pool.fetchrow("SELECT * FROM alerts WHERE alert_id = $1", alert_id)
+        except Exception as exc:
+            logger.error("Failed to fetch alert %s: %s", alert_id, exc)
+            raise HTTPException(status_code=500, detail="Failed to fetch alert") from exc
+    if row:
+        data = _normalize_alert_row(dict(row))
+    else:
+        generated = await _generate_smart_alerts(pool)
+        match = next((item for item in generated if item.get("alert_id") == alert_id), None)
+        if not match:
+            raise NotFoundError("Alert", alert_id)
+        data = match
 
     try:
         collaboration_results = _extract_collaboration_from_metrics(data.get("metrics"))
@@ -394,19 +616,68 @@ async def update_alert(alert_id: str, body: AlertUpdateRequest) -> APIResponse[d
     from fastapi import HTTPException
 
     pool = pg.get_pool()
-    try:
-        row = await pool.fetchrow(
-            """UPDATE alerts SET status = $1, resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE resolved_at END
-               WHERE alert_id = $2 RETURNING *""",
-            body.status,
-            alert_id,
-        )
-    except Exception as exc:
-        logger.error("Failed to update alert %s: %s", alert_id, exc)
-        raise HTTPException(status_code=500, detail="Failed to update alert") from exc
+    row = None
+    alerts_table_exists = await _table_exists(pool, "alerts")
+    if alerts_table_exists:
+        try:
+            row = await pool.fetchrow(
+                """UPDATE alerts SET status = $1, resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE resolved_at END
+                   WHERE alert_id = $2 RETURNING *""",
+                body.status,
+                alert_id,
+            )
+        except Exception as exc:
+            logger.error("Failed to update alert %s: %s", alert_id, exc)
+            raise HTTPException(status_code=500, detail="Failed to update alert") from exc
     if not row:
-        raise NotFoundError("Alert", alert_id)
-    return APIResponse(data=dict(row))
+        generated = await _generate_smart_alerts(pool)
+        match = next((item for item in generated if item.get("alert_id") == alert_id), None)
+        if not match:
+            raise NotFoundError("Alert", alert_id)
+        if not alerts_table_exists:
+            return APIResponse(
+                data={
+                    **match,
+                    "status": body.status,
+                    "resolved_at": None if body.status != "resolved" else "virtual",
+                }
+            )
+        try:
+            row = await pool.fetchrow(
+                """
+                INSERT INTO alerts (
+                    alert_id, product_id, alert_type, severity, detection_method,
+                    metrics, title, description, recommended_action, status,
+                    created_at, resolved_at
+                )
+                VALUES (
+                    $1, $2, $3, $4, 'manual_review',
+                    $5::jsonb, $6, $7, $8, $9,
+                    NOW(), CASE WHEN $9 = 'resolved' THEN NOW() ELSE NULL END
+                )
+                ON CONFLICT (alert_id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    resolved_at = EXCLUDED.resolved_at,
+                    recommended_action = EXCLUDED.recommended_action,
+                    metrics = EXCLUDED.metrics,
+                    title = EXCLUDED.title,
+                    description = EXCLUDED.description
+                RETURNING *
+                """,
+                alert_id,
+                match.get("product_id"),
+                match.get("type") or "system",
+                _db_severity(match.get("severity")),
+                json.dumps(match.get("metrics") or {}, ensure_ascii=False, default=str),
+                match.get("title") or "系统预警",
+                match.get("description") or "",
+                match.get("recommended_action") or "",
+                body.status,
+            )
+        except Exception as exc:
+            logger.error("Failed to persist generated alert %s: %s", alert_id, exc)
+            raise HTTPException(status_code=500, detail="Failed to persist alert status") from exc
+    return APIResponse(data=_normalize_alert_row(dict(row)))
 
 
 async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:

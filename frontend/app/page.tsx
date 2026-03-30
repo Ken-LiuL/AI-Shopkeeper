@@ -3,23 +3,20 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { StatsCard } from '@/components/ui/stats-card';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { withErrorBoundary } from '@/components/error-boundary';
-import { Tooltip as OnboardingTooltip } from '@/components/onboarding/guide';
-import { getDashboardOverview, getSalesTrend, getAlerts, getDailyInsights, getAIWorkStats } from '@/lib/api';
-import type { DashboardOverview, SalesTrendData, Alert, DailyInsight, AIWorkStats } from '@/lib/api';
+import { fetchAPI, getDashboardOverview, getAlerts, getDailyInsights, getAIWorkStats } from '@/lib/api';
+import type { DashboardOverview, Alert, DailyInsight, AIWorkStats } from '@/lib/api';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
 function DashboardPage() {
   const [overview, setOverview] = useState<DashboardOverview | null>(null);
-  const [trend, setTrend] = useState<SalesTrendData[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [insights, setInsights] = useState<DailyInsight | null>(null);
   const [aiStats, setAiStats] = useState<AIWorkStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [insightsTime] = useState(() => {
     const now = new Date();
     return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -29,14 +26,12 @@ function DashboardPage() {
     const fetchData = async () => {
       try {
         setError(null);
-        const [overviewData, trendData, alertsData, insightsData] = await Promise.all([
+        const [overviewData, alertsData, insightsData] = await Promise.all([
           getDashboardOverview(),
-          getSalesTrend(),
           getAlerts(),
           getDailyInsights(),
         ]);
         setOverview(overviewData);
-        setTrend(trendData);
         setAlerts(alertsData.slice(0, 5)); // Show only latest 5 alerts
         setInsights(insightsData);
 
@@ -53,7 +48,7 @@ function DashboardPage() {
             pricingAdj: 0,
             selectionRuns: 0,
             bundlesCreated: 0,
-            listingsOptimized: 0,
+            dataImports: 0,
             estimatedSaved: '0',
             reflectionRounds: 0,
             factChecks: 0,
@@ -90,8 +85,8 @@ function DashboardPage() {
     return (
       <div className="space-y-6">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">仪表盘</h1>
-          <p className="text-muted-foreground">欢迎回到 AI 店长智能管理后台</p>
+          <h1 className="text-3xl font-bold tracking-tight">AI 指挥台</h1>
+          <p className="text-muted-foreground">今天先处理最关键的问题，再让 AI 帮你补齐数据、客服和经营动作。</p>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
@@ -110,39 +105,49 @@ function DashboardPage() {
     );
   }
 
-  const stats = [
+  const commandStats = [
+    {
+      title: '待处理事项',
+      value: Number(overview?.action_items?.length || overview?.pending_tasks || 0).toLocaleString(),
+      hint: '来自导入 review、预警和库存风险'
+    },
+    {
+      title: '高风险预警',
+      value: alerts.filter((alert) => ['critical', 'high'].includes(alert.severity || '')).length.toLocaleString(),
+      hint: '优先处理断货、主档缺口和严重异常'
+    },
     {
       title: '今日订单',
-      value: overview?.today_orders ? Number(overview.today_orders).toLocaleString() : '0',
-      icon: '📋',
-      tooltip: '今日新增订单数量（来源 qnh_orders_raw）'
+      value: Number(overview?.today_orders || 0).toLocaleString(),
+      hint: '基于当前人工导入后的真实订单'
     },
     {
       title: '今日营收',
-      value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '-',
-      icon: '💰',
-      tooltip: '今日营收（来源 qnh_orders_raw.total 汇总）'
-    },
-    {
-      title: '评价评分',
-      value: Number(overview?.avg_rating || 0).toFixed(2),
-      icon: '⭐',
-      tooltip: '今日平均评分（来源 qnh_reviews_raw）'
-    },
-    {
-      title: '库存预警数',
-      value: Number(overview?.pending_alerts || 0).toLocaleString(),
-      icon: '📦',
-      tooltip: '库存低于 10 的商品数（来源 qnh_inventory）'
+      value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '¥0',
+      hint: '用于判断当日经营节奏，不再作为主界面中心'
     },
   ];
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
+      case 'critical':
       case 'high': return 'destructive';
+      case 'warning':
       case 'medium': return 'secondary';
+      case 'info':
       case 'low': return 'outline';
       default: return 'outline';
+    }
+  };
+
+  const getPriorityBadge = (priority: string) => {
+    switch (priority) {
+      case 'high':
+        return { label: '优先处理', className: 'bg-red-100 text-red-700 border-red-200' };
+      case 'medium':
+        return { label: '本日完成', className: 'bg-amber-100 text-amber-700 border-amber-200' };
+      default:
+        return { label: '持续优化', className: 'bg-slate-100 text-slate-700 border-slate-200' };
     }
   };
 
@@ -154,245 +159,205 @@ function DashboardPage() {
     // Generate smart fallback based on alert type
     const type = (alert.type || '').toLowerCase();
     if (type.includes('stock') || type.includes('inventory')) return '建议立即补货，避免断货影响销售';
-    if (type.includes('price')) return '建议参考竞品调整定价策略';
+    if (type.includes('price')) return '建议结合销量、库存和成本复核当前价格';
     if (type.includes('review') || type.includes('rating')) return '建议主动联系客户了解问题并改进';
     return 'AI 正在分析最优处理方案，请稍后查看';
+  };
+
+  const formatOutcomeTime = (value?: string) => {
+    if (!value) return '刚刚';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '刚刚';
+    return date.toLocaleString('zh-CN', {
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const handleResolveAlert = async (alertId: string) => {
+    if (!alertId) return;
+    setResolvingId(alertId);
+    try {
+      await fetchAPI(`/alerts/${alertId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'resolved' }),
+      });
+      setAlerts((prev) => prev.filter((alert) => alert.alert_id !== alertId));
+      setOverview((prev) => (
+        prev
+          ? { ...prev, pending_alerts: Math.max(0, Number(prev.pending_alerts || 0) - 1) }
+          : prev
+      ));
+    } finally {
+      setResolvingId(null);
+    }
   };
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">仪表盘</h1>
-        <p className="text-muted-foreground">欢迎回到 AI 店长智能管理后台</p>
+        <h1 className="text-3xl font-bold tracking-tight">AI 指挥台</h1>
+        <p className="text-muted-foreground">让系统把数据翻译成动作，而不是让你自己读图表。</p>
       </div>
 
-      {/* ── AI 价值横幅 ── */}
       {aiStats && (
-        <Card className="bg-gradient-to-r from-blue-600 to-purple-600 text-white border-none shadow-lg">
+        <Card className="border-none bg-gradient-to-r from-slate-950 via-slate-900 to-blue-900 text-white shadow-lg">
           <CardContent className="p-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-2xl font-bold">🤖 AI 店长今日工作汇报</h2>
-                <p className="text-blue-100 mt-1">AI 24小时不间断为您的店铺保驾护航</p>
+                <div className="inline-flex items-center rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs text-blue-100">
+                  AI 驱动的日常经营操作系统
+                </div>
+                <h2 className="mt-3 text-2xl font-bold">今天最值得处理的动作，应该直接在这里开始。</h2>
+                <p className="mt-2 max-w-2xl text-sm text-blue-100">
+                  当前 AI 已基于商品、订单、库存三条真实数据链产出待办、预警和知识底座。先处理高风险问题，再补齐缺口数据。
+                </p>
               </div>
-              <div className="text-right">
-                <div className="text-4xl font-bold">{aiStats.totalActions}</div>
-                <div className="text-blue-100 text-sm">今日 AI 操作次数</div>
+              <div className="grid grid-cols-2 gap-3 lg:min-w-[360px]">
+                <div className="rounded-xl bg-white/10 p-4">
+                  <div className="text-3xl font-bold">{aiStats.totalActions}</div>
+                  <div className="text-xs text-blue-100">今日 AI 动作总数</div>
+                </div>
+                <div className="rounded-xl bg-white/10 p-4">
+                  <div className="text-3xl font-bold">{overview?.pending_alerts || 0}</div>
+                  <div className="text-xs text-blue-100">待处理预警</div>
+                </div>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-              <div className="bg-white/10 rounded-lg p-3">
+            <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+              <div className="rounded-lg bg-white/10 p-3">
                 <div className="text-2xl font-bold">{aiStats.alertsHandled}</div>
-                <div className="text-sm text-blue-100">🔔 处理预警</div>
+                <div className="text-sm text-blue-100">🔔 已关闭预警</div>
               </div>
-              <div className="bg-white/10 rounded-lg p-3">
+              <div className="rounded-lg bg-white/10 p-3">
                 <div className="text-2xl font-bold">{aiStats.csReplies}</div>
-                <div className="text-sm text-blue-100">💬 自动回复客户</div>
+                <div className="text-sm text-blue-100">💬 客服会话</div>
               </div>
-              <div className="bg-white/10 rounded-lg p-3">
+              <div className="rounded-lg bg-white/10 p-3">
+                <div className="text-2xl font-bold">{aiStats.dataImports}</div>
+                <div className="text-sm text-blue-100">📥 今日导入批次</div>
+              </div>
+              <div className="rounded-lg bg-white/10 p-3">
                 <div className="text-2xl font-bold">{aiStats.pricingAdj}</div>
-                <div className="text-sm text-blue-100">💰 定价建议</div>
+                <div className="text-sm text-blue-100">💰 价格调整</div>
               </div>
-              <div className="bg-white/10 rounded-lg p-3">
-                <div className="text-2xl font-bold">¥{aiStats.estimatedSaved}</div>
-                <div className="text-sm text-blue-100">📈 预估增收</div>
-              </div>
+            </div>
+
+            <div className="mt-6 flex flex-wrap gap-3">
+              <a href="/alerts">
+                <Button variant="secondary" className="bg-white text-slate-900 hover:bg-slate-100">
+                  先处理预警
+                </Button>
+              </a>
+              <a href="/imports">
+                <Button variant="outline" className="border-white/30 bg-transparent text-white hover:bg-white/10">
+                  导入今天的数据
+                </Button>
+              </a>
+              <a href="/inventory">
+                <Button variant="outline" className="border-white/30 bg-transparent text-white hover:bg-white/10">
+                  查看补货风险
+                </Button>
+              </a>
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* ── Stats 卡片 ── */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat) => (
-          <OnboardingTooltip key={stat.title} text={stat.tooltip || ''}>
-            <div>
-              <StatsCard title={stat.title} value={stat.value} icon={stat.icon} />
-            </div>
-          </OnboardingTooltip>
+        {commandStats.map((stat) => (
+          <Card key={stat.title} className="border-slate-200">
+            <CardContent className="p-5">
+              <div className="text-sm text-slate-500">{stat.title}</div>
+              <div className="mt-2 text-3xl font-semibold text-slate-900">{stat.value}</div>
+              <div className="mt-2 text-xs text-slate-500">{stat.hint}</div>
+            </CardContent>
+          </Card>
         ))}
       </div>
 
-      {/* ── AI 经营洞察（移到 stats 正下方） ── */}
-      {insights && (
+      <div className="grid gap-6 lg:grid-cols-[1.15fr,0.85fr]">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <span>🤖</span>
-              AI 经营洞察
-              <Badge variant="outline">每日更新</Badge>
-              <span className="ml-auto text-xs font-normal text-muted-foreground">
-                AI 于 {insightsTime} 分析完成
-              </span>
+              <span>⚡</span>
+              今日最该处理
+              <Badge variant="outline">按优先级排序</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        📊 销售异常
-                      </h4>
-                      <Button size="sm" variant="outline" className="h-7 text-xs">
-                        一键采纳
-                      </Button>
-                    </div>
-                    <div className="text-sm text-gray-700 bg-blue-50 p-3 rounded-lg">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {insights.sales_anomalies}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        🔥 热销变化
-                      </h4>
-                      <Button size="sm" variant="outline" className="h-7 text-xs">
-                        一键采纳
-                      </Button>
-                    </div>
-                    <div className="text-sm text-gray-700 bg-green-50 p-3 rounded-lg">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {insights.hot_products_changes}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        🏪 竞品动态
-                      </h4>
-                      <Button size="sm" variant="outline" className="h-7 text-xs">
-                        一键采纳
-                      </Button>
-                    </div>
-                    <div className="text-sm text-gray-700 bg-yellow-50 p-3 rounded-lg">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {insights.competitor_dynamics}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <h4 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                        💡 可操作建议
-                      </h4>
-                      <Button size="sm" variant="outline" className="h-7 text-xs">
-                        一键采纳
-                      </Button>
-                    </div>
-                    <div className="text-sm text-gray-700 bg-purple-50 p-3 rounded-lg">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {insights.actionable_suggestions}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                </div>
+            {overview?.action_items && overview.action_items.length > 0 ? (
+              <div className="space-y-3">
+                {overview.action_items.map((item, index) => {
+                  const badge = getPriorityBadge(item.priority);
+                  return (
+                    <a
+                      key={`${item.action}-${index}`}
+                      href={item.link}
+                      className="block rounded-xl border border-slate-200 p-4 transition-colors hover:bg-slate-50"
+                    >
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="space-y-1">
+                          <div className="text-sm font-medium text-slate-900">{item.action}</div>
+                          <div className="text-sm text-muted-foreground">{item.detail}</div>
+                        </div>
+                        <Badge className={badge.className}>{badge.label}</Badge>
+                      </div>
+                    </a>
+                  );
+                })}
               </div>
-
-              <div className="text-xs text-gray-500 text-center border-t pt-4">
-                📅 数据更新时间: {new Date(insights.date).toLocaleString('zh-CN')}
-              </div>
-            </div>
+            ) : (
+              <div className="text-sm text-muted-foreground">当前没有待处理动作。</div>
+            )}
           </CardContent>
         </Card>
-      )}
 
-      {/* ── 销售趋势图 ── */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <span>📈</span>
-            销售趋势
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          {trend.length > 0 ? (
-            <ResponsiveContainer width="100%" height={300}>
-              <LineChart data={trend.map(item => ({
-                date: item.date,
-                gmv: Number(item.revenue || 0),
-                orders: Number(item.quantity || 0)
-              }))}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 12 }}
-                  tickFormatter={(value) => new Date(value).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' })}
-                />
-                <YAxis tick={{ fontSize: 12 }} />
-                <Tooltip
-                  formatter={(value: number, name: string) => [
-                    name === 'gmv' ? `¥${value.toLocaleString()}` : value,
-                    name === 'gmv' ? 'GMV' : '订单数'
-                  ]}
-                  labelFormatter={(value) => new Date(value).toLocaleDateString('zh-CN')}
-                />
-                <Line
-                  type="monotone"
-                  dataKey="gmv"
-                  stroke="#3b82f6"
-                  strokeWidth={2}
-                  name="gmv"
-                />
-                <Line
-                  type="monotone"
-                  dataKey="orders"
-                  stroke="#10b981"
-                  strokeWidth={2}
-                  name="orders"
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="h-[300px] flex items-center justify-center text-muted-foreground">
-              暂无数据
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* ── 最新预警（增强版） ── */}
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <span>🔔</span>
-              最新预警
-              {overview?.pending_alerts && (
+              最新高风险预警
+              {overview?.pending_alerts ? (
                 <Badge variant="secondary">{overview.pending_alerts}</Badge>
-              )}
+              ) : null}
             </CardTitle>
           </CardHeader>
           <CardContent>
             {alerts.length > 0 ? (
               <div className="space-y-3">
                 {alerts.map((alert, index) => (
-                  <div key={index} className="p-3 bg-muted/50 rounded-lg space-y-2">
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1 flex-1 mr-3">
+                  <div key={index} className="rounded-xl border border-slate-200 p-4 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1">
                         <p className="text-sm font-medium">{alert.title || alert.type}</p>
                         <p className="text-sm text-muted-foreground">{alert.description || alert.message}</p>
                       </div>
                       <Badge variant={getSeverityColor(alert.severity)}>
-                        {alert.severity === 'high' ? '严重' : alert.severity === 'medium' ? '中等' : '轻微'}
+                        {alert.severity === 'critical'
+                          ? '严重'
+                          : alert.severity === 'high'
+                            ? '高优先级'
+                            : alert.severity === 'medium'
+                              ? '中等'
+                              : '一般'}
                       </Badge>
                     </div>
-                    {/* AI 处理建议 */}
-                    <div className="flex items-start gap-2 bg-blue-50 rounded p-2">
-                      <span className="text-blue-500 text-xs mt-0.5 shrink-0">🤖 AI建议：</span>
-                      <p className="text-xs text-blue-700 flex-1">{getAlertRecommendation(alert)}</p>
-                      <Button size="sm" variant="outline" className="h-6 text-xs shrink-0 border-blue-300 text-blue-700 hover:bg-blue-100">
-                        采纳建议
+                    <div className="rounded-lg bg-blue-50 p-3">
+                      <div className="text-xs font-medium text-blue-700">AI 建议</div>
+                      <p className="mt-1 text-xs text-blue-700">{getAlertRecommendation(alert)}</p>
+                    </div>
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={resolvingId === alert.alert_id}
+                        onClick={() => handleResolveAlert(alert.alert_id)}
+                      >
+                        {resolvingId === alert.alert_id ? '处理中...' : '采纳建议'}
                       </Button>
                     </div>
                   </div>
@@ -405,45 +370,106 @@ function DashboardPage() {
             )}
           </CardContent>
         </Card>
+      </div>
 
-        {/* ── 快速操作（加 AI 标识） ── */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>✅</span>
+            最近已执行动作
+            <Badge variant="outline">闭环回看</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {overview?.recent_outcomes && overview.recent_outcomes.length > 0 ? (
+            <div className="space-y-3">
+              {overview.recent_outcomes.map((item, index) => (
+                <a
+                  key={`${item.title}-${index}`}
+                  href={item.link}
+                  className="block rounded-xl border border-slate-200 p-4 transition-colors hover:bg-slate-50"
+                >
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-sm font-medium text-slate-900">{item.title}</span>
+                        <Badge variant="outline">{item.category}</Badge>
+                      </div>
+                      <div className="text-sm text-muted-foreground">{item.detail}</div>
+                      <div className="text-xs text-slate-500">下一步验证：{item.next_check}</div>
+                    </div>
+                    <div className="text-xs text-slate-500">{formatOutcomeTime(item.happened_at)}</div>
+                  </div>
+                </a>
+              ))}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">
+              当前还没有最近执行动作记录。完成一次修复、导入或价格调整后，这里会显示最新结果。
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {insights && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <span>⚡</span>
-              快速操作
+              <span>🧠</span>
+              AI 每日判断
+              <Badge variant="outline">每日更新</Badge>
+              <span className="ml-auto text-xs font-normal text-muted-foreground">
+                AI 于 {insightsTime} 分析完成
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 gap-3">
-              <button className="p-4 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors text-left relative">
-                <span className="absolute top-2 right-2 text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded-full font-medium">AI 驱动</span>
-                <div className="text-2xl mb-2">📦</div>
-                <div className="text-sm font-medium">商品管理</div>
-                <div className="text-xs text-muted-foreground">管理库存和价格</div>
-              </button>
-              <button className="p-4 bg-green-50 hover:bg-green-100 rounded-lg transition-colors text-left relative">
-                <span className="absolute top-2 right-2 text-[10px] bg-green-500 text-white px-1.5 py-0.5 rounded-full font-medium">AI 驱动</span>
-                <div className="text-2xl mb-2">💬</div>
-                <div className="text-sm font-medium">AI 客服</div>
-                <div className="text-xs text-muted-foreground">智能客户服务</div>
-              </button>
-              <button className="p-4 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors text-left relative">
-                <span className="absolute top-2 right-2 text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded-full font-medium">AI 驱动</span>
-                <div className="text-2xl mb-2">📊</div>
-                <div className="text-sm font-medium">数据分析</div>
-                <div className="text-xs text-muted-foreground">查看详细报表</div>
-              </button>
-              <button className="p-4 bg-orange-50 hover:bg-orange-100 rounded-lg transition-colors text-left relative">
-                <span className="absolute top-2 right-2 text-[10px] bg-orange-500 text-white px-1.5 py-0.5 rounded-full font-medium">AI 驱动</span>
-                <div className="text-2xl mb-2">🏪</div>
-                <div className="text-sm font-medium">竞品监控</div>
-                <div className="text-xs text-muted-foreground">价格对比分析</div>
-              </button>
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+              <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-900">销售异常</h4>
+                  <a href="/alerts" className="text-xs font-medium text-blue-600 hover:text-blue-700">
+                    去处理
+                  </a>
+                </div>
+                <div className="text-sm text-slate-700">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {insights.sales_anomalies}
+                  </ReactMarkdown>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-900">热销变化</h4>
+                  <a href="/products" className="text-xs font-medium text-emerald-700 hover:text-emerald-800">
+                    看商品
+                  </a>
+                </div>
+                <div className="text-sm text-slate-700">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {insights.hot_products_changes}
+                  </ReactMarkdown>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-violet-100 bg-violet-50 p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-slate-900">可执行建议</h4>
+                  <a href="/alerts" className="text-xs font-medium text-violet-700 hover:text-violet-800">
+                    去执行
+                  </a>
+                </div>
+                <div className="text-sm text-slate-700">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {insights.actionable_suggestions}
+                  </ReactMarkdown>
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
-      </div>
+      )}
     </div>
   );
 }

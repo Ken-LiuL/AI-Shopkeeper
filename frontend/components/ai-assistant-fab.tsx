@@ -12,16 +12,16 @@ interface Message {
 
 const PAGE_CONTEXT_MAP: Record<string, string> = {
   '/alerts': '我在看告警页面',
-  '/selection': '我在看智能选品页面',
-  '/bundles': '我在看智能套餐页面',
-  '/listing': '我在看智能上架页面',
-  '/pricing': '我在看智能定价页面',
+  '/selection': '我在看重点运营候选池页面',
+  '/bundles': '我在看套餐候选池页面',
+  '/listing': '我在看已暂停的上架页面',
+  '/pricing': '我在看价格复核页面',
   '/chat': '我在看AI客服页面',
-  '/competitors': '我在看竞品监控页面',
-  '/analytics': '我在看数据分析页面',
-  '/products': '我在看商品管理页面',
-  '/orders': '我在看订单管理页面',
-  '/inventory': '我在看库存管理页面',
+  '/competitors': '我在看未启用的竞品页面',
+  '/imports': '我在看数据导入页面',
+  '/products': '我在看商品修复页面',
+  '/orders': '我在看异常订单页面',
+  '/inventory': '我在看库存修复页面',
 };
 
 function getPageContext(pathname: string): string {
@@ -41,7 +41,7 @@ export function AIAssistantFAB() {
     {
       id: 'welcome',
       role: 'assistant',
-      content: '您好！我是AI店长助手，随时为您解答经营问题 🎯',
+      content: '您好，我会基于当前真实导入的数据回答经营问题。没有真实数据支撑的内容，我会直接说明。',
     },
   ]);
   const [input, setInput] = useState('');

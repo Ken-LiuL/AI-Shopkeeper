@@ -20,10 +20,10 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     icon: '🤖',
   },
   {
-    title: '查看今日经营概况',
-    content: '仪表盘展示您的核心经营数据：今日GMV、订单数、客单价等。红色数字表示下降，绿色表示上涨。',
-    icon: '📊',
-    action: '查看仪表盘',
+    title: '查看今日待办',
+    content: 'AI 指挥台会把导入后的真实数据转成今天最该处理的动作，例如断货热销、主档缺口和异常订单。',
+    icon: '⚡',
+    action: '查看AI指挥台',
     actionUrl: '/',
   },
   {
@@ -41,11 +41,11 @@ const ONBOARDING_STEPS: OnboardingStep[] = [
     actionUrl: '/chat',
   },
   {
-    title: '监控竞品价格',
-    content: '竞品监控帮您了解同行价格变化，及时调整定价策略。绿色表示我们更便宜，红色表示竞品更便宜。',
-    icon: '🏪',
-    action: '查看竞品',
-    actionUrl: '/competitors',
+    title: '复核商品价格',
+    content: '价格复核基于当前商品、订单和库存数据给出建议，帮助您先处理毛利过低、动销偏弱和库存积压商品。',
+    icon: '💰',
+    action: '查看价格复核',
+    actionUrl: '/pricing',
   },
 ];
 

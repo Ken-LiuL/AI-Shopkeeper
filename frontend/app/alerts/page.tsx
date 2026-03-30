@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { AICapabilityHeader } from '@/components/ai-capability-badge';
 import {
   Table,
   TableBody,
@@ -16,17 +15,14 @@ import {
 import { withErrorBoundary } from '@/components/error-boundary';
 import { fetchAPI, getAlerts } from '@/lib/api';
 import type { Alert } from '@/lib/api';
-import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
-import { AIActionButton } from '@/components/ai-action-button';
 
-/** Build AI reasoning steps for an alert based on its type */
-function buildAlertReasoningSteps(alert: Alert) {
-  return [
-    { icon: '📡', title: '异常检测', detail: `检测到${alert.type}类型异常，严重度：${alert.severity}`, status: 'completed' as const },
-    { icon: '🔍', title: '根因分析', detail: alert.description || '正在分析根本原因', status: 'completed' as const },
-    { icon: '💡', title: '行动建议', detail: (alert.action_suggestions && alert.action_suggestions[0]) || '基于历史数据生成处置方案', status: 'completed' as const },
-    { icon: '✔️', title: '事实核查', detail: '已通过知识图谱交叉验证', status: 'completed' as const },
-  ];
+function getAlertActionLink(alert: Alert) {
+  const type = (alert.type || '').toLowerCase();
+  if (type === 'stockout' || type === 'inventory') return '/inventory';
+  if (type === 'catalog' || type === 'pricing') return '/products';
+  if (type === 'orders') return '/orders';
+  if (type === 'data_quality') return '/imports';
+  return '/alerts';
 }
 
 function AlertsPage() {
@@ -76,8 +72,11 @@ function AlertsPage() {
 
   const getSeverityColor = (severity: string) => {
     switch (severity) {
+      case 'critical':
       case 'high': return 'destructive';
+      case 'warning':
       case 'medium': return 'secondary';
+      case 'info':
       case 'low': return 'outline';
       default: return 'outline';
     }
@@ -85,8 +84,11 @@ function AlertsPage() {
 
   const getSeverityText = (severity: string) => {
     switch (severity) {
+      case 'critical':
       case 'high': return '严重';
+      case 'warning':
       case 'medium': return '中等';
+      case 'info':
       case 'low': return '轻微';
       default: return severity;
     }
@@ -95,6 +97,9 @@ function AlertsPage() {
   const getAlertIcon = (type: string) => {
     switch (type.toLowerCase()) {
       case 'inventory': return '📦';
+      case 'catalog': return '🧾';
+      case 'orders': return '🧮';
+      case 'data_quality': return '🧹';
       case 'pricing': return '💰';
       case 'stockout': return '📦';
       case 'performance': return '📈';
@@ -107,6 +112,9 @@ function AlertsPage() {
   const getTypeText = (type: string) => {
     switch (type.toLowerCase()) {
       case 'inventory': return '库存';
+      case 'catalog': return '主档';
+      case 'orders': return '订单';
+      case 'data_quality': return '数据质量';
       case 'pricing': return '价格';
       case 'stockout': return '缺货';
       case 'performance': return '性能';
@@ -125,6 +133,9 @@ function AlertsPage() {
     acc[type] = (acc[type] || 0) + 1;
     return acc;
   }, {} as Record<string, number>);
+  const priorityAlerts = filteredAlerts
+    .filter((alert) => ['high', 'critical', 'medium'].includes(alert.severity || ''))
+    .slice(0, 3);
 
   if (loading) {
     return (
@@ -132,9 +143,11 @@ function AlertsPage() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
-            <p className="text-muted-foreground">AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议</p>
+            <p className="text-muted-foreground">先清掉今天最影响经营的风险，再处理次级问题。</p>
           </div>
-          <Button disabled>设置预警规则</Button>
+          <a href="/imports" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+            查看导入质量
+          </a>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {[1, 2, 3].map((i) => (
@@ -155,9 +168,11 @@ function AlertsPage() {
         <div className="flex justify-between items-center">
           <div>
             <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
-            <p className="text-muted-foreground">AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议</p>
+            <p className="text-muted-foreground">先清掉今天最影响经营的风险，再处理次级问题。</p>
           </div>
-          <Button disabled>设置预警规则</Button>
+          <a href="/imports" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+            查看导入质量
+          </a>
         </div>
         <Card className="border-red-200">
           <CardContent className="p-6 text-center">
@@ -180,14 +195,60 @@ function AlertsPage() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">🔔 智能预警</h1>
-          <AICapabilityHeader
-            capabilities={['GraphRAG 知识图谱', 'Self-Reflection 自检', '事实核查']}
-            description="AI 实时监控库存、价格、销量异常，自动分析根因并给出行动建议"
-          />
+          <h1 className="text-3xl font-bold tracking-tight">🔔 预警处理中心</h1>
+          <p className="mt-1 text-sm text-muted-foreground">预警的价值不在“发现异常”，而在“让你今天知道先处理哪三件事”。</p>
         </div>
-        <Button>设置预警规则</Button>
+        <div className="flex gap-2">
+          <a href="/imports" className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent">
+            导入并复核数据
+          </a>
+          <Button variant="outline" onClick={fetchAlerts}>
+            刷新预警
+          </Button>
+        </div>
       </div>
+
+      {priorityAlerts.length > 0 && (
+        <Card className="border-red-200 bg-red-50/70">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">今日优先动作</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {priorityAlerts.map((alert) => (
+              <div key={alert.alert_id} className="flex flex-col gap-3 rounded-xl border border-red-200 bg-white p-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <Badge variant={getSeverityColor(alert.severity)}>{getSeverityText(alert.severity)}</Badge>
+                    <Badge variant="outline">{getTypeText(alert.type)}</Badge>
+                  </div>
+                  <div className="text-sm font-medium text-slate-900">{alert.title}</div>
+                  <div className="text-sm text-slate-600">{alert.description}</div>
+                  <div className="text-xs text-red-700">
+                    {getAlertRecommendation(alert)}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2 lg:justify-end">
+                  <a
+                    href={getAlertActionLink(alert)}
+                    className="inline-flex items-center rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-100"
+                  >
+                    去处理
+                  </a>
+                  {alert.status === 'pending' ? (
+                    <Button
+                      variant="outline"
+                      disabled={resolvingIds.has(alert.alert_id || '')}
+                      onClick={() => handleResolve(alert.alert_id || '')}
+                    >
+                      {resolvingIds.has(alert.alert_id || '') ? '处理中...' : '标记已处理'}
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Alert Statistics */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -209,7 +270,7 @@ function AlertsPage() {
               <div>
                 <p className="text-sm font-medium text-muted-foreground">严重预警</p>
                 <p className="text-2xl font-bold text-red-600">
-                  {alerts.filter(a => a.severity === 'high').length}
+                  {alerts.filter(a => ['high', 'critical'].includes(a.severity)).length}
                 </p>
               </div>
               <div className="text-3xl">🚨</div>
@@ -235,12 +296,12 @@ function AlertsPage() {
           <CardContent className="p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium text-muted-foreground">轻微预警</p>
-                <p className="text-2xl font-bold text-yellow-600">
-                  {alerts.filter(a => a.severity === 'low').length}
+                <p className="text-sm font-medium text-muted-foreground">本次已处理</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {resolvedIds.size}
                 </p>
               </div>
-              <div className="text-3xl">💡</div>
+              <div className="text-3xl">✅</div>
             </div>
           </CardContent>
         </Card>
@@ -280,7 +341,7 @@ function AlertsPage() {
                   <TableHead>类型</TableHead>
                   <TableHead>严重度</TableHead>
                   <TableHead>标题</TableHead>
-                  <TableHead>描述</TableHead>
+                  <TableHead>建议动作</TableHead>
                   <TableHead>状态</TableHead>
                   <TableHead className="text-right">操作</TableHead>
                 </TableRow>
@@ -303,22 +364,8 @@ function AlertsPage() {
                       <div className="font-medium">{alert.title}</div>
                     </TableCell>
                     <TableCell className="max-w-md">
-                      <div className="text-sm text-muted-foreground mb-2">{alert.description}</div>
-                      {alert.action_suggestions && alert.action_suggestions.length > 0 && (
-                        <div className="mb-2 space-y-1">
-                          <div className="text-xs font-medium text-blue-600">建议行动：</div>
-                          {alert.action_suggestions.slice(0, 2).map((suggestion: string, idx: number) => (
-                            <div key={idx} className="text-xs text-gray-600 bg-blue-50 px-2 py-1 rounded">
-                              • {suggestion}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      <AIReasoningPanel
-                        steps={buildAlertReasoningSteps(alert)}
-                        confidence={alert.severity === 'high' ? 95 : alert.severity === 'medium' ? 85 : 75}
-                        reflectionRounds={1}
-                      />
+                      <div className="text-sm text-slate-700">{getAlertRecommendation(alert)}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{alert.description}</div>
                     </TableCell>
                     <TableCell>
                       <Badge variant={alert.status === 'resolved' ? 'default' : 'secondary'}>
@@ -327,16 +374,21 @@ function AlertsPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex flex-col gap-2 items-end">
-                        <Button variant="ghost" size="sm">
-                          查看详情
-                        </Button>
+                        <a
+                          href={getAlertActionLink(alert)}
+                          className="text-sm font-medium text-blue-600 hover:text-blue-700"
+                        >
+                          去处理
+                        </a>
                         {alert.status === 'pending' && (
-                          <AIActionButton
-                            label="采纳建议"
-                            loading={resolvingIds.has(alert.alert_id || '')}
-                            confirmed={resolvedIds.has(alert.alert_id || '')}
-                            onAction={() => handleResolve(alert.alert_id || '')}
-                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={resolvingIds.has(alert.alert_id || '')}
+                            onClick={() => handleResolve(alert.alert_id || '')}
+                          >
+                            {resolvingIds.has(alert.alert_id || '') ? '处理中...' : '标记已处理'}
+                          </Button>
                         )}
                       </div>
                     </TableCell>
@@ -352,22 +404,23 @@ function AlertsPage() {
         </CardContent>
       </Card>
 
-      {/* Alert Categories Overview */}
       {Object.keys(alertsByType).length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <span>📊</span>
-              预警类型分布
+              <span>🏷️</span>
+              预警分布
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {Object.entries(alertsByType).map(([type, count]) => (
-                <div key={type} className="text-center p-4 bg-muted/50 rounded-lg">
-                  <div className="text-2xl mb-2">{getAlertIcon(type)}</div>
-                  <div className="font-semibold">{count}</div>
-                  <div className="text-sm text-muted-foreground capitalize">{type}</div>
+                <div key={type} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <span className="text-lg">{getAlertIcon(type)}</span>
+                    {getTypeText(type)}
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">{count}</div>
                 </div>
               ))}
             </div>

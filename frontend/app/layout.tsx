@@ -6,8 +6,8 @@ import { AuthProvider } from '@/components/auth/auth-provider';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'AI 店长 - 智能管理后台',
-  description: '便利店 AI 智能管理系统',
+  title: 'AI 店长 - 经营动作系统',
+  description: '面向店长和运营的 AI 经营工作台',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

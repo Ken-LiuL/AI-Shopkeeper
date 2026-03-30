@@ -20,6 +20,11 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+from src.services.knowledge_service import (
+    load_structured_knowledge,
+    search_faq_context,
+)
+
 from ..llm import MODEL_DEEPSEEK, MODEL_SONNET, call_chat_stream, call_tool, call_vision
 
 logger = logging.getLogger(__name__)
@@ -976,26 +981,7 @@ async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
 async def load_knowledge_base(pool) -> list[dict]:
     """从数据库加载完整知识库"""
     try:
-        rows = await pool.fetch("""
-            SELECT category, subcategory, question, answer, keywords, priority, product_categories
-            FROM knowledge_base
-            ORDER BY priority DESC, id
-        """)
-
-        knowledge_base = []
-        for row in rows:
-            knowledge_base.append(
-                {
-                    "category": row["category"],
-                    "subcategory": row["subcategory"],
-                    "question": row["question"],
-                    "answer": row["answer"],
-                    "keywords": row["keywords"] or [],
-                    "priority": row["priority"],
-                    "product_categories": row["product_categories"] or [],
-                }
-            )
-
+        knowledge_base = await load_structured_knowledge(pool)
         logger.info(f"Loaded {len(knowledge_base)} knowledge base items")
         return knowledge_base
 
@@ -1070,54 +1056,13 @@ async def _search_auto_faq_context(query: str, pool, limit: int = 3) -> list[dic
     if not q:
         return []
 
-    patterns = [f"%{q}%"]
-    patterns.extend([f"%{kw}%" for kw in q.split() if len(kw.strip()) >= 2][:5])
-
-    matched: list[dict] = []
-    seen_ids: set[int] = set()
-    seen_questions: set[str] = set()
-
     try:
-        for pattern in patterns:
-            if len(matched) >= limit:
-                break
-            rows = await pool.fetch(
-                """
-                SELECT id, question, answer_template, keywords
-                FROM auto_faq
-                WHERE question ILIKE $1
-                ORDER BY id DESC
-                LIMIT $2
-                """,
-                pattern,
-                limit,
-            )
-            for row in rows:
-                row_id = row.get("id")
-                question = (row.get("question") or "").strip()
-                if row_id is not None and row_id in seen_ids:
-                    continue
-                if question and question in seen_questions:
-                    continue
-                if row_id is not None:
-                    seen_ids.add(row_id)
-                if question:
-                    seen_questions.add(question)
-                matched.append(
-                    {
-                        "id": row_id,
-                        "question": question,
-                        "answer_template": row.get("answer_template") or "",
-                        "keywords": row.get("keywords") or [],
-                    }
-                )
-                if len(matched) >= limit:
-                    break
+        matched = await search_faq_context(pool, q, limit=limit)
         logger.info(f"[CS] FAQ context matched: {len(matched)}")
+        return matched[:limit]
     except Exception as e:
         logger.warning(f"[CS] Failed to load auto_faq context (graceful): {e}")
-
-    return matched[:limit]
+        return []
 
 
 async def _load_policy_documents_context(pool, limit: int = 5) -> list[dict]:

@@ -12,7 +12,6 @@ from pydantic import BaseModel
 
 from src.agents.llm import MODEL_DEEPSEEK, call_tool
 from src.db import postgres as pg
-from src.services.competitor_data_service import CompetitorDataService
 from src.services.medical_device_service import MedicalDeviceService
 from src.services.pricing import PricingService
 
@@ -81,7 +80,7 @@ async def _get_products_with_pricing_data():
         LIMIT 30
     """)
 
-    # 生成基于产品特征的差异化竞品价格数据（真实化处理）
+    # 只读取真实竞品表；当前没有竞品数据时返回空列表，不做推导或补假数。
     competitor_data = {}
     try:
         competitors = await pool.fetch("""
@@ -102,42 +101,9 @@ async def _get_products_with_pricing_data():
                 }
             )
     except Exception as e:
-        logger.warning(
-            f"Failed to fetch real competitor data, using enhanced competitor service: {e}"
-        )
-
-        # 使用新的竞品数据服务替换原有的 mock 数据生成逻辑
-        logger.info("使用 CompetitorDataService 获取真实化竞品数据")
-        competitor_service = CompetitorDataService()
-
+        logger.warning("Failed to fetch competitor data: %s", e)
         for product in products:
-            product_name = product["name"]
-            retail_price = float(product["retail_price"] or 0)
-            category = product["category"] or ""
-            product_id = product.get("product_id", product_name)
-
-            # 使用增强版竞品数据服务
-            enhanced_prices = await competitor_service.get_enhanced_competitor_prices(
-                product_name, retail_price, category, str(product_id)
-            )
-
-            # 转换为原有数据格式以保持兼容性
-            if enhanced_prices:
-                competitor_data[product_name.lower()] = []
-                for ep in enhanced_prices:
-                    competitor_data[product_name.lower()].append(
-                        {
-                            "competitor": ep.competitor_name,
-                            "price": ep.price,
-                            "updated_at": ep.last_updated.split()[0],  # 只取日期部分
-                            "data_source": ep.data_source.source_type,
-                            "is_demo_data": ep.is_demo_data,
-                            "confidence": ep.data_source.confidence,
-                        }
-                    )
-            else:
-                # 无真实竞品数据时返回空列表，不再使用假数据
-                competitor_data[product_name.lower()] = []
+            competitor_data[str(product["name"]).lower()] = []
 
     # 获取销量数据 — 优先从 qnh_dataset_records (hotsale_goods) 读取真实销售数据
     sales_data = {}
@@ -219,15 +185,7 @@ async def _calculate_category_margins():
         return {row["category"]: float(row["avg_margin"] or 25.0) for row in margins}
     except Exception as e:
         logger.warning(f"Failed to calculate category margins: {e}")
-        # 返回默认毛利率
-        return {
-            "医用急救>杀菌消毒": 30.0,
-            "家庭常备>口腔护理": 25.0,
-            "医用急救>创可贴无菌敷贴": 28.0,
-            "成人情趣>避孕套": 35.0,
-            "美容敷料>面部护理": 40.0,
-            "抑菌膏贴>理疗贴": 32.0,
-        }
+        return {}
 
 
 async def _generate_ai_pricing_analysis(product_data: list[dict]) -> list[dict]:
@@ -480,12 +438,12 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
 
         # 如果没有建议生成，返回空列表而不是假数据
         if not suggestions:
-            logger.warning("暂无定价建议数据，请先完善商品成本信息和竞品数据")
+            logger.warning("暂无价格建议数据，请先完善商品成本信息或补充更多订单数据")
             suggestions = []
 
         return APIResponse(
             data=suggestions,
-            message="数据加载完成" if suggestions else "暂无定价建议，请先完善商品成本和竞品数据",
+            message="基于当前商品、订单和库存数据生成" if suggestions else "暂无价格建议，请先补齐成本价或更多订单数据",
         )
 
     except Exception as e:
@@ -513,52 +471,39 @@ async def get_pricing_rules() -> APIResponse[list[PricingRule]]:
             is_active=True,
         ),
         PricingRule(
-            rule_id="competitor_match",
-            name="竞品对标策略",
-            description="根据竞品价格调整定价，保持合理竞争位置",
-            rule_type="competitor_match",
-            parameters={
-                "price_position": "slightly_below",  # "below", "match", "slightly_below", "premium"
-                "max_discount_percent": 15.0,
-                "min_premium_percent": 5.0,
-            },
-            is_active=True,
-        ),
-        PricingRule(
-            rule_id="demand_based",
-            name="需求弹性定价",
-            description="基于销量表现和需求弹性动态调价",
+            rule_id="sales_momentum",
+            name="销量热度复核",
+            description="结合近 30 天销量表现，判断是否存在提价或促销空间",
             rule_type="demand_based",
             parameters={
-                "high_demand_threshold": 100,  # 月销量阈值
+                "high_demand_threshold": 50,
                 "low_demand_threshold": 10,
-                "high_demand_markup": 1.1,  # 高需求加价10%
-                "low_demand_discount": 0.95,  # 低需求降价5%
+                "raise_cap_percent": 8.0,
+                "discount_cap_percent": 8.0,
             },
             is_active=True,
-        ),
-        PricingRule(
-            rule_id="seasonal_adjustment",
-            name="季节性调价",
-            description="根据季节性需求变化调整价格",
-            rule_type="seasonal",
-            parameters={
-                "seasonal_categories": ["保温用品", "夏季用品"],
-                "peak_season_markup": 1.15,
-                "off_season_discount": 0.90,
-            },
-            is_active=False,
         ),
         PricingRule(
             rule_id="inventory_clearance",
-            name="库存清理策略",
-            description="高库存商品自动降价促销",
+            name="库存去化策略",
+            description="高库存低动销商品优先进入降价复核",
             rule_type="inventory_based",
             parameters={
-                "high_inventory_threshold": 90,  # 库存天数
+                "high_inventory_threshold": 90,
                 "clearance_discount_percent": 20.0,
                 "deep_clearance_threshold": 120,
                 "deep_discount_percent": 35.0,
+            },
+            is_active=True,
+        ),
+        PricingRule(
+            rule_id="medical_margin_protection",
+            name="医疗器械毛利保护",
+            description="医疗器械优先保证服务与合规所需毛利空间",
+            rule_type="margin_floor",
+            parameters={
+                "min_margin_percent": 25.0,
+                "category_keywords": ["医", "器械", "急救", "血压", "血糖", "体温"],
             },
             is_active=True,
         ),
@@ -751,16 +696,35 @@ async def batch_update_prices(req: BatchPriceUpdateRequest) -> APIResponse[Batch
                     product_id,
                 )
 
-                # Record price change history (if table exists)
+                # Record price change history so dashboard and feedback loop can see real actions.
                 with contextlib.suppress(Exception):
-                    await pool.execute(
-                        """INSERT INTO price_changes (product_id, old_price, new_price, change_reason, created_at)
-                           VALUES ($1, $2, $3, $4, NOW())""",
-                        product_id,
-                        current_price,
-                        new_price,
-                        req.reason or f"批量{req.operation}操作",
+                    price_history_exists = await pool.fetchval(
+                        """
+                        SELECT EXISTS (
+                            SELECT 1
+                            FROM information_schema.tables
+                            WHERE table_schema = 'public' AND table_name = 'price_history'
+                        )
+                        """
                     )
+                    if price_history_exists:
+                        await pool.execute(
+                            """INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
+                               VALUES ($1, $2, $3, $4, NOW())""",
+                            product_id,
+                            current_price,
+                            new_price,
+                            req.reason or f"批量{req.operation}操作",
+                        )
+                    else:
+                        await pool.execute(
+                            """INSERT INTO price_changes (product_id, old_price, new_price, change_reason, created_at)
+                               VALUES ($1, $2, $3, $4, NOW())""",
+                            product_id,
+                            current_price,
+                            new_price,
+                            req.reason or f"批量{req.operation}操作",
+                        )
 
                 results.append(
                     {

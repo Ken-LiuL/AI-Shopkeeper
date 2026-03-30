@@ -13,6 +13,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
 from src.db import redis as redis_db
+from src.services.knowledge_service import get_knowledge_source_counts
 from src.services.session_manager import SessionManager
 
 from .errors import AppError, NotFoundError
@@ -697,6 +698,87 @@ async def submit_feedback(request: FeedbackRequest) -> APIResponse[dict]:
         raise AppError("Failed to submit feedback", status_code=500) from e
 
 
+@router.get("/quality-queue", response_model=APIResponse[list[dict]])
+async def get_quality_queue(
+    limit: int = Query(20, ge=1, le=100),
+) -> APIResponse[list[dict]]:
+    """客服质量队列：低分回复 + 差评反馈，供运营后台 review。"""
+    from src.db import postgres as pg_db
+
+    pool = pg_db.get_pool()
+    if not pool:
+        return APIResponse(data=[])
+
+    items: list[dict] = []
+
+    with contextlib.suppress(Exception):
+        low_score_rows = await pool.fetch(
+            """
+            SELECT session_id, user_message, ai_reply, overall, feedback, created_at
+            FROM cs_reply_scores
+            WHERE overall IS NOT NULL AND overall < 0.7
+            ORDER BY created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        items.extend(
+            {
+                "queue_type": "low_score",
+                "session_id": row["session_id"] or "",
+                "score": round(float(row["overall"] or 0), 2),
+                "reason": row["feedback"] or "回复评分偏低",
+                "user_message": row["user_message"] or "",
+                "ai_reply": row["ai_reply"] or "",
+                "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+            }
+            for row in low_score_rows
+        )
+
+    with contextlib.suppress(Exception):
+        bad_feedback_rows = await pool.fetch(
+            """
+            SELECT f.session_id, f.comment, f.created_at,
+                   l.user_message, l.ai_response
+            FROM cs_feedback f
+            LEFT JOIN LATERAL (
+                SELECT user_message, ai_response, created_at
+                FROM cs_conversation_log l
+                WHERE l.session_id = f.session_id
+                ORDER BY
+                    CASE
+                        WHEN COALESCE(f.ai_reply_id, '') <> '' AND l.ai_reply_id = f.ai_reply_id THEN 0
+                        WHEN COALESCE(f.actual_reply, '') <> '' AND l.ai_response = f.actual_reply THEN 1
+                        WHEN COALESCE(f.edited_reply, '') <> '' AND l.ai_response = f.edited_reply THEN 2
+                        WHEN COALESCE(f.original_reply, '') <> '' AND l.ai_response = f.original_reply THEN 3
+                        ELSE 4
+                    END,
+                    ABS(EXTRACT(EPOCH FROM (l.created_at - f.created_at)))
+                LIMIT 1
+            ) l ON TRUE
+            WHERE f.rating = 'bad'
+            ORDER BY f.created_at DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        items.extend(
+            {
+                "queue_type": "bad_feedback",
+                "session_id": row["session_id"] or "",
+                "score": 0.2,
+                "reason": row["comment"] or "收到差评反馈",
+                "user_message": row["user_message"] or "",
+                "ai_reply": row["ai_response"] or "",
+                "created_at": row["created_at"].isoformat() if row["created_at"] else "",
+            }
+            for row in bad_feedback_rows
+        )
+
+    items.sort(key=lambda item: item.get("created_at") or "", reverse=True)
+    return APIResponse(data=items[:limit])
+
+
 # ── Chat Log Collection (聊天记录采集) ────────────────────
 
 
@@ -909,6 +991,18 @@ async def get_stats() -> APIResponse[dict]:
     except Exception as e:
         logger.debug("Avg response time query skipped: %s", e)
 
+    knowledge_counts = {
+        "knowledge_base_count": 0,
+        "auto_faq_count": 0,
+        "policy_count": 0,
+        "product_knowledge_count": 0,
+        "total_knowledge_items": 0,
+    }
+    try:
+        knowledge_counts = await get_knowledge_source_counts(pool)
+    except Exception as e:
+        logger.debug("Knowledge source stats query skipped: %s", e)
+
     return APIResponse(
         data={
             # ── Legacy snake_case fields (keep for backward compat) ──
@@ -928,6 +1022,13 @@ async def get_stats() -> APIResponse[dict]:
             # ── P1-2: 新增看板字段 ──
             "intentDistribution": intent_distribution,
             "avgResponseMs": avg_response_ms,
+            "knowledgeStatus": {
+                "productKnowledgeCount": knowledge_counts.get("product_knowledge_count", 0),
+                "faqCount": knowledge_counts.get("auto_faq_count", 0),
+                "policyCount": knowledge_counts.get("policy_count", 0),
+                "knowledgeBaseCount": knowledge_counts.get("knowledge_base_count", 0),
+                "totalKnowledgeItems": knowledge_counts.get("total_knowledge_items", 0),
+            },
         }
     )
 
@@ -981,22 +1082,3 @@ async def _get_stats_fallback_from_raw() -> APIResponse[dict]:
             else "暂无客服数据",
         }
     )
-
-
-@router.get("/analytics", response_model=APIResponse[dict])
-async def get_analytics() -> APIResponse[dict]:
-    """Get customer service analytics data."""
-    from src.agents.customer_service.learning import get_analytics_summary
-    from src.db import postgres as pg_db
-
-    pool = pg_db.get_pool()
-    if not pool:
-        raise AppError("Database connection unavailable", status_code=503)
-
-    try:
-        analytics_data = await get_analytics_summary(pool)
-        return APIResponse(data=analytics_data)
-
-    except Exception as e:
-        logger.error(f"Failed to get analytics: {e}")
-        raise AppError("Failed to get analytics", status_code=500) from e

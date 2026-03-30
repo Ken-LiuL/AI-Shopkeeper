@@ -3,16 +3,55 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Query
 
 from src.db import neo4j as neo4j_db
 from src.db import postgres as pg
+from src.services.knowledge_service import get_knowledge_source_counts, list_faq_entries
 
 from .schemas import APIResponse
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
 logger = logging.getLogger(__name__)
+
+_KB_ID_PATTERN = re.compile(r"(?:kb_)?(\d+)$")
+
+
+def _parse_kb_id(raw_id: str) -> int | None:
+    match = _KB_ID_PATTERN.search((raw_id or "").strip())
+    if not match:
+        return None
+
+
+_POLICY_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS policy_documents (
+    id SERIAL PRIMARY KEY,
+    url TEXT UNIQUE,
+    title TEXT,
+    content TEXT,
+    category TEXT,
+    policy_type TEXT,
+    fetched_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS category TEXT;
+ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS policy_type TEXT;
+ALTER TABLE policy_documents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+"""
+
+
+async def _ensure_policy_documents_table() -> None:
+    pool = pg.get_pool()
+    if pool is None:
+        raise RuntimeError("Database unavailable")
+    async with pool.acquire() as conn:
+        await conn.execute(_POLICY_TABLE_SQL)
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 # ── Product Knowledge Base (pgvector-based) ─────────────────────────
@@ -126,17 +165,12 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
         stats["source_with_images"] = 0
 
     try:
-        stats["knowledge_total"] = stats.get("source_products", 0)
+        source_counts = await get_knowledge_source_counts(pool)
+        stats.update(source_counts)
+        stats["knowledge_total"] = source_counts.get("total_knowledge_items", 0)
         stats["with_embedding"] = 0
+        stats["with_image_text"] = 0
         stats["search_mode"] = "sql_fulltext"
-
-        with_image_text = 0
-        if False:  # Chroma disabled
-            all_meta = {}  # type: ignore[assignment]
-            with_image_text = sum(
-                1 for m in (all_meta.get("metadatas") or []) if m.get("image_text", "").strip()
-            )
-        stats["with_image_text"] = with_image_text
     except Exception:
         stats["knowledge_total"] = 0
         stats["with_embedding"] = 0
@@ -211,18 +245,37 @@ async def product_graph(product_id: str) -> APIResponse[dict]:
 @router.post("/faq", response_model=APIResponse[dict])
 async def add_faq(body: dict) -> APIResponse[dict]:
     try:
-        import uuid
-
-        faq_id = f"faq_{uuid.uuid4().hex[:12]}"
-        await neo4j_db.query(
-            """CREATE (f:FAQ {id: $id, question: $question, answer: $answer, category: $category})""",
-            {
-                "id": faq_id,
-                "question": body["question"],
-                "answer": body["answer"],
-                "category": body.get("category", "general"),
-            },
+        pool = pg.get_pool()
+        row = await pool.fetchrow(
+            """
+            INSERT INTO knowledge_base (
+                category,
+                subcategory,
+                question,
+                answer,
+                keywords,
+                priority,
+                product_categories
+            )
+            VALUES (
+                'faq',
+                $1,
+                $2,
+                $3,
+                $4,
+                COALESCE($5, 10),
+                $6
+            )
+            RETURNING id
+            """,
+            body.get("category", "通用"),
+            body["question"],
+            body["answer"],
+            body.get("keywords") or [],
+            body.get("priority"),
+            body.get("product_categories") or [],
         )
+        faq_id = f"kb_{row['id']}"
         return APIResponse(data={"faq_id": faq_id}, message="FAQ created")
     except Exception as e:
         return APIResponse(success=False, message=str(e))
@@ -233,79 +286,43 @@ async def list_faq(
     category: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
 ) -> APIResponse[list[dict]]:
-    # Neo4j is not available, return hardcoded medical equipment store FAQs
-    common_faqs = [
-        {
-            "id": "faq_001",
-            "question": "您的退货政策是什么？",
-            "answer": "我们支持7天无理由退货，医疗器械产品需保证包装完整且未使用。如有质量问题，支持30天内换货。",
-            "category": "退换货",
-        },
-        {
-            "id": "faq_002",
-            "question": "配送范围和时间是多久？",
-            "answer": "我们覆盖全国大部分地区，一般1-3个工作日送达。偏远地区可能需要3-7个工作日。支持货到付款。",
-            "category": "配送",
-        },
-        {
-            "id": "faq_003",
-            "question": "营业时间是什么？",
-            "answer": "线上商城24小时营业，客服工作时间：周一至周日 9:00-18:00。紧急情况可留言，我们会尽快回复。",
-            "category": "服务时间",
-        },
-        {
-            "id": "faq_004",
-            "question": "医疗器械是否有质保？",
-            "answer": "所有医疗器械均提供正规发票和质保服务。不同产品质保期不同，一般为1-3年，具体请咨询客服。",
-            "category": "质保",
-        },
-        {
-            "id": "faq_005",
-            "question": "支持哪些支付方式？",
-            "answer": "支持微信支付、支付宝、银联卡、货到付款等多种支付方式。大额订单可联系客服协商。",
-            "category": "支付",
-        },
-        {
-            "id": "faq_006",
-            "question": "如何使用医疗器械？",
-            "answer": "每个产品都配有详细说明书，部分产品提供视频教程。如有疑问请咨询专业医护人员或我们的客服。",
-            "category": "使用指南",
-        },
-        {
-            "id": "faq_007",
-            "question": "是否支持批发采购？",
-            "answer": "支持医院、诊所等机构批发采购，可提供优惠价格和专票。请联系客服洽谈具体事宜。",
-            "category": "批发",
-        },
-        {
-            "id": "faq_008",
-            "question": "产品是否有资质认证？",
-            "answer": "所有医疗器械均通过国家药监局认证，具有医疗器械注册证。可提供相关资质证明文件。",
-            "category": "资质",
-        },
-    ]
-
-    # Filter by category if specified
-    if category:
-        filtered_faqs = [faq for faq in common_faqs if faq["category"] == category]
-        return APIResponse(data=filtered_faqs[:limit])
-
-    return APIResponse(data=common_faqs[:limit])
+    pool = pg.get_pool()
+    try:
+        rows = await list_faq_entries(pool, category=category, limit=limit)
+        return APIResponse(data=rows)
+    except Exception as e:
+        logger.error("Failed to list FAQ entries: %s", e)
+        return APIResponse(success=False, data=[], message="FAQ database unavailable")
 
 
 @router.put("/faq/{faq_id}", response_model=APIResponse[dict])
 async def update_faq(faq_id: str, body: dict) -> APIResponse[dict]:
     try:
-        await neo4j_db.query(
-            """MATCH (f:FAQ {id: $id}) SET f.question = $question, f.answer = $answer, f.category = $category""",
-            {
-                "id": faq_id,
-                "question": body["question"],
-                "answer": body["answer"],
-                "category": body.get("category", "general"),
-            },
+        kb_id = _parse_kb_id(faq_id)
+        if kb_id is None:
+            return APIResponse(success=False, message="Only knowledge_base FAQ entries are editable")
+        pool = pg.get_pool()
+        await pool.execute(
+            """
+            UPDATE knowledge_base
+            SET subcategory = $2,
+                question = $3,
+                answer = $4,
+                keywords = $5,
+                priority = COALESCE($6, priority),
+                product_categories = $7,
+                updated_at = NOW()
+            WHERE id = $1
+            """,
+            kb_id,
+            body.get("category", "通用"),
+            body["question"],
+            body["answer"],
+            body.get("keywords") or [],
+            body.get("priority"),
+            body.get("product_categories") or [],
         )
-        return APIResponse(data={"faq_id": faq_id}, message="FAQ updated")
+        return APIResponse(data={"faq_id": f"kb_{kb_id}"}, message="FAQ updated")
     except Exception as e:
         return APIResponse(success=False, message=str(e))
 
@@ -313,10 +330,119 @@ async def update_faq(faq_id: str, body: dict) -> APIResponse[dict]:
 @router.delete("/faq/{faq_id}", response_model=APIResponse[dict])
 async def delete_faq(faq_id: str) -> APIResponse[dict]:
     try:
-        await neo4j_db.query("MATCH (f:FAQ {id: $id}) DELETE f", {"id": faq_id})
-        return APIResponse(data={"faq_id": faq_id}, message="FAQ deleted")
+        kb_id = _parse_kb_id(faq_id)
+        if kb_id is None:
+            return APIResponse(success=False, message="Only knowledge_base FAQ entries are deletable")
+        pool = pg.get_pool()
+        await pool.execute("DELETE FROM knowledge_base WHERE id = $1", kb_id)
+        return APIResponse(data={"faq_id": f"kb_{kb_id}"}, message="FAQ deleted")
     except Exception as e:
         return APIResponse(success=False, message=str(e))
+
+
+@router.get("/policies", response_model=APIResponse[list[dict]])
+async def list_policies(limit: int = Query(50, ge=1, le=200)) -> APIResponse[list[dict]]:
+    try:
+        await _ensure_policy_documents_table()
+        pool = pg.get_pool()
+        rows = await pool.fetch(
+            """
+            SELECT id, title, content, url, category, policy_type, fetched_at, updated_at
+            FROM policy_documents
+            ORDER BY updated_at DESC NULLS LAST, fetched_at DESC NULLS LAST, id DESC
+            LIMIT $1
+            """,
+            limit,
+        )
+        return APIResponse(
+            data=[
+                {
+                    "id": f"policy_{row['id']}",
+                    "title": row["title"],
+                    "content": row["content"],
+                    "url": row["url"],
+                    "category": row["category"] or row["policy_type"] or "售后政策",
+                    "policy_type": row["policy_type"] or row["category"] or "售后政策",
+                    "source": "policy_documents",
+                }
+                for row in rows
+            ]
+        )
+    except Exception as exc:
+        logger.error("Failed to list policy entries: %s", exc)
+        return APIResponse(success=False, data=[], message="Policy database unavailable")
+
+
+@router.post("/policies", response_model=APIResponse[dict])
+async def add_policy(body: dict) -> APIResponse[dict]:
+    try:
+        await _ensure_policy_documents_table()
+        pool = pg.get_pool()
+        row = await pool.fetchrow(
+            """
+            INSERT INTO policy_documents (url, title, content, category, policy_type, fetched_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+            RETURNING id
+            """,
+            body.get("url"),
+            body["title"],
+            body["content"],
+            body.get("category", "售后政策"),
+            body.get("policy_type", body.get("category", "售后政策")),
+        )
+        return APIResponse(data={"policy_id": f"policy_{row['id']}"}, message="Policy created")
+    except Exception as exc:
+        logger.error("Failed to create policy: %s", exc)
+        return APIResponse(success=False, data={}, message=str(exc))
+
+
+@router.put("/policies/{policy_id}", response_model=APIResponse[dict])
+async def update_policy(policy_id: str, body: dict) -> APIResponse[dict]:
+    try:
+        await _ensure_policy_documents_table()
+        match = re.search(r"(?:policy_)?(\d+)$", (policy_id or "").strip())
+        if not match:
+            return APIResponse(success=False, data={}, message="Invalid policy id")
+        row_id = int(match.group(1))
+        pool = pg.get_pool()
+        await pool.execute(
+            """
+            UPDATE policy_documents
+            SET title = $2,
+                content = $3,
+                url = $4,
+                category = $5,
+                policy_type = $6,
+                updated_at = NOW()
+            WHERE id = $1
+            """,
+            row_id,
+            body["title"],
+            body["content"],
+            body.get("url"),
+            body.get("category", "售后政策"),
+            body.get("policy_type", body.get("category", "售后政策")),
+        )
+        return APIResponse(data={"policy_id": f"policy_{row_id}"}, message="Policy updated")
+    except Exception as exc:
+        logger.error("Failed to update policy: %s", exc)
+        return APIResponse(success=False, data={}, message=str(exc))
+
+
+@router.delete("/policies/{policy_id}", response_model=APIResponse[dict])
+async def delete_policy(policy_id: str) -> APIResponse[dict]:
+    try:
+        await _ensure_policy_documents_table()
+        match = re.search(r"(?:policy_)?(\d+)$", (policy_id or "").strip())
+        if not match:
+            return APIResponse(success=False, data={}, message="Invalid policy id")
+        row_id = int(match.group(1))
+        pool = pg.get_pool()
+        await pool.execute("DELETE FROM policy_documents WHERE id = $1", row_id)
+        return APIResponse(data={"policy_id": f"policy_{row_id}"}, message="Policy deleted")
+    except Exception as exc:
+        logger.error("Failed to delete policy: %s", exc)
+        return APIResponse(success=False, data={}, message=str(exc))
 
 
 @router.get("/search", response_model=APIResponse[list[dict]])

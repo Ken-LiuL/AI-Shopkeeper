@@ -141,6 +141,7 @@ async def list_orders(
     limit: int = Query(20, ge=1, le=100),
     status: str = Query("all"),
     store_id: str = Query(None, description="按门店 ID 过滤"),
+    date: str | None = Query(None, description="按下单日期过滤 YYYY-MM-DD"),
 ) -> PaginatedResponse[dict]:
     """订单列表 — 优先从 orders 表查真实美团订单"""
     pool = pg.get_pool()
@@ -157,6 +158,11 @@ async def list_orders(
             if store_id:
                 conditions.append(f"store_id = ${idx}")
                 params.append(store_id)
+                idx += 1
+
+            if date:
+                conditions.append(f"order_time::date = ${idx}::date")
+                params.append(date)
                 idx += 1
 
             if status and status != "all":
@@ -191,6 +197,17 @@ async def list_orders(
                         items_data = json.loads(items_data)
                     products = items_data.get("products", []) if isinstance(items_data, dict) else []
                     order_dict["items"] = products
+                    primary_name = "—"
+                    if products:
+                        first_name = str(products[0].get("product_name") or products[0].get("name") or "未命名商品")
+                        primary_name = first_name if len(products) == 1 else f"{first_name} 等{len(products)}件"
+                    order_dict["product_name"] = primary_name
+                    order_dict["amount"] = float(order_dict.get("customer_paid") or order_dict.get("total_amount") or 0)
+                    order_dict["created_at"] = (
+                        order_dict.get("order_time").isoformat()
+                        if getattr(order_dict.get("order_time"), "isoformat", None)
+                        else order_dict.get("order_time")
+                    )
                     order_dict["synthetic"] = False
                     order_dict["source"] = "meituan_yiyao"
                     real_orders.append(order_dict)
@@ -201,153 +218,10 @@ async def list_orders(
         except Exception as exc:
             logger.exception("Real orders query failed, falling back: %s", exc)
 
-        # Fallback: 老的 QNH synthetic 数据
-        raw_orders = []
-        try:
-            raw_rows = await pool.fetch(
-                """SELECT raw_data, synced_at, created_at
-                   FROM qnh_orders_raw
-                   ORDER BY created_at DESC
-                   LIMIT $1 OFFSET $2""",
-                limit * 2,
-                offset,
-            )
-
-            for row in raw_rows:
-                raw_data = row["raw_data"]
-                if isinstance(raw_data, str):
-                    raw_data = json.loads(raw_data)
-
-                orders = await _extract_orders_from_raw(raw_data)
-                for order in orders:
-                    order["synced_at"] = row["synced_at"]
-                    order["raw_created_at"] = row["created_at"]
-                    raw_orders.append(order)
-        except Exception:
-            pass  # Fallback to synthetic data
-
-        # 如果raw orders表没有有效数据，尝试从 customer_rank 数据集生成订单
-        if not raw_orders:
-            dataset_rows = await pool.fetch(
-                """SELECT payload, synced_at
-                   FROM qnh_dataset_records
-                   WHERE dataset = 'customer_rank'
-                   ORDER BY synced_at DESC
-                   LIMIT $1""",
-                limit * 3,
-            )
-            customer_orders = []
-            for row in dataset_rows:
-                payload = row["payload"]
-                if isinstance(payload, str):
-                    payload = json.loads(payload)
-                if not isinstance(payload, dict):
-                    continue
-                customer_name = _parse_rank_str(payload.get("user_name")) or "重点客户"
-                customer_addr = _parse_rank_str(payload.get("user_address"))
-                total_amount = _parse_rank_value(
-                    payload.get("actual_pay_amt")
-                ) or _parse_rank_value(payload.get("sale_amt_gmv"))
-                order_count = max(int(round(_parse_rank_value(payload.get("eff_ord_cnt")))), 1)
-                order_time = row["synced_at"] or datetime.now()
-                avg_item_price = round(total_amount / order_count, 2) if total_amount else 0
-                order_id = f"CR_{abs(hash(customer_name)) % 1_000_000:06d}_{order_time:%Y%m%d}"
-
-                customer_orders.append(
-                    {
-                        "order_id": order_id,
-                        "order_time": order_time.isoformat(),
-                        "total_amount": round(total_amount, 2),
-                        "status": "completed",
-                        "customer_id": customer_name,
-                        "delivery_time": None,
-                        "items": [
-                            {
-                                "product_name": "高频热销组合",
-                                "quantity": order_count,
-                                "price": avg_item_price,
-                            }
-                        ],
-                        "payment_method": "美团支付",
-                        "delivery_address": customer_addr,
-                        "synced_at": order_time,
-                        "raw_created_at": order_time,
-                        "synthetic": True,
-                        "source": "customer_rank",
-                        "notes": f"近7天有效订单 {order_count} 单",
-                    }
-                )
-
-            if customer_orders:
-                raw_orders = customer_orders
-
-        # 如果raw orders表没有有效数据，从metrics生成合成数据
-        if not raw_orders:
-            metrics = await _get_latest_metrics(pool)
-            if metrics:
-                today_orders = int(_extract_metric(metrics, "eff_ord_cnt"))
-                avg_order_value = _extract_metric(metrics, "unit_price")
-                if avg_order_value == 0:
-                    gmv = _extract_metric(metrics, "sale_amt_gmv")
-                    if today_orders > 0 and gmv > 0:
-                        avg_order_value = gmv / today_orders
-                    else:
-                        avg_order_value = 50.0  # 默认客单价
-
-                # 生成合成订单数据
-                synthetic_orders = []
-                for i in range(min(today_orders, limit)):
-                    order_time = datetime.now() - timedelta(hours=i * 2)  # 每2小时一个订单
-                    order_id = f"ORDER_{order_time.strftime('%Y%m%d')}_{i + 1:04d}"
-
-                    # 随机化订单状态
-                    statuses = ["completed", "processing", "shipped", "cancelled"]
-                    weights = [0.7, 0.15, 0.1, 0.05]  # 完成率70%，处理中15%，已发货10%，取消5%
-                    import random
-
-                    status_choice = random.choices(statuses, weights=weights)[0]
-
-                    # 如果有状态过滤，按过滤要求生成
-                    if status != "all":
-                        status_choice = status
-
-                    order = {
-                        "order_id": order_id,
-                        "order_time": order_time.isoformat(),
-                        "total_amount": round(
-                            avg_order_value * (0.8 + random.random() * 0.4), 2
-                        ),  # ±20%变动
-                        "status": status_choice,
-                        "customer_id": f"CUSTOMER_{random.randint(1000, 9999)}",
-                        "delivery_time": (order_time + timedelta(days=2)).isoformat()
-                        if status_choice in ["completed", "shipped"]
-                        else None,
-                        "items": [
-                            {
-                                "product_name": f"商品_{random.randint(1, 100)}",
-                                "quantity": random.randint(1, 3),
-                                "price": round(avg_order_value / random.randint(1, 2), 2),
-                            }
-                        ],
-                        "payment_method": random.choice(["微信支付", "支付宝", "银行卡"]),
-                        "delivery_address": f"配送地址_{random.randint(1, 50)}",
-                        "synced_at": datetime.now(),
-                        "raw_created_at": order_time,
-                        "synthetic": True,  # 标记为合成数据
-                    }
-                    synthetic_orders.append(order)
-
-                raw_orders = synthetic_orders
-
-        # 状态过滤
-        if status != "all":
-            raw_orders = [o for o in raw_orders if o.get("status") == status]
-
-        # 分页
-        orders = raw_orders[offset : offset + limit]
-        total = len(raw_orders)
-
-        return PaginatedResponse(data=orders, total=total, page=page, page_size=limit)
+        logger.info(
+            "No verified imported orders found in orders table; returning empty result instead of synthetic data"
+        )
+        return PaginatedResponse(data=[], total=0, page=page, page_size=limit)
 
     except Exception as e:
         logger.error(f"Failed to fetch orders: {e}")
@@ -379,11 +253,63 @@ async def order_stats() -> APIResponse[dict]:
     pool = pg.get_pool()
 
     try:
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE order_time::date = CURRENT_DATE)::int AS today_orders,
+                    COUNT(*)::int AS month_orders,
+                    COUNT(*) FILTER (
+                        WHERE order_time::date = CURRENT_DATE AND status = 'completed'
+                    )::int AS today_completed_orders,
+                    COUNT(*) FILTER (
+                        WHERE order_time::date = CURRENT_DATE AND status IN ('refunded', 'cancelled')
+                    )::int AS today_refunded_orders,
+                    COUNT(*) FILTER (WHERE status = 'completed')::int AS month_completed_orders,
+                    COUNT(*) FILTER (WHERE status IN ('refunded', 'cancelled'))::int AS month_refunded_orders
+                FROM orders
+                WHERE order_time >= CURRENT_DATE - INTERVAL '30 days'
+                """
+            )
+            if row and int(row["month_orders"] or 0) > 0:
+                month_orders = int(row["month_orders"] or 0)
+                month_completed_orders = int(row["month_completed_orders"] or 0)
+                month_refunded_orders = int(row["month_refunded_orders"] or 0)
+                completion_rate = round(month_completed_orders / max(month_orders, 1) * 100, 2)
+                refund_rate = round(month_refunded_orders / max(month_orders, 1) * 100, 2)
+                avg_delivery_time = 0.0
+                return APIResponse(
+                    data={
+                        "today_orders": int(row["today_orders"] or 0),
+                        "completion_rate": completion_rate,
+                        "refund_rate": refund_rate,
+                        "avg_delivery_time": avg_delivery_time,
+                        "today": {
+                            "total": int(row["today_orders"] or 0),
+                            "completed": int(row["today_completed_orders"] or 0),
+                            "refunded": int(row["today_refunded_orders"] or 0),
+                            "completion_rate": round(
+                                int(row["today_completed_orders"] or 0) / max(int(row["today_orders"] or 0), 1) * 100,
+                                2,
+                            ),
+                            "refund_rate": round(
+                                int(row["today_refunded_orders"] or 0) / max(int(row["today_orders"] or 0), 1) * 100,
+                                2,
+                            ),
+                            "avg_delivery_time": avg_delivery_time,
+                        },
+                    }
+                )
+
         # 从metrics表获取最新数据（与dashboard一致）
         metrics = await _get_latest_metrics(pool)
         if not metrics:
             return APIResponse(
                 data={
+                    "today_orders": 0,
+                    "completion_rate": 0,
+                    "refund_rate": 0,
+                    "avg_delivery_time": 0,
                     "today": {
                         "total": 0,
                         "completed": 0,
@@ -462,6 +388,10 @@ async def order_stats() -> APIResponse[dict]:
         }
 
         stats = {
+            "today_orders": today_orders,
+            "completion_rate": round(completion_rate, 2),
+            "refund_rate": round(refund_rate, 2),
+            "avg_delivery_time": round(avg_delivery_time, 2),
             "today": today_stats,
             "this_week": week_stats,
             "this_month": month_stats,

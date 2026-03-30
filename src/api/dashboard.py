@@ -12,8 +12,9 @@ import re
 from fastapi import APIRouter
 
 from src.db import postgres as pg
+from src.services.manual_import import ManualImportService
 
-from .schemas import ActionItem, APIResponse, DashboardOverview, SalesTrendPoint, TopProduct
+from .schemas import ActionItem, ActionOutcome, APIResponse, DashboardOverview, SalesTrendPoint, TopProduct
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 logger = logging.getLogger(__name__)
@@ -198,6 +199,23 @@ async def _get_inventory_alert_count(pool) -> int:
         return 0
 
 
+async def _get_pending_alert_count(pool) -> int:
+    if await _table_exists(pool, "alerts"):
+        with contextlib.suppress(Exception):
+            count = await pool.fetchval("SELECT COUNT(*) FROM alerts WHERE status = 'pending'")
+            if count:
+                return int(count)
+
+    with contextlib.suppress(Exception):
+        from .alerts import _generate_smart_alerts
+
+        alerts = await asyncio.wait_for(_generate_smart_alerts(pool), timeout=5.0)
+        if alerts:
+            return len(alerts)
+
+    return await _get_inventory_alert_count(pool)
+
+
 async def _get_avg_rating(pool) -> float:
     if not await _table_exists(pool, "qnh_reviews_raw"):
         return 0.0
@@ -261,6 +279,56 @@ async def _generate_action_items(
     action_items = []
 
     try:
+        with contextlib.suppress(Exception):
+            review = await ManualImportService(pool).get_review(limit=3)
+            summary = (
+                review.get("open_summary")
+                if isinstance(review, dict) and isinstance(review.get("open_summary"), dict)
+                else review.get("summary") if isinstance(review, dict) else {}
+            )
+            if isinstance(summary, dict):
+                stockout_count = int(summary.get("stockout_but_selling") or 0)
+                catalog_gap_count = int(summary.get("catalog_gaps") or 0)
+                missing_price_count = int(summary.get("products_missing_price") or 0)
+                mismatch_count = int(summary.get("order_amount_mismatch") or 0)
+
+                if stockout_count > 0:
+                    action_items.append(
+                        ActionItem(
+                            priority="high",
+                            action="处理断货热销商品",
+                            detail=f"{stockout_count} 款商品有销量但当前库存为 0，先补货或核对库存。",
+                            link="/alerts",
+                        )
+                    )
+                if catalog_gap_count > 0:
+                    action_items.append(
+                        ActionItem(
+                            priority="high",
+                            action="补齐商品主档",
+                            detail=f"{catalog_gap_count} 个商品只出现在订单或库存里，主档还不完整。",
+                            link="/products",
+                        )
+                    )
+                if missing_price_count > 0:
+                    action_items.append(
+                        ActionItem(
+                            priority="medium",
+                            action="补齐缺失售价",
+                            detail=f"{missing_price_count} 个商品没有零售价，价格和毛利分析暂时不准。",
+                            link="/products",
+                        )
+                    )
+                if mismatch_count > 0:
+                    action_items.append(
+                        ActionItem(
+                            priority="medium",
+                            action="修正订单金额口径",
+                            detail=f"{mismatch_count} 单金额与明细不一致，利润分析先排除这部分订单。",
+                            link="/orders",
+                        )
+                    )
+
         # 1. Check for low stock items (high priority) - 用 alerts 表真实数据
         with contextlib.suppress(Exception):
             low_stock_rows = await pool.fetch(
@@ -289,11 +357,11 @@ async def _generate_action_items(
                         priority="high",
                         action="紧急补货",
                         detail=detail,
-                        link="/inventory/restock",
+                        link="/inventory",
                     )
                 )
 
-        # 2. Check for pricing issues from competitor analysis (medium priority)
+        # 2. Check for pricing issues from our own category price distribution (medium priority)
         with contextlib.suppress(Exception):
             overpriced_count = (
                 await pool.fetchval(
@@ -319,7 +387,7 @@ async def _generate_action_items(
                 action_items.append(
                     ActionItem(
                         priority="medium",
-                        action="调整定价",
+                        action="复核价格",
                         detail=f"{overpriced_count}款商品价格高于同类均价20%以上",
                         link="/pricing",
                     )
@@ -350,7 +418,7 @@ async def _generate_action_items(
                         priority="high",
                         action="优化配送",
                         detail=f"整单超时率{avg_overtime:.1f}%，严重影响客户满意度",
-                        link="/logistics",
+                        link="/orders",
                     )
                 )
             elif avg_overtime > 5:
@@ -369,7 +437,7 @@ async def _generate_action_items(
                         priority="high",
                         action="减少缺货损失",
                         detail=f"缺货损失¥{total_stockout:,.2f}，需优化库存预警",
-                        link="/inventory/alerts",
+                        link="/inventory",
                     )
                 )
 
@@ -398,23 +466,23 @@ async def _generate_action_items(
                 overtime_rate = _extract_metric(metrics, "overtime_ord_rate")
                 if overtime_rate > 0.2:
                     action_items.append(
-                        ActionItem(
-                            priority="high",
-                            action="优化配送",
-                            detail=f"超时订单率{overtime_rate * 100:.1f}%，影响客户满意度",
-                            link="/logistics",
-                        )
+                    ActionItem(
+                        priority="high",
+                        action="优化配送",
+                        detail=f"超时订单率{overtime_rate * 100:.1f}%，影响客户满意度",
+                        link="/orders",
                     )
+                )
                 stockout_loss = _extract_metric(metrics, "stockout_loss_amt")
                 if stockout_loss > 1000:
                     action_items.append(
-                        ActionItem(
-                            priority="high",
-                            action="减少缺货损失",
-                            detail=f"缺货损失¥{stockout_loss:.2f}，优化库存预警",
-                            link="/inventory/alerts",
-                        )
+                    ActionItem(
+                        priority="high",
+                        action="减少缺货损失",
+                        detail=f"缺货损失¥{stockout_loss:.2f}，优化库存预警",
+                        link="/inventory",
                     )
+                )
 
             expose_cnt = 0
             order_cnt = 0
@@ -429,7 +497,7 @@ async def _generate_action_items(
                             priority="medium",
                             action="提升转化率",
                             detail=f"当前转化率{conversion_rate * 100:.2f}%，建议优化商品展示",
-                            link="/products/optimize",
+                            link="/products",
                         )
                     )
 
@@ -455,7 +523,7 @@ async def _generate_action_items(
                         priority="low",
                         action="丰富品类",
                         detail=f"「{top_category['category']}」占比{top_category['percentage']:.0f}%过高，建议增加其他品类",
-                        link="/products/categories",
+                        link="/products",
                     )
                 )
 
@@ -470,15 +538,23 @@ async def _generate_action_items(
                     priority="low",
                     action="扩充商品",
                     detail=f"当前在售{total_products}款商品，建议增加商品丰富度",
-                    link="/products/selection",
+                    link="/selection",
                 )
             )
 
         # Sort by priority (high -> medium -> low) and limit to top 5
         priority_order = {"high": 0, "medium": 1, "low": 2}
-        action_items.sort(key=lambda x: priority_order.get(x.priority, 3))
+        deduped = []
+        seen = set()
+        for item in action_items:
+            dedupe_key = (item.action, item.link)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            deduped.append(item)
+        deduped.sort(key=lambda x: priority_order.get(x.priority, 3))
 
-        return action_items[:5]
+        return deduped[:5]
 
     except Exception as e:
         logger.error(f"Failed to generate action items: {e}")
@@ -491,6 +567,194 @@ async def _generate_action_items(
                 link="/system/health",
             )
         ]
+
+
+def _metadata_label(metadata: dict | None, *keys: str) -> str:
+    if not isinstance(metadata, dict):
+        return ""
+    for key in keys:
+        value = metadata.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
+def _build_issue_outcome(
+    row: dict[str, object],
+    open_summary: dict[str, int] | None = None,
+) -> ActionOutcome:
+    issue_type = str(row.get("issue_type") or "")
+    metadata = row.get("metadata")
+    metadata_dict = metadata if isinstance(metadata, dict) else {}
+    label = _metadata_label(
+        metadata_dict,
+        "name",
+        "product_name",
+        "order_id",
+        "sku_id",
+        "product_id",
+    ) or str(row.get("title") or "最近处理的问题")
+
+    mapping = {
+        "product_missing_price": (
+            "商品修复",
+            f"已补齐 {label} 的价格信息。",
+            "下次价格复核和客服回答会直接使用新价格。",
+            "/products",
+        ),
+        "product_catalog_gap": (
+            "商品修复",
+            f"已补齐 {label} 的主档与知识底座。",
+            "下次知识检索会优先命中这条商品资料。",
+            "/products",
+        ),
+        "stockout_but_selling": (
+            "库存修复",
+            f"已处理 {label} 的断货风险。",
+            "下一次库存导入后确认是否恢复可售。",
+            "/inventory",
+        ),
+        "inventory_missing_cost": (
+            "库存修复",
+            f"已补齐 {label} 的成本价。",
+            "后续价格复核会使用真实成本。",
+            "/inventory",
+        ),
+        "order_amount_mismatch": (
+            "订单复核",
+            f"已复核订单 {label} 的金额口径。",
+            "利润分析会优先排除仍未复核的异常订单。",
+            "/orders",
+        ),
+        "selection_candidate": (
+            "重点运营",
+            f"已将 {label} 纳入重点运营。",
+            "下次导入后对比销量、库存和客服咨询变化。",
+            "/selection",
+        ),
+        "bundle_candidate": (
+            "套餐候选",
+            f"已将 {label} 纳入套餐执行。",
+            "观察后续客单价和共购订单占比变化。",
+            "/bundles",
+        ),
+        "cs_low_score_reply": (
+            "客服质量",
+            f"已处理 {label} 的低分回复。",
+            "继续观察后续回复评分是否回升。",
+            "/customer-service",
+        ),
+    }
+    category, detail, next_check, link = mapping.get(
+        issue_type,
+        ("最近动作", str(row.get("title") or "已完成一次处理"), "继续观察后续数据变化。", "/"),
+    )
+    summary_key_map = {
+        "product_missing_price": "products_missing_price",
+        "product_catalog_gap": "catalog_gaps",
+        "stockout_but_selling": "stockout_but_selling",
+        "inventory_missing_cost": "inventory_missing_cost",
+        "order_amount_mismatch": "order_amount_mismatch",
+    }
+    summary_key = summary_key_map.get(issue_type)
+    if summary_key and open_summary and summary_key in open_summary:
+        detail = f"{detail} 当前剩余 {int(open_summary.get(summary_key) or 0)} 项。"
+    happened_at = row.get("updated_at")
+    return ActionOutcome(
+        title=str(row.get("title") or category),
+        detail=detail,
+        category=category,
+        link=link,
+        happened_at=happened_at.isoformat() if hasattr(happened_at, "isoformat") else "",
+        next_check=next_check,
+    )
+
+
+async def _get_recent_outcomes(
+    pool,
+    limit: int = 6,
+    open_summary: dict[str, int] | None = None,
+) -> list[ActionOutcome]:
+    events: list[tuple[float, ActionOutcome]] = []
+
+    def sort_value(value: object) -> float:
+        if hasattr(value, "timestamp"):
+            with contextlib.suppress(Exception):
+                return float(value.timestamp())
+        return 0.0
+
+    if await _table_exists(pool, "issue_actions"):
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """
+                SELECT issue_type, title, metadata, updated_at
+                FROM issue_actions
+                WHERE status = 'resolved'
+                ORDER BY updated_at DESC NULLS LAST
+                LIMIT $1
+                """,
+                limit,
+            )
+            for row in rows:
+                outcome = _build_issue_outcome(dict(row), open_summary=open_summary)
+                events.append((sort_value(row["updated_at"]), outcome))
+
+    if await _table_exists(pool, "manual_import_runs"):
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """
+                SELECT import_type, filename, imported_rows, quality_score, created_at
+                FROM manual_import_runs
+                WHERE status = 'completed' AND COALESCE(dry_run, FALSE) = FALSE
+                ORDER BY created_at DESC NULLS LAST
+                LIMIT $1
+                """,
+                3,
+            )
+            type_labels = {
+                "products": "商品",
+                "orders": "订单",
+                "inventory": "库存",
+            }
+            for row in rows:
+                import_type = str(row["import_type"] or "数据")
+                label = type_labels.get(import_type, import_type)
+                outcome = ActionOutcome(
+                    title=f"完成{label}导入",
+                    detail=f"{row['filename']} 已导入 {int(row['imported_rows'] or 0)} 行，质量分 {float(row['quality_score'] or 0):.1f}。",
+                    category="数据导入",
+                    link="/imports",
+                    happened_at=row["created_at"].isoformat() if row["created_at"] else "",
+                    next_check="重新查看今日待办，确认这批数据带来的新问题和已修复项。",
+                )
+                events.append((sort_value(row["created_at"]), outcome))
+
+    if await _table_exists(pool, "price_history"):
+        with contextlib.suppress(Exception):
+            rows = await pool.fetch(
+                """
+                SELECT ph.product_id, ph.old_price, ph.new_price, ph.reason, ph.changed_at, p.name
+                FROM price_history ph
+                LEFT JOIN products p ON p.product_id = ph.product_id
+                ORDER BY ph.changed_at DESC NULLS LAST
+                LIMIT $1
+                """,
+                3,
+            )
+            for row in rows:
+                product_name = row["name"] or row["product_id"] or "商品"
+                outcome = ActionOutcome(
+                    title="已更新商品价格",
+                    detail=f"{product_name}：¥{float(row['old_price'] or 0):.2f} 调整为 ¥{float(row['new_price'] or 0):.2f}。",
+                    category="价格复核",
+                    link="/pricing",
+                    happened_at=row["changed_at"].isoformat() if row["changed_at"] else "",
+                    next_check="观察 1 到 3 天的订单、毛利和库存变化，再决定是否继续调整。",
+                )
+                events.append((sort_value(row["changed_at"]), outcome))
+
+    events.sort(key=lambda item: item[0] or 0, reverse=True)
+    return [item[1] for item in events[:limit]]
 
 
 # Pool is lazily initialized by middleware in main.py
@@ -515,19 +779,30 @@ async def overview() -> APIResponse[DashboardOverview]:
     today_orders, today_gmv = await _get_today_order_metrics(pool)
     avg_order_value = (today_gmv / today_orders) if today_orders > 0 else 0.0
     avg_rating = await _get_avg_rating(pool)
-    pending_alerts = await _get_inventory_alert_count(pool)
+    pending_alerts = await _get_pending_alert_count(pool)
     recent_sync_state = await _get_recent_sync_state(pool, limit=5)
 
-    pending_tasks = len(
-        [item for item in recent_sync_state if item.get("last_sync_status") == "running"]
-    )
-
     action_items = []
+    recent_outcomes = []
+    review_open_summary = None
     with contextlib.suppress(Exception):
         action_items = await asyncio.wait_for(
             _generate_action_items(pool, total_products=total_products),
             timeout=10.0,
         )
+    with contextlib.suppress(Exception):
+        review_payload = await asyncio.wait_for(ManualImportService(pool).get_review(limit=3), timeout=10.0)
+        if isinstance(review_payload, dict) and isinstance(review_payload.get("open_summary"), dict):
+            review_open_summary = {
+                str(key): int(value or 0)
+                for key, value in review_payload["open_summary"].items()
+            }
+    with contextlib.suppress(Exception):
+        recent_outcomes = await asyncio.wait_for(
+            _get_recent_outcomes(pool, limit=6, open_summary=review_open_summary),
+            timeout=10.0,
+        )
+    pending_tasks = len(action_items)
 
     from decimal import Decimal
 
@@ -544,6 +819,7 @@ async def overview() -> APIResponse[DashboardOverview]:
             pending_tasks=pending_tasks,
             recent_sync_state=recent_sync_state,
             action_items=action_items,
+            recent_outcomes=recent_outcomes,
         )
     )
 
@@ -987,7 +1263,7 @@ async def store_kpis() -> APIResponse[dict]:
 
 @router.get("/ai-stats", response_model=APIResponse[dict])
 async def get_ai_stats() -> APIResponse[dict]:
-    """返回 AI 今日工作统计"""
+    """返回 AI 今日工作统计，优先采用当前主链真实动作口径。"""
     from datetime import datetime
 
     pool = pg.get_pool()
@@ -1000,20 +1276,33 @@ async def get_ai_stats() -> APIResponse[dict]:
         except Exception:
             return 0
 
-    # 今日处理的告警数
+    async def safe_count_if_exists(table_name: str, query: str, *args) -> int:
+        if not await _table_exists(pool, table_name):
+            return 0
+        return await safe_count(query, *args)
+
+    # 今日已处理的告警数
     alerts_handled = await safe_count(
-        "SELECT COUNT(*) FROM alerts WHERE created_at >= $1", today_start
+        "SELECT COUNT(*) FROM alerts WHERE status = 'resolved' AND resolved_at >= $1", today_start
     )
 
-    # 今日客服回复数
+    # 今日客服会话数
     cs_replies = await safe_count(
         "SELECT COUNT(*) FROM cs_sessions WHERE created_at >= $1", today_start
     )
 
-    # 今日定价建议数
-    pricing_adj = await safe_count(
-        "SELECT COUNT(*) FROM price_history WHERE changed_at >= $1", today_start
+    # 今日价格调整数
+    pricing_adj = await safe_count_if_exists(
+        "price_history",
+        "SELECT COUNT(*) FROM price_history WHERE changed_at >= $1",
+        today_start,
     )
+    if pricing_adj == 0:
+        pricing_adj = await safe_count_if_exists(
+            "price_changes",
+            "SELECT COUNT(*) FROM price_changes WHERE created_at >= $1",
+            today_start,
+        )
 
     # 选品运行数
     selection_runs = await safe_count(
@@ -1025,14 +1314,22 @@ async def get_ai_stats() -> APIResponse[dict]:
         "SELECT COUNT(*) FROM bundles WHERE created_at >= $1", today_start
     )
 
-    # 上架优化数
-    listings = await safe_count(
-        "SELECT COUNT(*) FROM listings WHERE created_at >= $1", today_start
+    # 今日人工导入批次数
+    data_imports = await safe_count_if_exists(
+        "manual_import_runs",
+        """
+        SELECT COUNT(*)
+        FROM manual_import_runs
+        WHERE created_at >= $1
+          AND status = 'completed'
+          AND dry_run = FALSE
+        """,
+        today_start,
     )
 
-    total = alerts_handled + cs_replies + pricing_adj + selection_runs + bundles_created + listings
+    total = alerts_handled + cs_replies + pricing_adj + selection_runs + bundles_created + data_imports
 
-    # 预估增收（简单算法：定价调整 * 平均订单价 * 预估提升率）
+    # 预估增收只基于真实价格调整次数估算，不包含未执行建议。
     estimated = 0.0
     if pricing_adj > 0:
         try:
@@ -1051,7 +1348,7 @@ async def get_ai_stats() -> APIResponse[dict]:
         "pricingAdj": pricing_adj,
         "selectionRuns": selection_runs,
         "bundlesCreated": bundles_created,
-        "listingsOptimized": listings,
+        "dataImports": data_imports,
         "estimatedSaved": str(estimated),
         "reflectionRounds": 0,  # TODO: 从 llm_usage 统计
         "factChecks": alerts_handled,  # 每个告警都做事实核查

@@ -1,20 +1,31 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { AICapabilityHeader } from '@/components/ai-capability-badge';
-import { getPricingSuggestions, getPricingRules, adoptPricingSuggestion, batchUpdatePrices, type PricingSuggestion, type PricingRule, type BatchPriceUpdateRequest, type BatchPriceUpdateResult } from '@/lib/api';
-import { AIReasoningPanel } from '@/components/ai-reasoning-panel';
-import { AIActionButton } from '@/components/ai-action-button';
+import { useEffect, useMemo, useState } from 'react';
+import {
+  adoptPricingSuggestion,
+  batchUpdatePrices,
+  getPricingRules,
+  getPricingSuggestions,
+  type BatchPriceUpdateRequest,
+  type BatchPriceUpdateResult,
+  type PricingRule,
+  type PricingSuggestion,
+} from '@/lib/api';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 
-function buildPricingReasoningSteps(suggestion: PricingSuggestion) {
-  const direction = suggestion.suggested_price > suggestion.current_price ? '上涨' : '下降';
-  const pct = Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100).toFixed(1);
-  return [
-    { icon: '📊', title: '市场扫描', detail: `检测到价格偏差，建议${direction} ${pct}%`, status: 'completed' as const },
-    { icon: '📈', title: '趋势分析', detail: suggestion.reason || '基于市场竞争和需求弹性分析', status: 'completed' as const },
-    { icon: '💡', title: '策略生成', detail: '使用弹性定价模型生成最优建议价', status: 'completed' as const },
-    { icon: '✔️', title: '影响评估', detail: suggestion.expected_impact || '已评估对销量和利润的综合影响', status: 'completed' as const },
-  ];
+function formatCurrency(amount: number) {
+  return `¥${Number(amount || 0).toFixed(2)}`;
+}
+
+function getConfidenceLabel(confidence: number) {
+  if (confidence >= 0.8) {
+    return { text: '高', className: 'bg-green-100 text-green-700' };
+  }
+  if (confidence >= 0.6) {
+    return { text: '中', className: 'bg-amber-100 text-amber-700' };
+  }
+  return { text: '低', className: 'bg-slate-100 text-slate-600' };
 }
 
 export default function PricingPage() {
@@ -22,27 +33,34 @@ export default function PricingPage() {
   const [rules, setRules] = useState<PricingRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'suggestions' | 'rules'>('suggestions');
   const [adoptingIds, setAdoptingIds] = useState<Set<string>>(new Set());
   const [selectedSuggestions, setSelectedSuggestions] = useState<Set<string>>(new Set());
   const [showBatchModal, setShowBatchModal] = useState(false);
   const [batchOperation, setBatchOperation] = useState<'multiply' | 'add' | 'set'>('multiply');
-  const [batchValue, setBatchValue] = useState<string>('');
-  const [batchReason, setBatchReason] = useState<string>('');
+  const [batchValue, setBatchValue] = useState('');
+  const [batchReason, setBatchReason] = useState('');
   const [batchProcessing, setBatchProcessing] = useState(false);
 
+  const summary = useMemo(() => {
+    const highConfidence = suggestions.filter((item) => item.confidence >= 0.8).length;
+    const raiseCount = suggestions.filter((item) => item.suggested_price > item.current_price).length;
+    const cutCount = suggestions.filter((item) => item.suggested_price < item.current_price).length;
+    return { highConfidence, raiseCount, cutCount };
+  }, [suggestions]);
+
   useEffect(() => {
-    loadData();
+    void loadData();
   }, []);
 
-  const loadData = async () => {
+  async function loadData() {
     try {
       setLoading(true);
       const [suggestionsData, rulesData] = await Promise.all([
         getPricingSuggestions(),
         getPricingRules(),
       ]);
-
       setSuggestions(suggestionsData);
       setRules(rulesData);
       setError(null);
@@ -51,412 +69,391 @@ export default function PricingPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }
 
-  const handleAdoptSuggestion = async (suggestionId: string) => {
+  async function handleAdoptSuggestion(suggestionId: string) {
     try {
-      setAdoptingIds(prev => new Set([...prev, suggestionId]));
+      setMessage(null);
+      setAdoptingIds((prev) => new Set(prev).add(suggestionId));
       await adoptPricingSuggestion(suggestionId);
-
-      // 更新建议状态
-      setSuggestions(prev =>
-        prev.map(s =>
-          s.product_id === suggestionId
-            ? { ...s, status: 'adopted' as const }
-            : s
-        )
+      setSuggestions((prev) =>
+        prev.map((item) =>
+          item.product_id === suggestionId ? { ...item, status: 'adopted' } : item,
+        ),
       );
+      setMessage('价格建议已标记为已采纳，可继续批量执行实际调价。');
     } catch (err) {
-      alert('操作失败: ' + (err instanceof Error ? err.message : '未知错误'));
+      setMessage(`操作失败：${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
-      setAdoptingIds(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(suggestionId);
-        return newSet;
+      setAdoptingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(suggestionId);
+        return next;
       });
     }
-  };
+  }
 
-  const handleSelectSuggestion = (suggestionId: string, checked: boolean) => {
-    setSelectedSuggestions(prev => {
-      const newSet = new Set(prev);
+  function handleSelectSuggestion(suggestionId: string, checked: boolean) {
+    setSelectedSuggestions((prev) => {
+      const next = new Set(prev);
       if (checked) {
-        newSet.add(suggestionId);
+        next.add(suggestionId);
       } else {
-        newSet.delete(suggestionId);
+        next.delete(suggestionId);
       }
-      return newSet;
+      return next;
     });
-  };
+  }
 
-  const handleSelectAll = (checked: boolean) => {
+  function handleSelectAll(checked: boolean) {
     if (checked) {
-      setSelectedSuggestions(new Set(suggestions.map(s => s.product_id)));
-    } else {
-      setSelectedSuggestions(new Set());
-    }
-  };
-
-  const handleBatchUpdate = async () => {
-    if (selectedSuggestions.size === 0) {
-      alert('请选择要调价的商品');
+      setSelectedSuggestions(new Set(suggestions.map((item) => item.product_id)));
       return;
     }
+    setSelectedSuggestions(new Set());
+  }
 
-    if (!batchValue || isNaN(Number(batchValue))) {
-      alert('请输入有效的数值');
+  async function handleBatchUpdate() {
+    if (selectedSuggestions.size === 0) {
+      setMessage('请先选择要处理的商品。');
+      return;
+    }
+    if (!batchValue || Number.isNaN(Number(batchValue))) {
+      setMessage('请输入有效的调价值。');
       return;
     }
 
     setBatchProcessing(true);
-
     try {
       const request: BatchPriceUpdateRequest = {
         product_ids: Array.from(selectedSuggestions),
         operation: batchOperation,
         value: Number(batchValue),
-        reason: batchReason || '批量调价操作'
+        reason: batchReason || '价格复核批量执行',
       };
 
       const result: BatchPriceUpdateResult = await batchUpdatePrices(request);
-
-      // 显示结果
-      const successCount = result.updated_count;
-      const failedCount = result.failed_count;
-
-      if (successCount > 0) {
-        alert(`批量调价完成！成功更新 ${successCount} 个商品${failedCount > 0 ? `，失败 ${failedCount} 个` : ''}。`);
-
-        // 重新加载数据
-        loadData();
-
-        // 重置选择和对话框
+      if (result.updated_count > 0) {
+        setMessage(
+          `批量调价完成，成功 ${result.updated_count} 个${
+            result.failed_count > 0 ? `，失败 ${result.failed_count} 个` : ''
+          }。`,
+        );
         setSelectedSuggestions(new Set());
         setShowBatchModal(false);
         setBatchValue('');
         setBatchReason('');
+        await loadData();
       } else {
-        alert(`批量调价失败！所有 ${failedCount} 个商品都更新失败。`);
+        setMessage('批量调价失败，没有商品被成功更新。');
       }
-
     } catch (err) {
-      alert('批量调价失败: ' + (err instanceof Error ? err.message : '未知错误'));
+      setMessage(`批量调价失败：${err instanceof Error ? err.message : '未知错误'}`);
     } finally {
       setBatchProcessing(false);
     }
-  };
-
-  const formatCurrency = (amount: number) => {
-    return `¥${Number(amount).toFixed(2)}`;
-  };
-
-  const getConfidenceColor = (confidence: number) => {
-    if (confidence >= 0.8) return 'text-green-600 bg-green-100';
-    if (confidence >= 0.6) return 'text-yellow-600 bg-yellow-100';
-    return 'text-red-600 bg-red-100';
-  };
-
-  const getConfidenceLabel = (confidence: number) => {
-    if (confidence >= 0.8) return '高';
-    if (confidence >= 0.6) return '中';
-    return '低';
-  };
+  }
 
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold text-gray-900">💰 智能定价</h1>
-          <div className="text-sm text-gray-500">
-            AI驱动的定价优化建议
-          </div>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">价格复核</h1>
+          <p className="text-muted-foreground">只基于当前商品、订单和库存数据生成价格建议。</p>
         </div>
-
-        {/* Loading skeleton */}
-        <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="animate-pulse">
-              <div className="h-6 bg-gray-200 rounded w-1/4 mb-2"></div>
-              <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-            </div>
-          </div>
-          <div className="p-6">
-            <div className="animate-pulse space-y-4">
-              {[1, 2, 3, 4, 5].map((i) => (
-                <div key={i} className="flex space-x-4 items-center py-4 border-b border-gray-100">
-                  <div className="w-4 h-4 bg-gray-200 rounded"></div>
-                  <div className="flex-1 space-y-2">
-                    <div className="h-4 bg-gray-200 rounded w-3/4"></div>
-                    <div className="h-3 bg-gray-200 rounded w-1/2"></div>
-                  </div>
-                  <div className="h-8 bg-gray-200 rounded w-16"></div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <Card>
+          <CardContent className="p-6">
+            <div className="h-40 animate-pulse rounded bg-muted" />
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   if (error) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <p className="text-red-600 text-lg">❌ 加载失败</p>
-          <p className="text-gray-600 mt-2">{error}</p>
-          <button
-            onClick={loadData}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-          >
-            重试
-          </button>
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">价格复核</h1>
+          <p className="text-muted-foreground">只基于当前商品、订单和库存数据生成价格建议。</p>
         </div>
+        <Card className="border-red-200">
+          <CardContent className="p-6 text-center">
+            <p className="text-lg text-red-700">加载失败</p>
+            <p className="mt-2 text-sm text-red-600">{error}</p>
+            <Button className="mt-4" onClick={() => void loadData()}>重试</Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">💰 智能定价</h1>
-          <AICapabilityHeader
-            capabilities={['竞品追踪', 'AI 定价', '事实核查', '反馈闭环']}
-            description="AI 监控竞品价格变化，结合成本和销量数据给出最优定价建议"
-          />
-        </div>
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">价格复核</h1>
+        <p className="text-muted-foreground">
+          当前只基于商品主档、订单销量、库存状态和类目价格带做判断，不使用竞品数据。
+        </p>
       </div>
 
-      {/* Tab 导航 */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardContent className="p-5">
+            <div className="text-sm text-muted-foreground">待复核商品</div>
+            <div className="mt-2 text-3xl font-bold">{suggestions.length}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <div className="text-sm text-muted-foreground">高置信度建议</div>
+            <div className="mt-2 text-3xl font-bold">{summary.highConfidence}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <div className="text-sm text-muted-foreground">建议提价</div>
+            <div className="mt-2 text-3xl font-bold">{summary.raiseCount}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="p-5">
+            <div className="text-sm text-muted-foreground">建议降价</div>
+            <div className="mt-2 text-3xl font-bold">{summary.cutCount}</div>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Card className="border-slate-200 bg-slate-50">
+        <CardContent className="flex flex-col gap-3 p-5 text-sm text-slate-700 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="font-medium">数据边界</div>
+            <div className="mt-1 text-slate-600">
+              当前价格建议来自销量、库存、成本和类目价格带。没有竞品数据时，不给竞品结论。
+            </div>
+          </div>
+          <a href="/imports">
+            <Button variant="outline">查看当前数据入口</Button>
+          </a>
+        </CardContent>
+      </Card>
+
+      {message && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          {message}
+        </div>
+      )}
+
       <div className="border-b border-gray-200">
         <nav className="flex space-x-8">
           <button
             onClick={() => setActiveTab('suggestions')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+            className={`border-b-2 px-1 py-2 text-sm font-medium ${
               activeTab === 'suggestions'
                 ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
             }`}
           >
-            调价建议
+            价格建议
           </button>
           <button
             onClick={() => setActiveTab('rules')}
-            className={`py-2 px-1 border-b-2 font-medium text-sm ${
+            className={`border-b-2 px-1 py-2 text-sm font-medium ${
               activeTab === 'rules'
                 ? 'border-blue-500 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'
             }`}
           >
-            定价规则
+            判断规则
           </button>
         </nav>
       </div>
 
       {activeTab === 'suggestions' && (
-        <div className="bg-white rounded-lg shadow-sm border overflow-hidden">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-lg font-medium text-gray-900">调价建议</h3>
-                <p className="text-sm text-gray-500 mt-1">
-                  基于市场分析和销售数据生成的智能调价建议
-                </p>
+        <Card>
+          <CardHeader className="flex flex-row items-start justify-between gap-4">
+            <div>
+              <CardTitle>价格建议清单</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                先复核高置信度建议，再决定是否批量执行。
+              </p>
+            </div>
+            {selectedSuggestions.size > 0 && (
+              <Button onClick={() => setShowBatchModal(true)}>
+                批量调价 ({selectedSuggestions.size})
+              </Button>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {suggestions.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                当前数据不足以产出价格建议。优先补齐成本价或更多订单数据。
               </div>
-              {selectedSuggestions.size > 0 && (
-                <button
-                  onClick={() => setShowBatchModal(true)}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-medium"
-                >
-                  批量调价 ({selectedSuggestions.size})
-                </button>
-              )}
-            </div>
-          </div>
-
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th className="px-4 py-3 text-left">
-                    <input
-                      type="checkbox"
-                      checked={selectedSuggestions.size === suggestions.length && suggestions.length > 0}
-                      onChange={(e) => handleSelectAll(e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    商品名称 / 调价方向
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    调整原因
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    置信度
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    预计影响
-                  </th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    操作
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {suggestions.map((suggestion) => (
-                  <tr key={suggestion.product_id} className="hover:bg-gray-50">
-                    <td className="px-4 py-4 whitespace-nowrap">
-                      <input
-                        type="checkbox"
-                        checked={selectedSuggestions.has(suggestion.product_id)}
-                        onChange={(e) => handleSelectSuggestion(suggestion.product_id, e.target.checked)}
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                      />
-                    </td>
-                    <td className="px-6 py-4 text-sm font-medium text-gray-900 max-w-xs">
-                      <div className="mb-2">{suggestion.product_name}</div>
-                      {/* Price arrow visualization */}
-                      <div className="flex items-center gap-1.5 text-xs">
-                        <span className="font-mono text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">
-                          {formatCurrency(suggestion.current_price)}
-                        </span>
-                        <span className={`text-lg font-bold ${
-                          suggestion.suggested_price > suggestion.current_price ? 'text-green-500' : 'text-red-500'
-                        }`}>
-                          {suggestion.suggested_price > suggestion.current_price ? '↗' : '↘'}
-                        </span>
-                        <span className={`font-mono font-semibold px-1.5 py-0.5 rounded ${
-                          suggestion.suggested_price > suggestion.current_price
-                            ? 'text-green-700 bg-green-100'
-                            : 'text-red-700 bg-red-100'
-                        }`}>
-                          {formatCurrency(suggestion.suggested_price)}
-                        </span>
-                        <span className="text-gray-400">
-                          ({Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100).toFixed(1)}%)
-                        </span>
-                      </div>
-                      {/* AI Reasoning */}
-                      <div className="mt-2">
-                        <AIReasoningPanel
-                          steps={buildPricingReasoningSteps(suggestion)}
-                          confidence={Math.round(suggestion.confidence * 100)}
-                          reflectionRounds={1}
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left">
+                        <input
+                          type="checkbox"
+                          checked={selectedSuggestions.size === suggestions.length && suggestions.length > 0}
+                          onChange={(e) => handleSelectAll(e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                         />
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
-                      <div className="truncate" title={suggestion.reason}>
-                        {suggestion.reason}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${getConfidenceColor(suggestion.confidence)}`}>
-                        {getConfidenceLabel(suggestion.confidence)}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-gray-900 max-w-xs">
-                      <div className="truncate" title={suggestion.expected_impact}>
-                        {suggestion.expected_impact}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <AIActionButton
-                        label="立即调价"
-                        confirmed={suggestion.status === 'adopted'}
-                        loading={adoptingIds.has(suggestion.product_id)}
-                        onAction={() => handleAdoptSuggestion(suggestion.product_id)}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        商品 / 建议
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        依据
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        置信度
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        预期影响
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                        操作
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200 bg-white">
+                    {suggestions.map((suggestion) => {
+                      const confidence = getConfidenceLabel(suggestion.confidence);
+                      const diffPercent = suggestion.current_price > 0
+                        ? Math.abs((suggestion.suggested_price - suggestion.current_price) / suggestion.current_price * 100)
+                        : 0;
 
-          {suggestions.length === 0 && (
-            <div className="text-center py-12">
-              <p className="text-gray-500">暂无调价建议</p>
-            </div>
-          )}
-        </div>
+                      return (
+                        <tr key={suggestion.product_id} className="hover:bg-gray-50">
+                          <td className="px-4 py-4 align-top">
+                            <input
+                              type="checkbox"
+                              checked={selectedSuggestions.has(suggestion.product_id)}
+                              onChange={(e) => handleSelectSuggestion(suggestion.product_id, e.target.checked)}
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            />
+                          </td>
+                          <td className="px-6 py-4 align-top text-sm">
+                            <div className="font-medium text-gray-900">{suggestion.product_name}</div>
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                              <span className="rounded bg-slate-100 px-2 py-1 font-mono text-slate-600">
+                                {formatCurrency(suggestion.current_price)}
+                              </span>
+                              <span className={suggestion.suggested_price > suggestion.current_price ? 'text-green-600' : 'text-red-600'}>
+                                {suggestion.suggested_price > suggestion.current_price ? '↗' : '↘'}
+                              </span>
+                              <span
+                                className={`rounded px-2 py-1 font-mono ${
+                                  suggestion.suggested_price > suggestion.current_price
+                                    ? 'bg-green-100 text-green-700'
+                                    : 'bg-red-100 text-red-700'
+                                }`}
+                              >
+                                {formatCurrency(suggestion.suggested_price)}
+                              </span>
+                              <span className="text-slate-500">({diffPercent.toFixed(1)}%)</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 align-top text-sm text-gray-700">
+                            {suggestion.reason}
+                          </td>
+                          <td className="px-6 py-4 align-top">
+                            <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${confidence.className}`}>
+                              {confidence.text}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 align-top text-sm text-gray-700">
+                            {suggestion.expected_impact || '需要结合执行结果继续观察'}
+                          </td>
+                          <td className="px-6 py-4 align-top text-sm">
+                            <Button
+                              size="sm"
+                              variant={suggestion.status === 'adopted' ? 'outline' : 'default'}
+                              disabled={adoptingIds.has(suggestion.product_id) || suggestion.status === 'adopted'}
+                              onClick={() => void handleAdoptSuggestion(suggestion.product_id)}
+                            >
+                              {suggestion.status === 'adopted'
+                                ? '已采纳'
+                                : adoptingIds.has(suggestion.product_id)
+                                  ? '处理中...'
+                                  : '采纳建议'}
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {activeTab === 'rules' && (
-        <div className="bg-white rounded-lg shadow-sm border">
-          <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">定价规则设置</h3>
-            <p className="text-sm text-gray-500 mt-1">
-              配置智能定价的规则和策略
+        <Card>
+          <CardHeader>
+            <CardTitle>当前判断规则</CardTitle>
+            <p className="mt-1 text-sm text-muted-foreground">
+              这些规则只使用现有商品、订单和库存数据，不依赖竞品或外部市场数据。
             </p>
-          </div>
-
-          <div className="p-6 space-y-4">
-            {rules.map((rule) => (
-              <div key={rule.rule_id} className="border border-gray-200 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <h4 className="text-sm font-medium text-gray-900">{rule.name}</h4>
-                    <p className="text-sm text-gray-500 mt-1">{rule.description}</p>
-                    <div className="mt-2">
-                      <span className="text-xs text-gray-400">优先级: {Number(rule.priority)}</span>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {rules.length === 0 ? (
+              <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+                暂无可用规则。
+              </div>
+            ) : (
+              rules.map((rule) => (
+                <div key={rule.rule_id} className="rounded-lg border p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-sm font-medium text-slate-900">{rule.name}</div>
+                      <div className="mt-1 text-sm text-slate-600">{rule.description}</div>
+                      <div className="mt-2 text-xs text-slate-400">优先级 {rule.priority}</div>
                     </div>
-                  </div>
-                  <div className="flex items-center">
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="sr-only peer"
-                        checked={rule.enabled}
-                        readOnly
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
+                    <span
+                      className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                        rule.enabled ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {rule.enabled ? '启用中' : '未启用'}
+                    </span>
                   </div>
                 </div>
-              </div>
-            ))}
-
-            {rules.length === 0 && (
-              <div className="text-center py-8">
-                <p className="text-gray-500">暂无定价规则</p>
-              </div>
+              ))
             )}
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       )}
 
-      {/* 批量调价模态框 */}
       {showBatchModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-lg max-w-md w-full mx-4">
-            <div className="px-6 py-4 border-b border-gray-200">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-white">
+            <div className="border-b border-gray-200 px-6 py-4">
               <h3 className="text-lg font-medium text-gray-900">批量调价</h3>
-              <p className="text-sm text-gray-500 mt-1">
-                已选择 {selectedSuggestions.size} 个商品
-              </p>
+              <p className="mt-1 text-sm text-gray-500">已选择 {selectedSuggestions.size} 个商品</p>
             </div>
 
-            <div className="px-6 py-4 space-y-4">
+            <div className="space-y-4 px-6 py-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  调价方式
-                </label>
+                <label className="mb-2 block text-sm font-medium text-gray-700">调价方式</label>
                 <select
                   value={batchOperation}
                   onChange={(e) => setBatchOperation(e.target.value as 'multiply' | 'add' | 'set')}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
-                  <option value="multiply">按比例调价 (乘以)</option>
-                  <option value="add">按数值调价 (加/减)</option>
+                  <option value="multiply">按比例调价</option>
+                  <option value="add">按数值调价</option>
                   <option value="set">设置固定价格</option>
                 </select>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="mb-2 block text-sm font-medium text-gray-700">
                   {batchOperation === 'multiply' ? '调价倍数' : batchOperation === 'add' ? '调价金额' : '新价格'}
                 </label>
                 <input
@@ -464,44 +461,29 @@ export default function PricingPage() {
                   step="0.01"
                   value={batchValue}
                   onChange={(e) => setBatchValue(e.target.value)}
-                  placeholder={
-                    batchOperation === 'multiply' ? '如：1.1 表示涨价10%' :
-                    batchOperation === 'add' ? '如：10 表示涨价10元，-5表示降价5元' :
-                    '输入新的价格'
-                  }
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  调价原因 (可选)
-                </label>
+                <label className="mb-2 block text-sm font-medium text-gray-700">执行原因</label>
                 <input
                   type="text"
                   value={batchReason}
                   onChange={(e) => setBatchReason(e.target.value)}
-                  placeholder="如：市场竞争调整、促销活动等"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="例如：价格复核批量执行"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
             </div>
 
-            <div className="px-6 py-4 border-t border-gray-200 flex gap-3 justify-end">
-              <button
-                onClick={() => setShowBatchModal(false)}
-                disabled={batchProcessing}
-                className="px-4 py-2 text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50"
-              >
+            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+              <Button variant="outline" disabled={batchProcessing} onClick={() => setShowBatchModal(false)}>
                 取消
-              </button>
-              <button
-                onClick={handleBatchUpdate}
-                disabled={batchProcessing || !batchValue}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-              >
+              </Button>
+              <Button disabled={batchProcessing || !batchValue} onClick={() => void handleBatchUpdate()}>
                 {batchProcessing ? '处理中...' : '确认调价'}
-              </button>
+              </Button>
             </div>
           </div>
         </div>

@@ -138,6 +138,24 @@ class AlertScanResponse(BaseModel):
     message: str = "Alert scan started"
 
 
+class IssueActionLookupItem(BaseModel):
+    issue_type: str = Field(..., min_length=1, max_length=100)
+    issue_key: str = Field(..., min_length=1, max_length=500)
+
+
+class IssueActionLookupRequest(BaseModel):
+    issues: list[IssueActionLookupItem] = Field(default_factory=list)
+
+
+class IssueActionRequest(BaseModel):
+    issue_type: str = Field(..., min_length=1, max_length=100)
+    issue_key: str = Field(..., min_length=1, max_length=500)
+    title: str | None = None
+    status: str = Field(..., pattern="^(acknowledged|resolved|ignored)$")
+    notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 # ── Bundles ──────────────────────────────────────────────────
 
 
@@ -218,6 +236,15 @@ class ActionItem(BaseModel):
     link: str
 
 
+class ActionOutcome(BaseModel):
+    title: str
+    detail: str
+    category: str
+    link: str
+    happened_at: str
+    next_check: str = ""
+
+
 class DashboardOverview(BaseModel):
     total_products: int = 0
     today_orders: int = 0
@@ -230,6 +257,7 @@ class DashboardOverview(BaseModel):
     pending_tasks: int = 0
     recent_sync_state: list[dict[str, Any]] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
+    recent_outcomes: list[ActionOutcome] = Field(default_factory=list)
 
 
 class SalesTrendPoint(BaseModel):

@@ -17,30 +17,27 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.ab_testing import router as ab_testing_router
 from src.api.alerts import router as alerts_router
-from src.api.analytics import router as analytics_router
 from src.api.boss_assistant import router as boss_assistant_router
 from src.api.bundles import router as bundles_router
 from src.api.chat import router as chat_router
-from src.api.competitors import router as competitors_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
 from src.api.feedback import router as feedback_router
 from src.api.insights import router as insights_router
 from src.api.inventory import router as inventory_router
+from src.api.issue_actions import router as issue_actions_router
 from src.api.knowledge import router as knowledge_router
 from src.api.listing import router as listing_router
+from src.api.manual_import import router as manual_import_router
 from src.api.metrics_api import router as metrics_router
 from src.api.orders import router as orders_router
 from src.api.pricing import products_pricing_router
 from src.api.pricing import router as pricing_router
-from src.api.pricing_intelligence import router as pricing_intel_router
 from src.api.products import router as products_router
 from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
-from src.api.reports import router as reports_router
 from src.api.selection import router as selection_router
-from src.api.selection_intelligence import router as selection_intel_router
 from src.api.store_config import router as store_config_router
 from src.api.stores import router as stores_router
 from src.api.sync import router as sync_router
@@ -535,19 +532,16 @@ app.include_router(dashboard_router)
 app.include_router(sync_router)
 app.include_router(sync_receiver_router)
 app.include_router(sync_status_router)
+app.include_router(manual_import_router)
+app.include_router(issue_actions_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
-app.include_router(reports_router)
 app.include_router(store_config_router)
 app.include_router(system_router)
-app.include_router(competitors_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)
-app.include_router(pricing_intel_router)
-app.include_router(selection_intel_router)
 # products_pricing_router moved above products_router
-app.include_router(analytics_router)
 app.include_router(feedback_router)
 app.include_router(inventory_router)
 app.include_router(insights_router)

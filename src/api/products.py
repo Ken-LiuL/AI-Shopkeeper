@@ -29,6 +29,103 @@ router = APIRouter(prefix="/api/products", tags=["products"])
 v1_router = APIRouter(prefix="/api/v1/products", tags=["products_v1"])
 
 
+async def _table_exists(db, table_name: str) -> bool:
+    with contextlib.suppress(Exception):
+        exists = await db.fetchval(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )
+            """,
+            table_name,
+        )
+        return bool(exists)
+    return False
+
+
+async def _upsert_product_knowledge_from_product(conn, product: dict[str, Any]) -> None:
+    if not await _table_exists(conn, "product_knowledge"):
+        return
+
+    product_id = str(product.get("product_id") or "")
+    sku_id = str(product.get("sku_id") or product_id)
+    spu_id = str(product.get("spu_id") or product.get("sku_id") or product_id)
+    if not spu_id:
+        return
+
+    name = str(product.get("name") or "未命名商品")
+    category = str(product.get("category") or "")
+    brand = str(product.get("brand") or "")
+    spec = str(product.get("spec") or "")
+    description = str(product.get("description") or "")
+    status = str(product.get("status") or "active")
+    price = product.get("retail_price")
+    combined_text = " ".join(
+        part for part in [name, brand, category, spec, description] if part
+    ) or name
+
+    await conn.execute(
+        """
+        INSERT INTO product_knowledge (
+            spu_id, sku_id, name, category, brand, spec, description,
+            image_text, combined_text, image_urls, price, status, updated_at
+        ) VALUES (
+            $1, $2, $3, NULLIF($4, ''), NULLIF($5, ''), NULLIF($6, ''), NULLIF($7, ''),
+            '', $8, '{}', $9, $10, NOW()
+        )
+        ON CONFLICT (spu_id, sku_id) DO UPDATE SET
+            name = EXCLUDED.name,
+            category = COALESCE(NULLIF(EXCLUDED.category, ''), product_knowledge.category),
+            brand = COALESCE(NULLIF(EXCLUDED.brand, ''), product_knowledge.brand),
+            spec = COALESCE(NULLIF(EXCLUDED.spec, ''), product_knowledge.spec),
+            description = COALESCE(NULLIF(EXCLUDED.description, ''), product_knowledge.description),
+            combined_text = EXCLUDED.combined_text,
+            price = COALESCE(EXCLUDED.price, product_knowledge.price),
+            status = EXCLUDED.status,
+            updated_at = NOW()
+        """,
+        spu_id,
+        sku_id,
+        name,
+        category,
+        brand,
+        spec,
+        description,
+        combined_text,
+        price,
+        status,
+    )
+
+
+async def _record_price_change(
+    conn,
+    *,
+    product_id: str,
+    old_price: Any,
+    new_price: Any,
+    reason: str,
+) -> None:
+    if old_price is None or new_price is None:
+        return
+    if float(old_price) == float(new_price):
+        return
+    if not await _table_exists(conn, "price_history"):
+        return
+
+    await conn.execute(
+        """
+        INSERT INTO price_history (product_id, old_price, new_price, reason, changed_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        """,
+        product_id,
+        old_price,
+        new_price,
+        reason,
+    )
+
+
 @v1_router.get("/list", response_model=PaginatedResponse[dict])
 async def list_products_v1(
     page: int = Query(1, ge=1),
@@ -242,56 +339,7 @@ async def _low_stock_impl(pool, threshold: int, page: int, page_size: int) -> Pa
             offset,
         )
     else:
-        # Fallback: simulate low-stock alerts from products table when stock is missing
-        logger.info("No stock data available; simulating low-stock list from products table")
-
-        rows = await pool.fetch(
-            """SELECT product_id, name, brand, category, retail_price, status,
-                      COALESCE(
-                          stock,
-                          CASE WHEN retail_price < 20 THEN 5
-                               WHEN retail_price < 50 THEN 8
-                               ELSE 12 END
-                      ) as stock,
-                      'products' as source
-               FROM products
-               WHERE status = 'active'
-                 AND retail_price > 0
-                 AND name != ''
-               ORDER BY retail_price ASC
-               LIMIT $1 OFFSET $2""",
-            page_size,
-            offset,
-        )
-
-        total = (
-            await pool.fetchval(
-                """SELECT COUNT(*) FROM products
-               WHERE status = 'active'
-                 AND retail_price > 0
-                 AND name != ''"""
-            )
-            or 0
-        )
-
-        # Add simulated low-stock fields
-        processed_rows = []
-        for row in rows:
-            try:
-                row_dict = dict(row)
-                # Add fields expected by frontend
-                retail_price = row_dict["retail_price"]
-                if retail_price is not None:
-                    row_dict["cost_price"] = float(retail_price) * 0.7  # Assume 30% margin
-                else:
-                    row_dict["cost_price"] = 0.0
-                row_dict["supplier_link"] = f"需要补货: {row_dict['name']}"
-                row_dict["last_restock"] = None
-                processed_rows.append(row_dict)
-            except Exception as e:
-                logger.error(f"Error processing product row: {e}, row: {dict(row)}")
-                continue
-        rows = processed_rows
+        logger.info("No verified low-stock products found; returning empty list")
 
     return PaginatedResponse(
         data=[dict(r) for r in rows], total=total, page=page, page_size=page_size
@@ -299,19 +347,40 @@ async def _low_stock_impl(pool, threshold: int, page: int, page_size: int) -> Pa
 
 
 @router.get("/inventory", response_model=APIResponse[dict])
-async def inventory_overview() -> APIResponse[dict]:
+async def inventory_overview(
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    search: str | None = Query(None),
+    status: str | None = Query(None),
+    category: str | None = Query(None),
+) -> APIResponse[dict]:
     """Inventory overview and status summary."""
     from fastapi import HTTPException
 
     pool = pg.get_pool()
     try:
-        return await _inventory_overview_impl(pool)
+        return await _inventory_overview_impl(
+            pool,
+            page=page,
+            limit=limit,
+            search=search,
+            status=status,
+            category=category,
+        )
     except Exception as exc:
         logger.error("Failed to fetch inventory overview: %s", exc)
         raise HTTPException(status_code=500, detail="Failed to fetch inventory overview") from exc
 
 
-async def _inventory_overview_impl(pool) -> APIResponse[dict]:
+async def _inventory_overview_impl(
+    pool,
+    *,
+    page: int,
+    limit: int,
+    search: str | None,
+    status: str | None,
+    category: str | None,
+) -> APIResponse[dict]:
     # Get inventory status summary from products table
     total_products = await pool.fetchval("SELECT COUNT(*) FROM products") or 0
     active_products = (
@@ -340,7 +409,7 @@ async def _inventory_overview_impl(pool) -> APIResponse[dict]:
     category_breakdown = await pool.fetch(
         """SELECT category,
                   COUNT(*)::int AS count,
-                  COUNT(CASE WHEN status = '在售' THEN 1 END)::int AS active_count
+                  COUNT(CASE WHEN status = 'active' THEN 1 END)::int AS active_count
            FROM products
            WHERE category IS NOT NULL AND category != ''
            GROUP BY category
@@ -394,6 +463,99 @@ async def _inventory_overview_impl(pool) -> APIResponse[dict]:
             }
         )
 
+    query_conditions = ["1 = 1"]
+    query_params: list[Any] = []
+    idx = 1
+
+    if search:
+        query_conditions.append(
+            f"(name ILIKE ${idx} OR COALESCE(brand, '') ILIKE ${idx} OR COALESCE(sku_id, '') ILIKE ${idx})"
+        )
+        query_params.append(f"%{search.strip()}%")
+        idx += 1
+
+    if category:
+        query_conditions.append(f"category = ${idx}")
+        query_params.append(category)
+        idx += 1
+
+    if status == "out_of_stock":
+        query_conditions.append("COALESCE(stock, 0) = 0")
+    elif status == "low_stock":
+        query_conditions.append(
+            """
+            (
+                   (COALESCE(monthly_sales, 0) >= 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.5)
+                OR (COALESCE(monthly_sales, 0) >= 30 AND COALESCE(monthly_sales, 0) < 100 AND COALESCE(stock, 0) < COALESCE(monthly_sales, 0) * 0.3)
+                OR (COALESCE(monthly_sales, 0) < 30 AND COALESCE(stock, 0) < 5)
+            )
+            """
+        )
+    elif status in {"active", "inactive", "delisted"}:
+        query_conditions.append(f"status = ${idx}")
+        query_params.append(status)
+        idx += 1
+
+    where_clause = " AND ".join(query_conditions)
+    total_filtered = (
+        await pool.fetchval(f"SELECT COUNT(*) FROM products WHERE {where_clause}", *query_params) or 0
+    )
+    offset = (page - 1) * limit
+    product_rows = await pool.fetch(
+        f"""
+        SELECT
+            product_id,
+            name,
+            category,
+            brand,
+            retail_price,
+            cost_price,
+            COALESCE(stock, 0) AS stock,
+            COALESCE(monthly_sales, 0) AS monthly_sales,
+            status,
+            updated_at
+        FROM products
+        WHERE {where_clause}
+        ORDER BY COALESCE(monthly_sales, 0) DESC, updated_at DESC NULLS LAST, name ASC
+        LIMIT ${idx} OFFSET ${idx + 1}
+        """,
+        *query_params,
+        limit,
+        offset,
+    )
+
+    products = []
+    for row in product_rows:
+        record = dict(row)
+        stock = int(record.get("stock") or 0)
+        monthly_sales = int(record.get("monthly_sales") or 0)
+        threshold = 5
+        if monthly_sales >= 100:
+            threshold = int(monthly_sales * 0.5)
+        elif monthly_sales >= 30:
+            threshold = int(monthly_sales * 0.3)
+        if stock == 0:
+            derived_status = "out_of_stock"
+        elif stock < max(threshold, 1):
+            derived_status = "low_stock"
+        else:
+            derived_status = record.get("status") or "active"
+        products.append(
+            {
+                "product_id": str(record["product_id"]),
+                "name": record["name"],
+                "category": record.get("category") or "未分类",
+                "brand": record.get("brand"),
+                "retail_price": float(record.get("retail_price") or 0),
+                "cost_price": float(record.get("cost_price") or 0),
+                "estimated_stock": stock,
+                "monthly_sales": monthly_sales,
+                "threshold": threshold,
+                "inventory_value": round(float(record.get("cost_price") or 0) * stock, 2),
+                "status": derived_status,
+            }
+        )
+
     return APIResponse(
         data={
             "summary": {
@@ -412,6 +574,10 @@ async def _inventory_overview_impl(pool) -> APIResponse[dict]:
                 for r in category_breakdown
             ],
             "low_stock_items": formatted_low_stock_items,
+            "products": products,
+            "total": total_filtered,
+            "page": page,
+            "limit": limit,
         }
     )
 
@@ -1033,16 +1199,37 @@ async def update_product(product_id: str, body: ProductUpdateRequest) -> APIResp
     params.append(product_id)
 
     try:
-        row = await pool.fetchrow(
-            f"UPDATE products SET {', '.join(set_parts)} WHERE product_id = ${idx} RETURNING *",
-            *params,
-        )
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing_row = await conn.fetchrow(
+                    "SELECT * FROM products WHERE product_id = $1",
+                    product_id,
+                )
+                if not existing_row:
+                    raise NotFoundError("Product", product_id)
+
+                row = await conn.fetchrow(
+                    f"UPDATE products SET {', '.join(set_parts)} WHERE product_id = ${idx} RETURNING *",
+                    *params,
+                )
+                if not row:
+                    raise NotFoundError("Product", product_id)
+
+                row_dict = dict(row)
+                await _upsert_product_knowledge_from_product(conn, row_dict)
+                await _record_price_change(
+                    conn,
+                    product_id=product_id,
+                    old_price=existing_row.get("retail_price"),
+                    new_price=row.get("retail_price"),
+                    reason="商品修复工作台手动更新",
+                )
+    except NotFoundError:
+        raise
     except Exception as exc:
         logger.error("Failed to update product %s: %s", product_id, exc)
         raise HTTPException(status_code=500, detail="Failed to update product") from exc
-    if not row:
-        raise NotFoundError("Product", product_id)
-    return APIResponse(data=dict(row))
+    return APIResponse(data=row_dict)
 
 
 @router.delete("/{product_id}", response_model=APIResponse[dict])

@@ -93,13 +93,11 @@ async def list_capabilities() -> APIResponse[list]:
     """返回 AI 店长助手的能力列表（用于前端快捷入口展示）。"""
     return APIResponse(
         data=[
-            {"id": "sales_analysis", "name": "销量分析", "icon": "📊", "example": "今天销量怎么样"},
+            {"id": "sales_analysis", "name": "今日判断", "icon": "🧭", "example": "今天最该先处理什么"},
             {"id": "inventory", "name": "库存管理", "icon": "📦", "example": "哪些商品快断货了"},
-            {"id": "competitors", "name": "竞品监控", "icon": "🏪", "example": "竞品最近有什么变化"},
-            {"id": "pricing", "name": "定价建议", "icon": "💰", "example": "血压计定价多少合适"},
+            {"id": "pricing", "name": "价格复核", "icon": "💰", "example": "哪些商品的价格需要复核"},
             {"id": "selection", "name": "选品推荐", "icon": "🎯", "example": "最近适合上什么新品"},
             {"id": "alerts", "name": "预警处理", "icon": "🔔", "example": "有什么需要处理的预警"},
-            {"id": "cs_management", "name": "客服管理", "icon": "💬", "example": "今天客服表现怎么样"},
-            {"id": "reports", "name": "经营报告", "icon": "📈", "example": "给我看看本周报告"},
+            {"id": "cs_management", "name": "客服管理", "icon": "💬", "example": "今天客服哪里最容易出错"},
         ]
     )

@@ -36,7 +36,7 @@ export default function LoginPage() {
       <div className="max-w-md w-full space-y-8 bg-white p-8 rounded-xl shadow-md">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900">AI 店长</h1>
-          <p className="mt-2 text-sm text-gray-500">智能管理后台 · 请登录</p>
+          <p className="mt-2 text-sm text-gray-500">经营动作系统 · 请登录</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-5">

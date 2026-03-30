@@ -33,14 +33,13 @@ function generateSessionId() {
 }
 
 const INTENT_LABELS: Record<string, string> = {
-  sales_analysis: '📊 销量分析',
+  sales_analysis: '🧭 今日判断',
   inventory: '📦 库存管理',
-  competitors: '🏪 竞品监控',
-  pricing: '💰 定价建议',
+  competitors: '🏪 外部数据缺失',
+  pricing: '💰 价格复核',
   selection: '🎯 选品推荐',
   alerts: '🔔 预警处理',
   cs_management: '💬 客服管理',
-  reports: '📈 经营报告',
   general: '💬 通用咨询',
 };
 
@@ -52,12 +51,11 @@ function getIntentLabel(intent?: string): string | null {
 // ── Quick Actions ─────────────────────────────────────────────
 
 const QUICK_ACTIONS = [
-  { text: '今天经营数据怎么样', icon: '📊' },
+  { text: '今天最该先处理什么', icon: '🧭' },
   { text: '哪些商品快断货了', icon: '📦' },
-  { text: '竞品最近有什么价格变化', icon: '🏪' },
   { text: '本周有什么需要处理的预警', icon: '🔔' },
-  { text: '帮我看看最近的客户评价', icon: '⭐' },
-  { text: '给我定价建议', icon: '💰' },
+  { text: '今天客服哪里最容易出错', icon: '⭐' },
+  { text: '哪些商品的价格需要复核', icon: '💰' },
 ];
 
 // ── Typing Effect ─────────────────────────────────────────────
@@ -149,7 +147,7 @@ function ChatPage() {
       id: 'welcome',
       role: 'assistant',
       content:
-        '老板好！我是 AI 店长助手，您的专属经营顾问 📊\n\n我可以帮您分析销量、查库存预警、监控竞品、给定价建议、推荐选品……有什么想了解的？',
+        '老板好！我是 AI 店长助手。\n\n我现在主要基于商品、订单、库存三条真实数据链帮您做今日判断、库存风险、价格复核、选品建议和客服质量分析。没有真实数据支撑的内容，我会直接说明不能下结论。',
       timestamp: new Date(),
     },
   ]);
@@ -236,7 +234,7 @@ function ChatPage() {
           <h1 className="text-3xl font-bold tracking-tight">🤖 AI 店长助手</h1>
           <AICapabilityHeader
             capabilities={['DeepSeek 经营分析', '实时数据接入', '智能意图识别', '多轮对话记忆']}
-            description="您的智能经营顾问 — 数据分析、库存管理、定价建议、竞品监控"
+            description="您的经营顾问入口 — 今日待办、库存风险、价格复核、客服质量"
           />
         </div>
       </div>
@@ -256,8 +254,8 @@ function ChatPage() {
               <ul className="space-y-1 list-disc list-inside">
                 <li>今天销量比昨天如何？</li>
                 <li>哪些商品库存快不够了？</li>
-                <li>竞品最近降价了吗？</li>
-                <li>血压计应该定什么价？</li>
+                <li>哪些商品的价格需要复核？</li>
+                <li>今天客服最容易出错的点是什么？</li>
               </ul>
               <p className="text-gray-400 pt-1">数据基于店铺实时数据，结论直接可用。</p>
             </CardContent>

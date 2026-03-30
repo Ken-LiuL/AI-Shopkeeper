@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import logging
 from typing import Any
 
@@ -117,98 +118,160 @@ async def get_run(run_id: str) -> APIResponse[SelectionRunDetail]:
 @router.get("/recommendations", response_model=APIResponse[list[dict]])
 async def get_recommendations() -> APIResponse[list[dict]]:
     pool = pg.get_pool()
-    row = await pool.fetchrow(
-        """SELECT result FROM selection_runs
-           WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1"""
-    )
-    if row and row["result"]:
-        import json
-
-        result = json.loads(row["result"]) if isinstance(row["result"], str) else row["result"]
-        recommendations = result.get("recommendations", [])
-        if recommendations:
-            return APIResponse(data=recommendations)
-
-    # Fallback: generate recommendations using continuous scoring algorithm
-    import contextlib
-
-    from src.services.selection_scoring import SelectionScoringService
-
-    recs: list[dict] = []
-    with contextlib.suppress(Exception):
-        # Get diverse product samples for recommendation
-        products = await pool.fetch(
-            """SELECT product_id, name, category, brand, retail_price
-               FROM products
-               WHERE status = 'active'
-                 AND retail_price > 0
-                 AND name != ''
-                 AND category != ''
-               ORDER BY retail_price DESC, RANDOM()
-               LIMIT 25"""
+    try:
+        rows = await pool.fetch(
+            """
+            WITH knowledge_counts AS (
+                SELECT product_id, COUNT(*) AS knowledge_count
+                FROM product_knowledge
+                GROUP BY product_id
+            )
+            SELECT
+                p.product_id,
+                p.name,
+                COALESCE(p.category, '') AS category,
+                COALESCE(p.brand, '') AS brand,
+                COALESCE(p.retail_price, 0) AS retail_price,
+                COALESCE(p.cost_price, 0) AS cost_price,
+                COALESCE(p.monthly_sales, 0) AS monthly_sales,
+                COALESCE(p.stock, 0) AS stock,
+                COALESCE(k.knowledge_count, 0) AS knowledge_count
+            FROM products p
+            LEFT JOIN knowledge_counts k ON k.product_id = p.product_id
+            WHERE p.status = 'active'
+              AND COALESCE(p.retail_price, 0) > 0
+              AND COALESCE(p.name, '') != ''
+            ORDER BY COALESCE(p.monthly_sales, 0) DESC, COALESCE(p.stock, 0) DESC, p.updated_at DESC NULLS LAST
+            LIMIT 50
+            """
+        )
+    except Exception:
+        rows = await pool.fetch(
+            """
+            SELECT
+                p.product_id,
+                p.name,
+                COALESCE(p.category, '') AS category,
+                COALESCE(p.brand, '') AS brand,
+                COALESCE(p.retail_price, 0) AS retail_price,
+                COALESCE(p.cost_price, 0) AS cost_price,
+                COALESCE(p.monthly_sales, 0) AS monthly_sales,
+                COALESCE(p.stock, 0) AS stock,
+                0 AS knowledge_count
+            FROM products p
+            WHERE p.status = 'active'
+              AND COALESCE(p.retail_price, 0) > 0
+              AND COALESCE(p.name, '') != ''
+            ORDER BY COALESCE(p.monthly_sales, 0) DESC, COALESCE(p.stock, 0) DESC, p.updated_at DESC NULLS LAST
+            LIMIT 50
+            """
         )
 
-        for p in products:
-            product_data = {
-                "product_id": p["product_id"],
-                "spu_id": p["product_id"],
-                "name": p["name"],
-                "category": p.get("category", ""),
-                "brand": p.get("brand", ""),
-                "retail_price": float(p["retail_price"]),
-            }
+    recommendations: list[dict[str, Any]] = []
+    for row in rows:
+        monthly_sales = int(row["monthly_sales"] or 0)
+        stock = int(row["stock"] or 0)
+        price = float(row["retail_price"] or 0)
+        cost = float(row["cost_price"] or 0)
+        knowledge_count = int(row["knowledge_count"] or 0)
 
-            # Calculate continuous score using new algorithm
-            score, score_breakdown = await SelectionScoringService.calculate_comprehensive_score(
-                product_data, pool
-            )
+        profit_margin = round(((price - cost) / price * 100), 1) if price > 0 and cost > 0 else 0.0
+        daily_sales = monthly_sales / 30 if monthly_sales > 0 else 0
+        stock_days = round(stock / daily_sales, 1) if daily_sales > 0 else None
 
-            # Generate explanation
-            explanation = await SelectionScoringService.generate_scoring_explanation(
-                product_data, score_breakdown
-            )
+        demand_score = min(10.0, round(math.log1p(monthly_sales) / math.log(2.2), 1)) if monthly_sales > 0 else 0.5
 
-            # Risk assessment based on price and category
-            price = product_data["retail_price"]
-            category = product_data["category"]
-
-            if price > 1000:
-                risk_note = "高价值医疗设备，需要专业资质和培训，客户群体有限"
-            elif price > 500:
-                risk_note = "中高价位产品，建议小批量试销，关注回款周期"
-            elif price > 100:
-                risk_note = "中价位产品，适合常规销售，注意库存管理"
-            elif price > 50:
-                risk_note = "经济型产品，销售频次较高，需要稳定供应链"
+        stock_score = 4.5
+        if stock > 0 and stock_days is not None:
+            if 7 <= stock_days <= 45:
+                stock_score = 9.0
+            elif stock_days < 7:
+                stock_score = 6.5
             else:
-                risk_note = "低价位商品，适合引流促销，但利润空间有限"
+                stock_score = 5.5
+        elif stock > 0:
+            stock_score = 7.0
+        elif monthly_sales > 0:
+            stock_score = 2.0
+        else:
+            stock_score = 4.0
 
-            # Add medical device specific warnings
-            from src.services.medical_device_service import MedicalDeviceService
+        margin_score = min(10.0, round(profit_margin / 4.5, 1)) if profit_margin > 0 else 3.0
+        knowledge_score = 9.0 if knowledge_count > 0 else 4.0
 
-            is_medical = MedicalDeviceService.is_medical_device(category, product_data["name"])
-            if is_medical:
-                device_type = MedicalDeviceService.classify_medical_device_type(
-                    product_data["name"], category
-                )
-                if device_type in ["二类器械", "三类器械"]:
-                    risk_note += "；医疗器械需要相关资质和合规经营"
+        recommendation_score = round(
+            demand_score * 0.4 + stock_score * 0.25 + margin_score * 0.2 + knowledge_score * 0.15,
+            1,
+        )
 
-            recs.append(
-                {
-                    "product_id": p["product_id"],
-                    "name": p["name"],
-                    "category": category,
-                    "brand": p.get("brand", ""),
-                    "price": price,
-                    "reason": explanation,
-                    "risk_warning": risk_note,
-                    "score": score,  # Now truly continuous
-                    "data_source": f"多因子连续评分算法（价格:{score_breakdown['price_factor']:.3f}，利润:{score_breakdown['margin_factor']:.3f}，品类:{score_breakdown['category_factor']:.3f}，周转:{score_breakdown['turnover_factor']:.3f}，季节:{score_breakdown['seasonal_factor']:.3f}）",
-                    "score_breakdown": score_breakdown,  # For debugging/analysis
-                }
-            )
+        status = "recommended" if recommendation_score >= 7.5 else "considering"
 
-    if recs:
-        return APIResponse(data=recs)
-    return APIResponse(data=[], message="功能待开通")
+        strengths: list[str] = []
+        risks: list[str] = []
+        data_source = ["订单销量", "库存", "商品主档"]
+        if knowledge_count > 0:
+            data_source.append("知识中心")
+
+        if monthly_sales >= 30:
+            strengths.append(f"近 30 天销量 {monthly_sales} 件")
+        elif monthly_sales > 0:
+            strengths.append(f"近 30 天有 {monthly_sales} 件销量")
+        else:
+            risks.append("近 30 天暂无销量")
+
+        if stock > 0:
+            if stock_days is not None:
+                strengths.append(f"预计库存可售 {stock_days} 天")
+            else:
+                strengths.append(f"当前库存 {stock} 件")
+        else:
+            risks.append("当前库存为 0")
+
+        if profit_margin >= 25:
+            strengths.append(f"毛利率约 {profit_margin}%")
+        elif cost > 0:
+            risks.append(f"毛利率仅 {profit_margin}%")
+        else:
+            risks.append("缺少成本价，毛利判断不完整")
+
+        if knowledge_count > 0:
+            strengths.append("已有客服知识支撑")
+        else:
+            risks.append("缺少知识条目，客服与推荐支撑偏弱")
+
+        recommendations.append(
+            {
+                "product_id": row["product_id"],
+                "name": row["name"],
+                "category": row["category"],
+                "brand": row["brand"],
+                "price": round(price, 2),
+                "profit_margin": profit_margin,
+                "demand_score": demand_score,
+                "recommendation_score": recommendation_score,
+                "monthly_sales": monthly_sales,
+                "stock": stock,
+                "stock_days": stock_days,
+                "knowledge_count": knowledge_count,
+                "knowledge_ready": knowledge_count > 0,
+                "status": status,
+                "reason": "；".join(strengths[:3]) if strengths else "当前数据不足，建议继续观察",
+                "risk_warning": "；".join(risks[:3]) if risks else "",
+                "score_breakdown": {
+                    "销量": round(demand_score, 1),
+                    "库存": round(stock_score, 1),
+                    "毛利": round(margin_score, 1),
+                    "知识": round(knowledge_score, 1),
+                },
+                "data_source": data_source,
+            }
+        )
+
+    recommendations.sort(key=lambda item: item["recommendation_score"], reverse=True)
+
+    if recommendations:
+        return APIResponse(
+            data=recommendations,
+            message="基于商品、订单、库存和知识完整度生成重点运营候选",
+        )
+    return APIResponse(data=[], message="暂无可用于判断的商品数据")
