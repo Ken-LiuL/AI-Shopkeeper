@@ -507,9 +507,9 @@ function CustomerServicePage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">💬 客服质量运营台</h1>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">💬 客服质量运营台</h1>
           <p className="text-muted-foreground mt-1">
             先补知识，再看转人工和低质量回复。客服模块的目标不是“能聊天”，而是“稳定少出错”。
           </p>
@@ -519,7 +519,7 @@ function CustomerServicePage() {
           size="sm"
           onClick={handleRefresh}
           disabled={refreshing}
-          className="gap-2"
+          className="gap-2 min-h-[44px]"
         >
           {refreshing ? (
             <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400" />
@@ -730,12 +730,12 @@ function CustomerServicePage() {
       </section>
 
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
           <div>
             <h2 className="text-lg font-semibold">内部验证</h2>
             <p className="text-sm text-muted-foreground">仅用于运营或研发验证客服回复，不再作为主界面重心。</p>
           </div>
-          <Button variant="outline" size="sm" onClick={createTestSession} className="gap-1">
+          <Button variant="outline" size="sm" onClick={createTestSession} className="gap-1 min-h-[44px]">
             ➕ 新建测试客户
           </Button>
         </div>
@@ -778,7 +778,7 @@ function CustomerServicePage() {
               ))}
             </div>
 
-            <Card className="lg:col-span-3 flex flex-col">
+            <Card className="lg:col-span-3 flex flex-col h-[calc(100dvh-220px)] lg:h-auto">
               <CardHeader className="border-b py-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm flex items-center gap-2">
@@ -790,7 +790,7 @@ function CustomerServicePage() {
                   </Badge>
                 </div>
               </CardHeader>
-              <CardContent className="flex-1 flex flex-col p-0" style={{ maxHeight: '400px' }}>
+              <CardContent className="flex-1 flex flex-col p-0 min-h-0">
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
                   {activeTestSession && currentTestSession?.messages.length === 0 && (
                     <div className="text-center text-sm text-muted-foreground py-8">

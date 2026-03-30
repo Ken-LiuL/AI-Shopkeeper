@@ -250,7 +250,7 @@ export default function OrdersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">📋 异常订单工作池</h1>
           <p className="mt-1 text-sm text-gray-500">优先看金额异常、退款和处理中订单，不再把订单页当作纯流水列表。</p>
@@ -260,7 +260,7 @@ export default function OrdersPage() {
           <button
             type="button"
             onClick={() => window.open('/api/export/orders')}
-            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium hover:bg-accent"
+            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-2 min-h-[44px] text-sm font-medium hover:bg-accent"
           >
             导出 Excel
           </button>

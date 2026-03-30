@@ -41,8 +41,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen">
       <Sidebar />
-      <main className="flex-1 overflow-auto w-full md:w-auto">
-        <div className="p-6 lg:p-8 pt-16 md:pt-6">{children}</div>
+      <main className="flex-1 overflow-auto w-full md:w-auto min-w-0">
+        <div className="p-4 md:p-6 lg:p-8 pt-16 md:pt-6">{children}</div>
       </main>
       <OnboardingGuide />
       <AIAssistantFAB />

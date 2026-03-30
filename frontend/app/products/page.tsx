@@ -440,20 +440,20 @@ function ProductsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-wrap justify-between items-start gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">📦 商品修复工作台</h1>
+          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">📦 商品修复工作台</h1>
           <p className="text-muted-foreground">先补齐主档和价格缺口，再处理断货和补货动作，商品数据才足够支撑 AI。</p>
         </div>
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => window.open('/api/export/products')}
-            className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 text-sm font-medium hover:bg-accent"
+            className="inline-flex items-center rounded-md border border-input bg-background px-4 py-2 min-h-[44px] text-sm font-medium hover:bg-accent"
           >
             导出 Excel
           </button>
-          <a href="/imports" className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90">
+          <a href="/imports" className="inline-flex items-center rounded-md bg-primary px-4 py-2 min-h-[44px] text-sm font-medium text-primary-foreground hover:bg-primary/90">
             导入商品
           </a>
         </div>
@@ -781,6 +781,7 @@ function ProductsPage() {
         </CardHeader>
         <CardContent>
           {filteredProducts.length > 0 ? (
+            <div className="overflow-x-auto">
             <Table>
                 <TableCaption>商品库存管理</TableCaption>
                 <TableHeader>
@@ -835,6 +836,7 @@ function ProductsPage() {
                 ))}
               </TableBody>
             </Table>
+            </div>
           ) : (
             <div className="text-center py-8 text-muted-foreground">
               暂无商品数据
@@ -881,6 +883,7 @@ function ProductsPage() {
             </CardHeader>
             <CardContent>
               {restockSuggestions.length > 0 ? (
+                <div className="overflow-x-auto">
                 <Table>
                   <TableCaption>基于销量和库存分析的智能补货建议</TableCaption>
                   <TableHeader>
@@ -931,6 +934,7 @@ function ProductsPage() {
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               ) : (
                 <div className="text-center py-8 text-muted-foreground">
                   暂无补货建议
