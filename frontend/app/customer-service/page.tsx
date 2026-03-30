@@ -125,6 +125,7 @@ function CustomerServicePage() {
   const [activeTestSession, setActiveTestSession] = useState<string | null>(null);
   const [testInput, setTestInput] = useState('');
   const [testLoading, setTestLoading] = useState(false);
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
 
   const loadStats = async () => {
     try {
@@ -214,6 +215,7 @@ function CustomerServicePage() {
     e.preventDefault();
     if (!testInput.trim() || testLoading || !activeTestSession) return;
 
+    const currentSession = activeTestSession;
     const userMsg: TestMessage = {
       id: `user-${Date.now()}`,
       role: 'user',
@@ -222,52 +224,125 @@ function CustomerServicePage() {
     };
 
     setTestSessions(prev => prev.map(s =>
-      s.id === activeTestSession ? { ...s, messages: [...s.messages, userMsg] } : s
+      s.id === currentSession ? { ...s, messages: [...s.messages, userMsg] } : s
     ));
     setTestInput('');
     setTestLoading(true);
 
+    // Pre-add placeholder AI message for streaming
+    const aiMsgId = `ai-${Date.now()}`;
+    setTestSessions(prev => prev.map(s =>
+      s.id === currentSession
+        ? { ...s, messages: [...s.messages, { id: aiMsgId, role: 'assistant' as const, content: '', timestamp: new Date() }] }
+        : s
+    ));
+    setStreamingMessageId(aiMsgId);
+
+    const updateAiMsg = (updates: Partial<TestMessage>) => {
+      setTestSessions(prev => prev.map(s =>
+        s.id === currentSession
+          ? { ...s, messages: s.messages.map(m => m.id === aiMsgId ? { ...m, ...updates } : m) }
+          : s
+      ));
+    };
+
+    const authToken = typeof window !== 'undefined' ? localStorage.getItem('auth_token') : null;
+    const authHeaders: Record<string, string> = authToken ? { 'Authorization': `Bearer ${authToken}` } : {};
+    const reqHeaders = { 'Content-Type': 'application/json', ...authHeaders };
+    const reqBody = JSON.stringify({ session_id: currentSession, message: userMsg.content });
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 40000);
+
     try {
-      const response = await fetchAPI<{
-        session_id: string;
-        reply: string;
-        intent?: string;
-        needs_human?: boolean;
-        error_code?: string;
-        error_detail?: string;
-      }>('/customer-service/chat', {
-        method: 'POST',
-        body: JSON.stringify({
-          session_id: activeTestSession,
-          message: userMsg.content,
-        }),
-      });
+      let streamSucceeded = false;
 
-      const aiMsg: TestMessage = {
-        id: `ai-${Date.now()}`,
-        role: 'assistant',
-        content: response.reply,
-        timestamp: new Date(),
-        intent: response.intent,
-        needsHuman: response.needs_human,
-        errorCode: response.error_code,
-        errorDetail: response.error_detail,
-      };
+      // ── Try SSE streaming first ─────────────────────────────
+      try {
+        const res = await fetch('/api/customer-service/chat/stream', {
+          method: 'POST',
+          headers: reqHeaders,
+          body: reqBody,
+          signal: controller.signal,
+        });
 
-      setTestSessions(prev => prev.map(s =>
-        s.id === activeTestSession ? { ...s, messages: [...s.messages, aiMsg] } : s
-      ));
-    } catch {
-      const errMsg: TestMessage = {
-        id: `err-${Date.now()}`,
-        role: 'assistant',
-        content: '⚠️ 请求失败，请检查后端服务是否运行。',
-        timestamp: new Date(),
-      };
-      setTestSessions(prev => prev.map(s =>
-        s.id === activeTestSession ? { ...s, messages: [...s.messages, errMsg] } : s
-      ));
+        if (res.ok && res.body) {
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buf = '';
+          let fullContent = '';
+
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop() || '';
+            for (const line of lines) {
+              if (!line.startsWith('data: ')) continue;
+              try {
+                const evt = JSON.parse(line.slice(6));
+                if (evt.type === 'token') {
+                  fullContent += evt.content;
+                  updateAiMsg({ content: fullContent });
+                } else if (evt.type === 'done') {
+                  updateAiMsg({
+                    content: evt.reply || fullContent,
+                    intent: evt.intent,
+                    needsHuman: evt.needs_human,
+                  });
+                  streamSucceeded = true;
+                } else if (evt.type === 'error') {
+                  throw new Error(evt.message || 'stream error');
+                }
+              } catch {
+                // skip malformed SSE lines
+              }
+            }
+          }
+          if (!streamSucceeded && fullContent) {
+            streamSucceeded = true; // got tokens but no done event
+          }
+        }
+      } catch (streamErr) {
+        if ((streamErr as Error).name === 'AbortError') throw streamErr;
+        // Stream failed — fall through to regular fetch
+      }
+
+      // ── Fallback: regular POST /chat with extended timeout ──
+      if (!streamSucceeded) {
+        clearTimeout(timeout);
+        const ctrl2 = new AbortController();
+        const t2 = setTimeout(() => ctrl2.abort(), 40000);
+        try {
+          const res = await fetch('/api/customer-service/chat', {
+            method: 'POST',
+            headers: reqHeaders,
+            body: reqBody,
+            signal: ctrl2.signal,
+          });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const json = await res.json();
+          const data = json?.data ?? json;
+          updateAiMsg({
+            content: data.reply || '（无回复）',
+            intent: data.intent,
+            needsHuman: data.needs_human,
+            errorCode: data.error_code,
+            errorDetail: data.error_detail,
+          });
+        } finally {
+          clearTimeout(t2);
+        }
+      }
+    } catch (err) {
+      const errContent = (err as Error).name === 'AbortError'
+        ? '⚠️ 请求超时（>40秒），请检查后端是否正常运行。'
+        : '⚠️ 请求失败，请检查后端服务是否运行。';
+      updateAiMsg({ content: errContent });
     } finally {
+      clearTimeout(timeout);
+      setStreamingMessageId(null);
       setTestLoading(false);
     }
   };
@@ -743,7 +818,10 @@ function CustomerServicePage() {
                           <div className={`rounded-lg px-3 py-2 text-sm ${
                             isAI ? 'bg-gray-100' : 'bg-blue-500 text-white'
                           }`}>
-                            {msg.content}
+                            {msg.content || (streamingMessageId === msg.id ? '' : '（空）')}
+                            {streamingMessageId === msg.id && (
+                              <span className="inline-block w-0.5 h-3.5 bg-gray-500 animate-pulse ml-0.5 align-middle" />
+                            )}
                           </div>
                           {isAI && (
                             <div className="flex items-center gap-1.5 mt-1 px-1">
