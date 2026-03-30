@@ -6,7 +6,6 @@ import { useState, useEffect } from 'react';
 
 const coreNav = [
   { href: '/', label: 'AI 指挥台', icon: '🧭' },
-  { href: '/imports', label: '数据导入', icon: '🔄' },
   { href: '/alerts', label: '预警处理', icon: '🔔' },
   { href: '/inventory', label: '库存修复', icon: '📦' },
   { href: '/products', label: '商品修复', icon: '🧾' },
@@ -16,7 +15,6 @@ const coreNav = [
 ];
 
 const growthNav = [
-  { href: '/chat', label: 'AI 店长助手', icon: '🤖' },
   { href: '/selection', label: '重点运营', icon: '🎯' },
   { href: '/bundles', label: '套餐候选', icon: '🎁' },
   { href: '/pricing', label: '价格复核', icon: '💰' },
