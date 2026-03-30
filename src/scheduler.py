@@ -1065,140 +1065,17 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
 
 
 def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
-    """Jobs that require local resources (browser/nodriver/agent warmups)."""
+    """Jobs enabled in local mode.
+
+    Note: browser/nodriver crawlers were removed. We only keep
+    model training and ETL jobs that run on uploaded/synced DB data.
+    """
 
     # Prophet 重训练 (每周日3:00)
     scheduler.add_job(
         _make_heartbeat_task("prophet_retrain", prophet_retrain_task),
         CronTrigger.from_crontab(tasks.get("prophet_retrain", "0 3 * * 0")),
         id="prophet_retrain",
-        replace_existing=True,
-    )
-
-    # 竞品采集 (8:00, 14:00)
-    scheduler.add_job(
-        _make_heartbeat_task("competitor_crawl_am", competitor_crawl_task),
-        CronTrigger.from_crontab(tasks.get("competitor_crawl_am", "0 8 * * *")),
-        id="competitor_crawl_am",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("competitor_crawl_pm", competitor_crawl_task),
-        CronTrigger.from_crontab(tasks.get("competitor_crawl_pm", "0 14 * * *")),
-        id="competitor_crawl_pm",
-        replace_existing=True,
-    )
-
-    # 美团买药商品同步 (凌晨1:30, CST) — 主数据源
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_product_sync", meituan_product_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_product_sync", "30 1 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_product_sync",
-        replace_existing=True,
-    )
-
-    # ── 美团 YiyaoFullSyncer 定时采集 ──────────────────────────────────
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_full_sync_products", meituan_products_full_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_full_sync_products", "0 2 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_full_sync_products",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("qnh_full_sync", qnh_full_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("qnh_full_sync", "0 3 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="qnh_full_sync",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_orders_hourly", meituan_orders_incremental_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_orders_hourly", "0 * * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_orders_hourly",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_reviews_6h", meituan_reviews_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_reviews_6h", "0 */6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_reviews_6h",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_metrics_daily", meituan_metrics_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_metrics_daily", "0 6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_metrics_daily",
-        replace_existing=True,
-    )
-
-    # 退款同步：每 6 小时
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sync_refunds", meituan_refunds_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sync_refunds", "0 */6 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sync_refunds",
-        replace_existing=True,
-    )
-
-    # 日报指标 ETL：每天 7:00（在统计数据同步后）
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_daily_metrics_etl", meituan_daily_metrics_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_daily_metrics_etl", "0 7 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_daily_metrics_etl",
-        replace_existing=True,
-    )
-
-    # 销售历史聚合：每天 8:00
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_sales_history_etl", meituan_sales_history_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_sales_history_etl", "0 8 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_sales_history_etl",
-        replace_existing=True,
-    )
-
-    # 评价分析 ETL：每天 8:30
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_review_analysis_etl", meituan_review_analysis_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_review_analysis_etl", "30 8 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_review_analysis_etl",
-        replace_existing=True,
-    )
-
-    # 促销表 stub 保活：每天 9:00
-    scheduler.add_job(
-        _make_heartbeat_task("meituan_promotions_stub_sync", meituan_promotions_stub_sync_task),
-        CronTrigger.from_crontab(
-            tasks.get("meituan_promotions_stub_sync", "0 9 * * *"),
-            timezone=SH_TZ,
-        ),
-        id="meituan_promotions_stub_sync",
         replace_existing=True,
     )
 
@@ -1213,112 +1090,64 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         replace_existing=True,
     )
 
-    # 配送超时检测：每天 05:00 CST
+    # ETL jobs based on existing DB data
     scheduler.add_job(
         _make_heartbeat_task("delivery_timeout_etl", delivery_timeout_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("delivery_timeout_etl", "0 5 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("delivery_timeout_etl", "0 5 * * *"), timezone=SH_TZ),
         id="delivery_timeout_etl",
         replace_existing=True,
     )
-
-    # 平台处罚检测：每 4 小时
     scheduler.add_job(
         _make_heartbeat_task("platform_penalties_etl", platform_penalties_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("platform_penalties_etl", "0 */4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("platform_penalties_etl", "0 */4 * * *"), timezone=SH_TZ),
         id="platform_penalties_etl",
         replace_existing=True,
     )
-
-    # 政策爬取：每周一 06:00 CST
     scheduler.add_job(
         _make_heartbeat_task("policy_crawler_etl", policy_crawler_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("policy_crawler_etl", "0 6 * * 1"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("policy_crawler_etl", "0 6 * * 1"), timezone=SH_TZ),
         id="policy_crawler_etl",
         replace_existing=True,
     )
-
-    # 竞品价格变动：每天 09:30 CST（竞品采集 08:00 之后）
     scheduler.add_job(
         _make_heartbeat_task("competitor_changes_etl", competitor_changes_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("competitor_changes_etl", "30 9 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("competitor_changes_etl", "30 9 * * *"), timezone=SH_TZ),
         id="competitor_changes_etl",
         replace_existing=True,
     )
-
-    # 关联购买矩阵：每天 04:00 CST（订单同步后）
     scheduler.add_job(
         _make_heartbeat_task("product_associations_etl", product_associations_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("product_associations_etl", "0 4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("product_associations_etl", "0 4 * * *"), timezone=SH_TZ),
         id="product_associations_etl",
         replace_existing=True,
     )
-
-    # 季节性趋势：每周日 05:00 CST
     scheduler.add_job(
         _make_heartbeat_task("seasonality_etl", seasonality_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("seasonality_etl", "0 5 * * 0"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("seasonality_etl", "0 5 * * 0"), timezone=SH_TZ),
         id="seasonality_etl",
         replace_existing=True,
     )
-
-    # FAQ 自动生成：每天 10:00 CST
     scheduler.add_job(
         _make_heartbeat_task("auto_faq_etl", auto_faq_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("auto_faq_etl", "0 10 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("auto_faq_etl", "0 10 * * *"), timezone=SH_TZ),
         id="auto_faq_etl",
         replace_existing=True,
     )
-
-    # 决策效果评估：每天 21:00 CST
     scheduler.add_job(
         _make_heartbeat_task("effect_evaluation_etl", effect_evaluation_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("effect_evaluation_etl", "0 21 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("effect_evaluation_etl", "0 21 * * *"), timezone=SH_TZ),
         id="effect_evaluation_etl",
         replace_existing=True,
     )
-
-    # 类目映射 ETL：每天 04:30 CST（商品同步后）
     scheduler.add_job(
         _make_heartbeat_task("category_mapping_etl", category_mapping_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("category_mapping_etl", "30 4 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("category_mapping_etl", "30 4 * * *"), timezone=SH_TZ),
         id="category_mapping_etl",
         replace_existing=True,
     )
-
-    # PG -> Neo4j 图谱构建：每天 05:30 CST（在商品同步和 ETL 之后）
     scheduler.add_job(
         _make_heartbeat_task("graph_builder_etl", graph_builder_etl_task),
-        CronTrigger.from_crontab(
-            tasks.get("graph_builder_etl", "30 5 * * *"),
-            timezone=SH_TZ,
-        ),
+        CronTrigger.from_crontab(tasks.get("graph_builder_etl", "30 5 * * *"), timezone=SH_TZ),
         id="graph_builder_etl",
         replace_existing=True,
     )
