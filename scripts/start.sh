@@ -1,5 +1,5 @@
 #!/bin/bash
-# start.sh — 数据 seed + 启动 uvicorn 应用服务器
+# start.sh — migration + 数据 seed + ETL + uvicorn
 set -e
 
 # ── 等待 PostgreSQL 就绪 ──────────────────────────────────────────
@@ -23,9 +23,35 @@ asyncio.run(check())
     sleep 2
 done
 
+# ── 运行数据库 migration ──────────────────────────────────────────
+echo "[start.sh] 运行 migrations..."
+cd /app && python3 -c "
+import asyncio, os, sys, glob
+sys.path.insert(0, '/app')
+from src.db import postgres as pg
+async def run():
+    dsn = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@postgres:5432/ai_store')
+    await pg.init(dsn)
+    pool = pg.get_pool()
+    await pool.execute('CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())')
+    for f in sorted(glob.glob('migrations/postgres/*.sql')):
+        name = os.path.basename(f)
+        exists = await pool.fetchval('SELECT 1 FROM _migrations WHERE name = \$1', name)
+        if not exists:
+            sql = open(f).read()
+            try:
+                await pool.execute(sql)
+                await pool.execute('INSERT INTO _migrations (name) VALUES (\$1)', name)
+                print(f'  ✅ {name}')
+            except Exception as e:
+                print(f'  ⚠️ {name}: {e}')
+    await pg.close()
+asyncio.run(run())
+" || echo "[start.sh] ⚠️ migration 失败（非致命）"
+
 # ── 导入 sample 数据（幂等，已导入则跳过）──────────────────────────
-if [ -d /app/sample ] && [ "$(ls /app/sample/*.xlsx /app/sample/*.xls 2>/dev/null)" ]; then
-    echo "[start.sh] 检查并导入 sample 数据..."
+if [ -d /app/sample ] && ls /app/sample/*.xlsx /app/sample/*.xls >/dev/null 2>&1; then
+    echo "[start.sh] 检查并导入 sample 数据 + 运行 ETL..."
     cd /app && python3 scripts/seed_sample_data.py || echo "[start.sh] ⚠️ sample 数据导入失败（非致命）"
 fi
 
