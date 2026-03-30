@@ -1,11 +1,5 @@
 FROM python:3.11-slim
 
-# Only install lightweight CJK fonts for PDF/report generation.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-wqy-zenhei \
-    fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 COPY requirements.backend.txt ./
