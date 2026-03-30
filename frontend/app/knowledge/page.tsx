@@ -66,6 +66,7 @@ function KnowledgePage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [policySaving, setPolicySaving] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [editingFaqId, setEditingFaqId] = useState<string | null>(null);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
@@ -303,6 +304,19 @@ function KnowledgePage() {
     }
   };
 
+  const handleGenerateKnowledge = async () => {
+    setGenerating(true);
+    setMessage(null);
+    try {
+      await fetchAPI('/knowledge/generate-product-knowledge', { method: 'POST' });
+      setMessage('知识库生成已启动，预计需要几分钟');
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const knowledgeStatus = stats?.knowledgeStatus;
 
   return (
@@ -312,9 +326,14 @@ function KnowledgePage() {
           <h1 className="text-3xl font-bold tracking-tight">📚 知识中心</h1>
           <p className="mt-1 text-sm text-muted-foreground">把 FAQ、售后政策和结构化知识真正管起来，客服质量才会稳定。</p>
         </div>
-        <Button variant="outline" onClick={load} disabled={loading}>
-          {loading ? '刷新中...' : '刷新'}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={handleGenerateKnowledge} disabled={generating}>
+            {generating ? '生成中...' : '🤖 AI 生成商品知识'}
+          </Button>
+          <Button variant="outline" onClick={load} disabled={loading}>
+            {loading ? '刷新中...' : '刷新'}
+          </Button>
+        </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-4">

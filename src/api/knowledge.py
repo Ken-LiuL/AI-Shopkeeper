@@ -533,3 +533,30 @@ async def search_knowledge(
             logger.debug("Postgres product search fallback failed", exc_info=True)
 
     return APIResponse(data=results)
+
+
+# ── Generate Product Knowledge (background task) ─────────────────────
+
+
+@router.post("/generate-product-knowledge")
+async def generate_product_knowledge(limit: int = 50):
+    """Kick off scripts/generate_product_knowledge.py in the background and return immediately."""
+    import asyncio
+    import sys
+    from pathlib import Path
+
+    script_path = Path(__file__).resolve().parents[2] / "scripts" / "generate_product_knowledge.py"
+
+    async def _run():
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, str(script_path), "--limit", str(limit),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+        except Exception as exc:
+            logger.error("generate_product_knowledge failed: %s", exc)
+
+    asyncio.create_task(_run())
+    return APIResponse(data={"status": "started", "message": "已启动"})

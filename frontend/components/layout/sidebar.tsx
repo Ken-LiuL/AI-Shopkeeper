@@ -14,6 +14,10 @@ const coreNav = [
   { href: '/knowledge', label: '知识中心', icon: '📚' },
 ];
 
+const settingsNav = [
+  { href: '/settings/sync', label: '数据导入', icon: '📥' },
+];
+
 const growthNav = [
   { href: '/selection', label: '重点运营', icon: '🎯' },
   { href: '/bundles', label: '套餐候选', icon: '🎁' },
@@ -147,6 +151,34 @@ export function Sidebar() {
           )}
         </div>
       </nav>
+      {/* Settings nav */}
+      <div className="px-4 pb-2">
+        <div className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
+          设置
+        </div>
+        <div className="space-y-1">
+          {settingsNav.map((item) => {
+            const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={closeMobileMenu}
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
+                  active
+                    ? "bg-blue-50 text-blue-700 border border-blue-200"
+                    : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+                )}
+              >
+                <span className="text-base">{item.icon}</span>
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+
       {/* User info + logout */}
       <div className="px-4 py-3 border-t border-gray-200">
         <div className="flex items-center justify-between">
