@@ -638,6 +638,34 @@ async def meituan_promotions_stub_sync_task() -> None:
     logger.info("Data collection now handled by Chrome extension — skipping")
 
 
+async def sales_aggregation_etl_task() -> None:
+    """销售历史 & 日指标聚合 ETL（每天凌晨 2:00 CST）。"""
+    logger.info("Starting sales aggregation ETL")
+    dsn = _resolve_database_url()
+    if not dsn:
+        logger.warning("DATABASE_URL unavailable — skip sales aggregation ETL")
+        return
+    try:
+        import asyncpg
+
+        from src.sync.etl_sales_aggregation import run_sales_aggregation_etl
+
+        pool = await asyncpg.create_pool(dsn, min_size=1, max_size=3)
+        try:
+            result = await run_sales_aggregation_etl(pool, days_back=2)
+            logger.info(
+                "Sales aggregation ETL done: sales_history=%s(%d) daily_metrics=%s(%d)",
+                result.get("sales_history_status"),
+                result.get("sales_history_rows", 0),
+                result.get("daily_metrics_status"),
+                result.get("daily_metrics_rows", 0),
+            )
+        finally:
+            await pool.close()
+    except Exception:
+        logger.exception("Sales aggregation ETL task failed")
+
+
 async def delivery_timeout_etl_task() -> None:
     """配送超时检测 ETL。"""
     logger.info("Starting delivery timeout ETL")
@@ -1033,6 +1061,17 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
             timezone=SH_TZ,
         ),
         id="etl_pipeline",
+        replace_existing=True,
+    )
+
+    # 销售历史 & 日指标聚合 ETL (凌晨 2:00 CST)
+    scheduler.add_job(
+        _make_heartbeat_task("sales_aggregation_etl", sales_aggregation_etl_task),
+        CronTrigger.from_crontab(
+            tasks.get("sales_aggregation_etl", "0 2 * * *"),
+            timezone=SH_TZ,
+        ),
+        id="sales_aggregation_etl",
         replace_existing=True,
     )
 
