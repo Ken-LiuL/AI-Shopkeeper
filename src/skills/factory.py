@@ -10,6 +10,7 @@ from typing import Any
 
 from .calculator import CalculatorSkill
 from .database import DatabaseSkill
+from .isolation_forest_skill import IsolationForestSkill
 
 # ── Mock Skills for Customer Service ─────────────────────────────────────────
 
@@ -206,6 +207,7 @@ class SkillsContainer:
     neo4j: Any  # Neo4jSkill or MockNeo4jSkill
     embedding: Any  # EmbeddingSkill or MockEmbeddingSkill
     reranker: Any  # RerankerSkill or MockRerankerSkill
+    isolation_forest: IsolationForestSkill = None  # type: ignore[assignment]
 
 
 def create_skills(mode: str = "mock") -> SkillsContainer:
@@ -258,10 +260,13 @@ def create_skills(mode: str = "mock") -> SkillsContainer:
     else:
         raise ValueError(f"Unknown mode: {mode}")
 
+    isolation_forest = IsolationForestSkill()
+
     return SkillsContainer(
         calculator=calculator,
         database=database,
         neo4j=neo4j,
         embedding=embedding,
         reranker=reranker,
+        isolation_forest=isolation_forest,
     )

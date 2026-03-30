@@ -564,6 +564,102 @@ async def _check_platform_penalty_anomaly(pool) -> list[dict]:
         return []
 
 
+async def check_isolation_forest_anomaly(pool) -> list[dict]:
+    """用 Isolation Forest 进行多维度异常检测（与 Prophet 并行运行）。
+
+    检测两个层面：
+    1. 门店整体日指标（order_count / gmv / avg_order_value）
+    2. 商品级特征矩阵（销量 / 库存 / 价格 / 销售斜率）
+
+    无数据时优雅返回空列表，不抛异常。
+    """
+    if not pool:
+        return []
+    try:
+        from src.skills.isolation_forest_skill import IsolationForestSkill
+
+        skill = IsolationForestSkill(contamination=0.05)
+
+        # 门店整体多维检测
+        store_results = await skill.detect_anomalies(pool, days=30)
+        store_anomalies = [r for r in store_results if r["is_anomaly"]]
+
+        # 商品级检测
+        product_anomalies = await skill.detect_product_anomalies(pool, days=30)
+
+        anomalies: list[dict] = []
+
+        for r in store_anomalies:
+            score = r["anomaly_score"]
+            severity = "critical" if score < -0.15 else "warning"
+            metrics_snapshot = r.get("metrics", {})
+            anomalies.append(
+                {
+                    "anomaly_id": f"if_store_{r['date']}",
+                    "product_id": "store_overall",
+                    "product_name": "门店整体指标",
+                    "anomaly_type": "multi_factor",
+                    "severity": severity,
+                    "detection_method": "isolation_forest",
+                    "metrics": {
+                        "anomaly_score": score,
+                        "expected_value": 0.0,
+                        "actual_value": score,
+                        "deviation_percent": round(abs(score) * 100, 2),
+                        "threshold": -0.10,
+                        **{f"metric_{k}": v for k, v in metrics_snapshot.items()},
+                    },
+                    "description": (
+                        f"Isolation Forest 检测到 {r['date']} 门店指标联合异常 "
+                        f"(score={score:.3f})，"
+                        f"涉及指标：{', '.join(f'{k}={v:.1f}' for k, v in metrics_snapshot.items())}"
+                    ),
+                    "detected_at": _utc_now_iso(),
+                }
+            )
+
+        for r in product_anomalies:
+            score = r["anomaly_score"]
+            severity = "critical" if score < -0.15 else "warning"
+            features = r.get("features", {})
+            anomalies.append(
+                {
+                    "anomaly_id": f"if_product_{r['product_id']}",
+                    "product_id": str(r["product_id"]),
+                    "product_name": r.get("product_name", ""),
+                    "anomaly_type": "multi_factor",
+                    "severity": severity,
+                    "detection_method": "isolation_forest",
+                    "metrics": {
+                        "anomaly_score": score,
+                        "expected_value": 0.0,
+                        "actual_value": score,
+                        "deviation_percent": round(abs(score) * 100, 2),
+                        "threshold": -0.10,
+                        **{f"feature_{k}": v for k, v in features.items()},
+                    },
+                    "description": (
+                        f"商品「{r.get('product_name', r['product_id'])}」多维特征异常 "
+                        f"(score={score:.3f})，"
+                        f"avg_sales={features.get('avg_daily_sales', 0):.1f}，"
+                        f"stock={features.get('current_stock', 0):.0f}，"
+                        f"price={features.get('price', 0):.2f}"
+                    ),
+                    "detected_at": _utc_now_iso(),
+                }
+            )
+
+        logger.info(
+            f"check_isolation_forest_anomaly: {len(anomalies)} anomalies "
+            f"({len(store_anomalies)} store + {len(product_anomalies)} product)"
+        )
+        return anomalies
+
+    except Exception as e:
+        logger.warning(f"check_isolation_forest_anomaly failed (graceful): {e}")
+        return []
+
+
 async def prophet_detection_node(state: AlertState) -> dict:
     """运行 ProphetSkill 对近期活跃商品进行异常检测，将结果注入 state。
 
@@ -723,11 +819,22 @@ async def anomaly_detection_node(state: AlertState) -> dict:
         inventory_alerts = await _check_inventory_anomaly(pool)
 
         # 新增: 结构化表异常检测（全部独立 try/except）
-        traffic_table_alerts = await _check_traffic_spike_drop_anomaly(pool)
-        inventory_table_alerts = await _check_inventory_low_stock_anomaly(pool)
-        delivery_timeout_alerts = await _check_delivery_timeout_anomaly(pool)
-        competitor_change_alerts = await _check_competitor_price_change_anomaly(pool)
-        platform_penalty_alerts = await _check_platform_penalty_anomaly(pool)
+        import asyncio as _asyncio
+        (
+            traffic_table_alerts,
+            inventory_table_alerts,
+            delivery_timeout_alerts,
+            competitor_change_alerts,
+            platform_penalty_alerts,
+            isolation_forest_alerts,
+        ) = await _asyncio.gather(
+            _check_traffic_spike_drop_anomaly(pool),
+            _check_inventory_low_stock_anomaly(pool),
+            _check_delivery_timeout_anomaly(pool),
+            _check_competitor_price_change_anomaly(pool),
+            _check_platform_penalty_anomaly(pool),
+            check_isolation_forest_anomaly(pool),  # Isolation Forest 与其他检测并行
+        )
 
         raw_data_context = ""
         if kpi_alerts:
@@ -772,6 +879,7 @@ async def anomaly_detection_node(state: AlertState) -> dict:
         anomaly_list.extend(delivery_timeout_alerts)
         anomaly_list.extend(competitor_change_alerts)
         anomaly_list.extend(platform_penalty_alerts)
+        anomaly_list.extend(isolation_forest_alerts)  # Isolation Forest 多维异常
 
         summary = result.setdefault("detection_summary", {})
         summary["anomalies_found"] = len(anomaly_list)
