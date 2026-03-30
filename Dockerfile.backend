@@ -28,16 +28,8 @@ WORKDIR /app
 # Keep torch in its own layer because it is the heaviest dependency.
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
-COPY pyproject.toml ./
-RUN python - <<'PY' > /tmp/requirements.txt
-import tomllib
-from pathlib import Path
-
-data = tomllib.loads(Path("pyproject.toml").read_text())
-for dep in data["project"]["dependencies"]:
-    print(dep)
-PY
-RUN pip install --no-cache-dir -r /tmp/requirements.txt psycopg2-binary
+COPY requirements.backend.txt ./
+RUN pip install --no-cache-dir -r requirements.backend.txt
 
 COPY src/ src/
 COPY config/ config/

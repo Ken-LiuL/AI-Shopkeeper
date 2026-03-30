@@ -29,6 +29,7 @@ jobs:
               - 'scripts/**'
               - 'data/**'
               - 'pyproject.toml'
+              - 'requirements.backend.txt'
               - 'uv.lock'
               - 'Dockerfile'
               - 'Dockerfile.backend'
@@ -88,6 +89,7 @@ jobs:
             .dockerignore \
             docker-compose.yml \
             pyproject.toml \
+            requirements.backend.txt \
             uv.lock \
             src \
             config \
