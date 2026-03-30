@@ -49,6 +49,7 @@ services:
       retries: 10
 
   app:
+    image: aishop-app:latest
     build: .
     container_name: aishop-app
     restart: unless-stopped

@@ -1,0 +1,52 @@
+FROM python:3.11-slim
+
+# Install Chromium + Xvfb for browser automation used by sync tasks.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
+    chromium-driver \
+    xvfb \
+    x11-utils \
+    fonts-noto-cjk \
+    fonts-liberation \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxrandr2 \
+    libgbm1 \
+    libxkbcommon0 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV CHROME_EXECUTABLE_PATH=/usr/bin/chromium
+ENV DISPLAY=:99
+
+WORKDIR /app
+
+# Keep torch in its own layer because it is the heaviest dependency.
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+COPY pyproject.toml ./
+RUN python - <<'PY' > /tmp/requirements.txt
+import tomllib
+from pathlib import Path
+
+data = tomllib.loads(Path("pyproject.toml").read_text())
+for dep in data["project"]["dependencies"]:
+    print(dep)
+PY
+RUN pip install --no-cache-dir -r /tmp/requirements.txt psycopg2-binary
+
+COPY src/ src/
+COPY config/ config/
+COPY migrations/ migrations/
+COPY scripts/ scripts/
+COPY data/ data/
+
+COPY scripts/start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+EXPOSE 8000
+CMD ["/app/start.sh"]

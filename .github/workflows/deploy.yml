@@ -5,9 +5,42 @@ on:
     branches: [main]
 
 jobs:
+  detect-changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            frontend:
+              - 'frontend/**'
+            backend:
+              - 'src/**'
+              - 'config/**'
+              - 'migrations/**'
+              - 'scripts/**'
+              - 'data/**'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'Dockerfile'
+              - 'Dockerfile.backend'
+              - '.dockerignore'
+              - 'docker-compose.yml'
+              - '.github/workflows/deploy.yml'
+
   # ── 前端部署 → Vercel ──────────────────────────────────────────────────
   deploy-frontend:
     name: Deploy Frontend (Vercel)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -35,6 +68,8 @@ jobs:
   # ── 后端部署 → VPS（推送模式，无需服务器访问 GitHub） ──────────────────
   deploy-backend:
     name: Deploy Backend (VPS)
+    needs: detect-changes
+    if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,9 +83,17 @@ jobs:
 
       - name: Package & Push code to VPS
         run: |
-          tar --exclude='.git' --exclude='node_modules' --exclude='__pycache__' \
-              --exclude='*.pyc' --exclude='.next' \
-              -czf /tmp/aishop-deploy.tar.gz .
+          tar -czf /tmp/aishop-deploy.tar.gz \
+            Dockerfile.backend \
+            .dockerignore \
+            docker-compose.yml \
+            pyproject.toml \
+            uv.lock \
+            src \
+            config \
+            migrations \
+            scripts \
+            data
           scp -i ~/.ssh/id_rsa /tmp/aishop-deploy.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/deploy.tar.gz
 
       - name: Deploy on VPS
@@ -77,10 +120,11 @@ jobs:
               DOCKER_BUILDKIT=1 docker build \
                 --build-arg BUILDKIT_INLINE_CACHE=1 \
                 --cache-from aishop-app:latest \
+                -f /opt/aishop/repo/Dockerfile.backend \
                 -t aishop-app:latest /opt/aishop/repo/
             else
               echo "(BuildKit unavailable, using legacy builder)"
-              docker build -t aishop-app:latest /opt/aishop/repo/
+              docker build -f /opt/aishop/repo/Dockerfile.backend -t aishop-app:latest /opt/aishop/repo/
             fi
             echo "✅ Build done"
 
