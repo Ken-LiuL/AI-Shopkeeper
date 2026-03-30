@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 
 const coreNav = [
   { href: '/', label: 'AI 指挥台', icon: '🧭' },
+  { href: '/boss', label: '老板助手', icon: '🤖' },
   { href: '/alerts', label: '预警处理', icon: '🔔' },
   { href: '/inventory', label: '库存修复', icon: '📦' },
   { href: '/products', label: '商品修复', icon: '🧾' },
@@ -53,7 +54,7 @@ export function Sidebar() {
       {/* Mobile hamburger button */}
       <button
         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        className="md:hidden fixed top-4 left-4 z-50 p-2 bg-white border border-gray-200 rounded-lg shadow-md"
+        className="md:hidden fixed top-3 left-3 z-50 p-2 min-h-[44px] min-w-[44px] flex items-center justify-center bg-white border border-gray-200 rounded-lg shadow-md"
         aria-label="Toggle menu"
       >
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

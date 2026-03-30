@@ -978,3 +978,25 @@ export interface StoreOverview {
 export async function getStoresOverview(): Promise<StoreOverview[]> {
   return fetchAPI<StoreOverview[]>('/stores/overview');
 }
+
+// Boss Assistant API
+export interface BossChatRequest {
+  session_id?: string;
+  message: string;
+}
+
+export interface BossChatResponse {
+  session_id: string;
+  reply: string;
+  intent?: string;
+  sources?: string[];
+  needs_human?: boolean;
+}
+
+export async function sendBossMessage(data: BossChatRequest): Promise<BossChatResponse> {
+  const response = await fetchAPI<{ data: BossChatResponse }>('/boss/chat', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+  return response.data;
+}

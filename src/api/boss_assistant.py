@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter
+from pydantic import BaseModel
 
 from src.db import postgres as pg_db
 from src.db import redis as redis_db
@@ -84,6 +86,54 @@ async def boss_chat(request: ChatRequest) -> APIResponse[ChatResponse]:
                 intent="error",
                 sources=[],
                 needs_human=False,
+            )
+        )
+
+
+class AskRequest(BaseModel):
+    """Simple ask endpoint — 接收自然语言问题，返回经营建议。"""
+
+    question: str
+
+
+class AskResponse(BaseModel):
+    answer: str
+    data: dict[str, Any] | None = None
+    intent: str | None = None
+
+
+@router.post("/ask", response_model=APIResponse[AskResponse])
+async def boss_ask(request: AskRequest) -> APIResponse[AskResponse]:
+    """自然语言查询经营数据 — POST /api/boss/ask。
+
+    接收 { question: str }，调用 boss_assistant agent，返回 { answer: str, data?: any }。
+    """
+    from src.agents.boss_assistant.nodes import boss_chat as _boss_chat
+
+    pool = pg_db.get_pool()
+    session_id = "boss-ask"
+
+    try:
+        result = await _boss_chat(
+            session_id=session_id,
+            message=request.question,
+            pool=pool,
+            conversation_history=None,
+        )
+        return APIResponse(
+            data=AskResponse(
+                answer=result.get("reply", ""),
+                data=result.get("context"),
+                intent=result.get("intent"),
+            )
+        )
+    except Exception as e:
+        logger.error("[BossAssistant/ask] failed: %s", e)
+        return APIResponse(
+            data=AskResponse(
+                answer="抱歉，经营分析系统暂时不可用，请稍后重试。",
+                data=None,
+                intent="error",
             )
         )
 
