@@ -95,34 +95,39 @@ async def _check_store_metrics_anomaly(pool, threshold: float = 0.15) -> list[di
 
     数据来源: qnh_store_metrics_raw (homepage_data_overview_view_not_erp)
     当有效订单金额/客单价/配送费等同比下降超过阈值时触发告警。
+    无数据时优雅返回空 list，不报错。
     """
-    data = await fetch_latest_raw(pool, "qnh_store_metrics_raw")
-    if not data:
+    try:
+        data = await fetch_latest_raw(pool, "qnh_store_metrics_raw")
+        if not data:
+            return []
+        alerts = []
+        # raw_data 结构: 包含各指标的同比/环比字段
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            for key in ("validOrderAmount", "customerPrice", "deliveryFee", "validOrderCount"):
+                yoy = item.get(f"{key}YearOnYear") or item.get(f"{key}_yoy")
+                if yoy is not None:
+                    try:
+                        yoy_val = (
+                            float(str(yoy).replace("%", "")) / 100 if "%" in str(yoy) else float(yoy)
+                        )
+                    except (ValueError, TypeError):
+                        continue
+                    if yoy_val < -threshold:
+                        alerts.append(
+                            {
+                                "type": "store_kpi_decline",
+                                "metric": key,
+                                "yoy_change": yoy_val,
+                                "store_name": item.get("storeName", "未知门店"),
+                                "description": f"{key} 同比下降 {abs(yoy_val):.1%}，超过阈值 {threshold:.0%}",
+                            }
+                        )
+        return alerts
+    except Exception as e:
+        logger.warning(f"check_store_metrics_anomaly failed (graceful): {e}")
         return []
-    alerts = []
-    # raw_data 结构: 包含各指标的同比/环比字段
-    items = data if isinstance(data, list) else [data]
-    for item in items:
-        for key in ("validOrderAmount", "customerPrice", "deliveryFee", "validOrderCount"):
-            yoy = item.get(f"{key}YearOnYear") or item.get(f"{key}_yoy")
-            if yoy is not None:
-                try:
-                    yoy_val = (
-                        float(str(yoy).replace("%", "")) / 100 if "%" in str(yoy) else float(yoy)
-                    )
-                except (ValueError, TypeError):
-                    continue
-                if yoy_val < -threshold:
-                    alerts.append(
-                        {
-                            "type": "store_kpi_decline",
-                            "metric": key,
-                            "yoy_change": yoy_val,
-                            "store_name": item.get("storeName", "未知门店"),
-                            "description": f"{key} 同比下降 {abs(yoy_val):.1%}，超过阈值 {threshold:.0%}",
-                        }
-                    )
-    return alerts
 
 
 async def _check_traffic_trend_anomaly(pool, consecutive_days: int = 3) -> list[dict]:
@@ -130,32 +135,37 @@ async def _check_traffic_trend_anomaly(pool, consecutive_days: int = 3) -> list[
 
     数据来源: qnh_traffic_raw (homepage_date_trend_list_new)
     连续多天下降时触发告警。
+    无数据时优雅返回空 list，不报错。
     """
-    data = await fetch_latest_raw(pool, "qnh_traffic_raw")
-    if not data:
+    try:
+        data = await fetch_latest_raw(pool, "qnh_traffic_raw")
+        if not data:
+            return []
+        alerts = []
+        # raw_data 通常是按日期排序的列表
+        items = data if isinstance(data, list) else []
+        if len(items) >= consecutive_days:
+            # 检查最近 N 天是否连续下降
+            recent = items[-consecutive_days:]
+            declining = True
+            for i in range(1, len(recent)):
+                curr_val = float(recent[i].get("exposure", 0) or recent[i].get("uv", 0) or 0)
+                prev_val = float(recent[i - 1].get("exposure", 0) or recent[i - 1].get("uv", 0) or 0)
+                if curr_val >= prev_val:
+                    declining = False
+                    break
+            if declining:
+                alerts.append(
+                    {
+                        "type": "traffic_consecutive_decline",
+                        "days": consecutive_days,
+                        "description": f"流量连续 {consecutive_days} 天下降，请关注",
+                    }
+                )
+        return alerts
+    except Exception as e:
+        logger.warning(f"check_traffic_trend_anomaly failed (graceful): {e}")
         return []
-    alerts = []
-    # raw_data 通常是按日期排序的列表
-    items = data if isinstance(data, list) else []
-    if len(items) >= consecutive_days:
-        # 检查最近 N 天是否连续下降
-        recent = items[-consecutive_days:]
-        declining = True
-        for i in range(1, len(recent)):
-            curr_val = float(recent[i].get("exposure", 0) or recent[i].get("uv", 0) or 0)
-            prev_val = float(recent[i - 1].get("exposure", 0) or recent[i - 1].get("uv", 0) or 0)
-            if curr_val >= prev_val:
-                declining = False
-                break
-        if declining:
-            alerts.append(
-                {
-                    "type": "traffic_consecutive_decline",
-                    "days": consecutive_days,
-                    "description": f"流量连续 {consecutive_days} 天下降，请关注",
-                }
-            )
-    return alerts
 
 
 async def _check_inventory_anomaly(pool, stockout_threshold: float = 0.10) -> list[dict]:

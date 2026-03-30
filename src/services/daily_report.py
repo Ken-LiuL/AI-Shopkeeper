@@ -166,14 +166,18 @@ class DailyReportService:
         report.todo_items = await self._generate_todo(pool, report_date, report)
 
         # ── 竞品动态 ──
-        comp_rows = await pool.fetch(
-            """SELECT name, price, monthly_sales
-               FROM competitor_products
-               WHERE last_synced::date = $1
-               ORDER BY monthly_sales DESC LIMIT 5""",
-            report_date,
-        )
-        report.competitor_changes = [dict(r) for r in comp_rows]
+        try:
+            comp_rows = await pool.fetch(
+                """SELECT name, price, monthly_sales
+                   FROM competitor_products
+                   WHERE last_synced::date = $1
+                   ORDER BY monthly_sales DESC LIMIT 5""",
+                report_date,
+            )
+            report.competitor_changes = [dict(r) for r in comp_rows]
+        except Exception as e:
+            logger.debug(f"competitor_products not available for daily report (graceful): {e}")
+            report.competitor_changes = []
 
         # ── 从 qnh 结构化表补充/覆盖关键数据 ──
         await self._enrich_from_qnh_structured(pool, report, report_date)
