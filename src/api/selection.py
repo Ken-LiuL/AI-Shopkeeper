@@ -244,6 +244,24 @@ async def get_recommendations() -> APIResponse[list[dict]]:
 
         status = "recommended" if recommendation_score >= 7.5 else "considering"
 
+        expected_impact_amount: float | None = None
+        impact_type: str | None = None
+        impact_reason: str | None = None
+        estimated_monthly_sales = monthly_sales if monthly_sales > 0 else int(max(demand_score, 1) * 6)
+        unit_gross_profit = (price - cost) if price > 0 and cost > 0 else 0.0
+
+        if unit_gross_profit > 0 and estimated_monthly_sales > 0:
+            expected_impact_amount = round(estimated_monthly_sales * unit_gross_profit, 2)
+            impact_type = "revenue_up"
+        else:
+            impact_reason = "缺少可用销量或成本数据，暂无法估算预计影响金额"
+
+        confidence = 0.85
+        if monthly_sales <= 0:
+            confidence = 0.65
+        if cost <= 0:
+            confidence = min(confidence, 0.55)
+
         strengths: list[str] = []
         risks: list[str] = []
         data_source = ["订单销量", "库存", "商品主档"]
@@ -302,6 +320,10 @@ async def get_recommendations() -> APIResponse[list[dict]]:
                     "知识": round(knowledge_score, 1),
                 },
                 "data_source": data_source,
+                "expected_impact_amount": expected_impact_amount,
+                "impact_type": impact_type,
+                "confidence": round(confidence, 2),
+                "impact_reason": impact_reason,
             }
         )
 

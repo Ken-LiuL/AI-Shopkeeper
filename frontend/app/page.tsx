@@ -122,6 +122,8 @@ function DashboardPage() {
   const yesterdayOrders = Number(overview?.yesterday_orders || 0);
   const avgOrderValue = Number(overview?.avg_order_value || 0);
 
+  const topActions = overview?.top_actions ?? [];
+
   const commandStats = [
     {
       title: '今日 GMV',
@@ -236,6 +238,47 @@ function DashboardPage() {
           </a>
         )}
       </div>
+
+      <Card className="border-slate-200">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <span>🎯</span>
+            今日必须做的 3 件事
+            <Badge variant="outline">Top Actions</Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {topActions.length > 0 ? (
+            <div className="space-y-3">
+              {topActions.map((item, index) => {
+                const badge = getPriorityBadge(item.priority);
+                const impact = Number(item.expected_impact_amount || 0);
+                return (
+                  <div key={`${item.type}-${index}`} className="rounded-xl border border-slate-200 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-medium text-slate-900">{item.title}</span>
+                          <Badge className={badge.className}>{badge.label}</Badge>
+                        </div>
+                        <p className="text-sm text-muted-foreground">{item.reason}</p>
+                        <p className="text-xs text-slate-500">
+                          预计影响金额：¥{impact.toLocaleString('zh-CN', { maximumFractionDigits: 2 })}
+                        </p>
+                      </div>
+                      <a href={item.action_url}>
+                        <Button size="sm">去处理</Button>
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">今天很健康，无紧急动作</div>
+          )}
+        </CardContent>
+      </Card>
 
       {aiStats && (
         <Card className="border-none bg-gradient-to-r from-slate-950 via-slate-900 to-blue-900 text-white shadow-lg">

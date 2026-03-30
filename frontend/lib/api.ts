@@ -200,6 +200,14 @@ export interface DashboardOverview {
     detail: string;
     link: string;
   }>;
+  top_actions?: Array<{
+    type: 'low_stock' | 'price_risk' | 'customer_risk' | 'alert_pending';
+    title: string;
+    reason: string;
+    expected_impact_amount: number | string;
+    action_url: string;
+    priority: 'high' | 'medium' | 'low';
+  }>;
   recent_outcomes?: Array<{
     title: string;
     detail: string;
@@ -513,6 +521,10 @@ export interface Alert {
   status: string;
   created_at: string;
   resolved_at?: string;
+  expected_impact_amount?: number | null;
+  impact_type?: 'revenue_up' | 'loss_avoid' | 'cost_save' | null;
+  confidence?: number | null;
+  impact_reason?: string | null;
   // Backward compatibility
   message?: string;
   action_suggestions?: string[];
@@ -771,6 +783,8 @@ export interface PricingSuggestion {
   reason: string;
   confidence: number;
   expected_impact: string;
+  expected_impact_amount?: number | null;
+  impact_type?: 'revenue_up' | 'loss_avoid' | 'cost_save' | null;
   status?: 'pending' | 'adopted';
 }
 
@@ -794,6 +808,12 @@ export async function getPricingSuggestions(): Promise<PricingSuggestion[]> {
       reason: String(item.reason || ''),
       confidence: Number(item.confidence || 0),
       expected_impact: String(item.expected_impact || item.potential_impact || ''),
+      expected_impact_amount:
+        item.expected_impact_amount == null ? null : Number(item.expected_impact_amount),
+      impact_type:
+        item.impact_type == null
+          ? null
+          : (String(item.impact_type) as PricingSuggestion['impact_type']),
       status: item.status === 'adopted' ? 'adopted' : 'pending',
     })),
   );

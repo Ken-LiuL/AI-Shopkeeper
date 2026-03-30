@@ -26,6 +26,10 @@ interface SelectionProduct {
   risk_warning?: string;
   score_breakdown?: Record<string, number>;
   data_source?: string[];
+  expected_impact_amount?: number | null;
+  impact_type?: 'revenue_up' | 'loss_avoid' | 'cost_save' | null;
+  confidence?: number | null;
+  impact_reason?: string | null;
 }
 
 function getUiStatus(product: SelectionProduct, action?: IssueActionRecord | null) {
@@ -79,6 +83,22 @@ function scoreColor(score: number) {
     return 'text-amber-600';
   }
   return 'text-slate-500';
+}
+
+
+function impactText(product: SelectionProduct) {
+  if (!product.expected_impact_amount || !product.impact_type) {
+    return product.impact_reason || '预计影响待补充';
+  }
+  const prefix = product.impact_type === 'loss_avoid' ? '预计止损' : product.impact_type === 'cost_save' ? '预计节省' : '预计增收';
+  return `${prefix} ¥${product.expected_impact_amount.toFixed(0)}`;
+}
+
+function confidenceMeta(confidence?: number | null) {
+  const value = Number(confidence || 0);
+  if (value >= 0.8) return { text: '高', className: 'bg-green-100 text-green-700' };
+  if (value >= 0.6) return { text: '中', className: 'bg-amber-100 text-amber-700' };
+  return { text: '低', className: 'bg-slate-100 text-slate-600' };
 }
 
 function SelectionPage() {
@@ -414,6 +434,12 @@ function SelectionPage() {
                       </div>
 
                       <div className="mt-3 text-sm text-slate-700">{product.reason}</div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                        <span className="rounded bg-emerald-50 px-2 py-1 font-medium text-emerald-700">{impactText(product)}</span>
+                        <span className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${confidenceMeta(product.confidence).className}`}>
+                          置信度 {confidenceMeta(product.confidence).text}
+                        </span>
+                      </div>
                       {product.risk_warning ? (
                         <div className="mt-2 text-sm text-amber-700">{product.risk_warning}</div>
                       ) : null}

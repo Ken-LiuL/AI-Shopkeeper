@@ -5,7 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -55,6 +55,8 @@ class PricingSuggestion(BaseModel):
     reason: str
     confidence: float
     potential_impact: str
+    expected_impact_amount: float | None = None
+    impact_type: Literal["revenue_up", "loss_avoid", "cost_save"] | None = None
 
 
 class PricingRule(BaseModel):
@@ -424,6 +426,25 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                     reason += f" (AI建议: {ai_suggestion.get('reason', '')})"
                     potential_impact = ai_suggestion.get("potential_impact", potential_impact)
 
+            monthly_sales = int(product.get("monthly_sales") or 0)
+            price_diff = round(suggested_price - current_price, 2)
+            expected_impact_amount: float | None = None
+            impact_type: Literal["revenue_up", "loss_avoid", "cost_save"] | None = None
+            impact_reason: str | None = None
+
+            if monthly_sales > 0 and current_price > 0 and price_diff != 0:
+                expected_impact_amount = round(abs(monthly_sales * price_diff), 2)
+                impact_type = "revenue_up" if price_diff > 0 else "loss_avoid"
+                confidence = min(0.95, confidence + 0.1)
+            else:
+                impact_reason = "近30天销量或建议价差不足，暂无法估算预计影响金额"
+                expected_impact_amount = None
+                impact_type = None
+                confidence = min(confidence, 0.55)
+
+            if impact_reason:
+                reason = f"{reason}；{impact_reason}"
+
             suggestions.append(
                 PricingSuggestion(
                     product_id=product["product_id"],
@@ -433,6 +454,8 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                     reason=reason,
                     confidence=confidence,
                     potential_impact=potential_impact,
+                    expected_impact_amount=expected_impact_amount,
+                    impact_type=impact_type,
                 )
             )
 

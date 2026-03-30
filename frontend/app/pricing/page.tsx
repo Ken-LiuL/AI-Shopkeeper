@@ -29,6 +29,14 @@ function getConfidenceLabel(confidence: number) {
   return { text: '低', className: 'bg-slate-100 text-slate-600' };
 }
 
+function getImpactText(suggestion: PricingSuggestion) {
+  if (suggestion.expected_impact_amount != null && suggestion.impact_type) {
+    const prefix = suggestion.impact_type === 'loss_avoid' ? '预计止损' : suggestion.impact_type === 'cost_save' ? '预计节省' : '预计增收';
+    return `${prefix} ${formatCurrency(suggestion.expected_impact_amount)}`;
+  }
+  return suggestion.expected_impact || '预计影响待补充';
+}
+
 export default function PricingPage() {
   const [suggestions, setSuggestions] = useState<PricingSuggestion[]>([]);
   const [rules, setRules] = useState<PricingRule[]>([]);
@@ -428,7 +436,10 @@ export default function PricingPage() {
                             </span>
                           </td>
                           <td className="px-6 py-4 align-top text-sm text-gray-700">
-                            {suggestion.expected_impact || '需要结合执行结果继续观察'}
+                            <div className="font-medium text-emerald-700">{getImpactText(suggestion)}</div>
+                            {suggestion.expected_impact && (
+                              <div className="mt-1 text-xs text-slate-500">{suggestion.expected_impact}</div>
+                            )}
                           </td>
                           <td className="px-6 py-4 align-top text-sm">
                             <div className="flex flex-col gap-2">

@@ -245,6 +245,15 @@ class ActionOutcome(BaseModel):
     next_check: str = ""
 
 
+class TopAction(BaseModel):
+    type: str = Field(..., pattern="^(low_stock|price_risk|customer_risk|alert_pending)$")
+    title: str
+    reason: str
+    expected_impact_amount: Decimal = Decimal("0")
+    action_url: str
+    priority: str = Field(..., pattern="^(high|medium|low)$")
+
+
 class DashboardOverview(BaseModel):
     total_products: int = 0
     today_orders: int = 0
@@ -260,6 +269,7 @@ class DashboardOverview(BaseModel):
     low_stock_count: int = 0
     recent_sync_state: list[dict[str, Any]] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
+    top_actions: list[TopAction] = Field(default_factory=list)
     recent_outcomes: list[ActionOutcome] = Field(default_factory=list)
 
 

@@ -20,6 +20,7 @@ from .schemas import (
     APIResponse,
     DashboardOverview,
     SalesTrendPoint,
+    TopAction,
     TopProduct,
 )
 
@@ -668,6 +669,215 @@ async def _generate_action_items(
         ]
 
 
+def _priority_by_rank(rank: int, severity_score: int) -> str:
+    if rank == 0 or severity_score >= 3:
+        return "high"
+    if rank == 1 or severity_score >= 2:
+        return "medium"
+    return "low"
+
+
+async def _generate_top_actions(pool) -> list[TopAction]:
+    candidates: list[dict] = []
+
+    # 1) 低库存风险
+    if await _table_exists(pool, "alerts") and await _table_exists(pool, "products"):
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS item_count,
+                    COALESCE(
+                        SUM(
+                            GREATEST(10 - COALESCE(p.stock, 0), 0)
+                            * COALESCE(NULLIF(p.retail_price, 0), NULLIF(p.cost_price, 0), 0)
+                        ),
+                        0
+                    ) AS impact,
+                    MIN(COALESCE(p.stock, 0)) AS min_stock,
+                    MAX(a.created_at) AS latest_at,
+                    MAX(
+                        CASE
+                            WHEN COALESCE(a.severity, '') IN ('critical', 'high') THEN 3
+                            WHEN COALESCE(a.severity, '') IN ('warning', 'medium') THEN 2
+                            WHEN COALESCE(a.severity, '') IN ('info', 'low') THEN 1
+                            ELSE 0
+                        END
+                    ) AS severity_score
+                FROM alerts a
+                LEFT JOIN products p ON p.product_id = a.product_id
+                WHERE a.status = 'pending' AND a.alert_type = 'low_stock'
+                """
+            )
+            if row and int(row["item_count"] or 0) > 0:
+                item_count = int(row["item_count"] or 0)
+                min_stock = int(row["min_stock"] or 0)
+                candidates.append(
+                    {
+                        "type": "low_stock",
+                        "title": "优先补货低库存商品",
+                        "reason": f"{item_count} 款商品库存告急，最低仅 {min_stock} 件。",
+                        "expected_impact_amount": float(row["impact"] or 0),
+                        "action_url": "/inventory?low_stock_first=true",
+                        "severity_score": int(row["severity_score"] or 2),
+                        "latest_at": row["latest_at"],
+                    }
+                )
+
+    # 2) 价格风险
+    if await _table_exists(pool, "products"):
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """
+                WITH category_avg AS (
+                    SELECT category, AVG(retail_price) AS avg_price
+                    FROM products
+                    WHERE status = 'active' AND retail_price > 0 AND category IS NOT NULL AND category != ''
+                    GROUP BY category
+                ), risky AS (
+                    SELECT
+                        p.product_id,
+                        p.retail_price,
+                        c.avg_price,
+                        COALESCE(p.monthly_sales, 0) AS monthly_sales,
+                        p.updated_at
+                    FROM products p
+                    JOIN category_avg c ON c.category = p.category
+                    WHERE p.status = 'active'
+                      AND p.retail_price > c.avg_price * 1.2
+                )
+                SELECT
+                    COUNT(*) AS item_count,
+                    COALESCE(SUM((retail_price - avg_price) * GREATEST(monthly_sales, 1)), 0) AS impact,
+                    MAX(updated_at) AS latest_at
+                FROM risky
+                """
+            )
+            if row and int(row["item_count"] or 0) > 0:
+                item_count = int(row["item_count"] or 0)
+                candidates.append(
+                    {
+                        "type": "price_risk",
+                        "title": "复核高溢价商品价格",
+                        "reason": f"{item_count} 款商品价格高于同类均值 20% 以上。",
+                        "expected_impact_amount": float(row["impact"] or 0),
+                        "action_url": "/pricing",
+                        "severity_score": 2,
+                        "latest_at": row["latest_at"],
+                    }
+                )
+
+    # 3) 客诉/评分风险
+    if await _table_exists(pool, "alerts"):
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS item_count,
+                    MAX(created_at) AS latest_at,
+                    MAX(
+                        CASE
+                            WHEN COALESCE(severity, '') IN ('critical', 'high') THEN 3
+                            WHEN COALESCE(severity, '') IN ('warning', 'medium') THEN 2
+                            WHEN COALESCE(severity, '') IN ('info', 'low') THEN 1
+                            ELSE 0
+                        END
+                    ) AS severity_score
+                FROM alerts
+                WHERE status = 'pending'
+                  AND (
+                    alert_type ILIKE '%review%'
+                    OR alert_type ILIKE '%rating%'
+                    OR alert_type ILIKE '%customer%'
+                  )
+                """
+            )
+            if row and int(row["item_count"] or 0) > 0:
+                item_count = int(row["item_count"] or 0)
+                severity_score = int(row["severity_score"] or 2)
+                candidates.append(
+                    {
+                        "type": "customer_risk",
+                        "title": "跟进客户体验风险",
+                        "reason": f"有 {item_count} 条客户体验相关预警待处理。",
+                        "expected_impact_amount": float(item_count * 80),
+                        "action_url": "/customer-service",
+                        "severity_score": severity_score,
+                        "latest_at": row["latest_at"],
+                    }
+                )
+
+    # 4) 通用待处理预警
+    if await _table_exists(pool, "alerts"):
+        with contextlib.suppress(Exception):
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) AS pending_count,
+                    COUNT(*) FILTER (WHERE COALESCE(severity, '') IN ('critical', 'high')) AS high_count,
+                    MAX(created_at) AS latest_at,
+                    MAX(
+                        CASE
+                            WHEN COALESCE(severity, '') IN ('critical', 'high') THEN 3
+                            WHEN COALESCE(severity, '') IN ('warning', 'medium') THEN 2
+                            WHEN COALESCE(severity, '') IN ('info', 'low') THEN 1
+                            ELSE 0
+                        END
+                    ) AS severity_score
+                FROM alerts
+                WHERE status = 'pending'
+                """
+            )
+            if row and int(row["pending_count"] or 0) > 0:
+                pending_count = int(row["pending_count"] or 0)
+                high_count = int(row["high_count"] or 0)
+                severity_score = int(row["severity_score"] or 1)
+                candidates.append(
+                    {
+                        "type": "alert_pending",
+                        "title": "清理高优先级预警",
+                        "reason": f"仍有 {pending_count} 条预警未处理，其中高优先级 {high_count} 条。",
+                        "expected_impact_amount": float(high_count * 200 + pending_count * 30),
+                        "action_url": "/alerts",
+                        "severity_score": severity_score,
+                        "latest_at": row["latest_at"],
+                    }
+                )
+
+    if not candidates:
+        return []
+
+    def _timeliness_score(latest_at: object) -> float:
+        if hasattr(latest_at, "timestamp"):
+            with contextlib.suppress(Exception):
+                return float(latest_at.timestamp())
+        return 0.0
+
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("expected_impact_amount") or 0),
+            int(item.get("severity_score") or 0),
+            _timeliness_score(item.get("latest_at")),
+        ),
+        reverse=True,
+    )
+
+    top_actions: list[TopAction] = []
+    for idx, item in enumerate(candidates[:3]):
+        top_actions.append(
+            TopAction(
+                type=str(item["type"]),
+                title=str(item["title"]),
+                reason=str(item["reason"]),
+                expected_impact_amount=round(float(item.get("expected_impact_amount") or 0), 2),
+                action_url=str(item["action_url"]),
+                priority=_priority_by_rank(idx, int(item.get("severity_score") or 0)),
+            )
+        )
+
+    return top_actions
+
+
 def _metadata_label(metadata: dict | None, *keys: str) -> str:
     if not isinstance(metadata, dict):
         return ""
@@ -885,6 +1095,7 @@ async def overview() -> APIResponse[DashboardOverview]:
     recent_sync_state = await _get_recent_sync_state(pool, limit=5)
 
     action_items = []
+    top_actions = []
     recent_outcomes = []
     review_open_summary = None
     with contextlib.suppress(Exception):
@@ -892,6 +1103,8 @@ async def overview() -> APIResponse[DashboardOverview]:
             _generate_action_items(pool, total_products=total_products),
             timeout=10.0,
         )
+    with contextlib.suppress(Exception):
+        top_actions = await asyncio.wait_for(_generate_top_actions(pool), timeout=10.0)
     with contextlib.suppress(Exception):
         review_payload = await asyncio.wait_for(ManualImportService(pool).get_review(limit=3), timeout=10.0)
         if isinstance(review_payload, dict) and isinstance(review_payload.get("open_summary"), dict):
@@ -924,6 +1137,7 @@ async def overview() -> APIResponse[DashboardOverview]:
             low_stock_count=low_stock_count,
             recent_sync_state=recent_sync_state,
             action_items=action_items,
+            top_actions=top_actions,
             recent_outcomes=recent_outcomes,
         )
     )

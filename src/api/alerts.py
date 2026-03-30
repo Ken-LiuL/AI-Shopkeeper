@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 
@@ -309,6 +310,57 @@ def _apply_alert_filters(
     return filtered
 
 
+def _estimate_alert_impact(alert: dict, historical_daily_revenue: float) -> dict:
+    severity = _normalize_severity(alert.get("severity"))
+    alert_type = str(alert.get("type") or "system").lower()
+    description = str(alert.get("description") or "")
+
+    explicit_amount = None
+    amount_match = re.search(r"¥\s*([0-9]+(?:\.[0-9]+)?)", description)
+    if amount_match:
+        with __import__("contextlib").suppress(Exception):
+            explicit_amount = float(amount_match.group(1))
+
+    amount = explicit_amount
+    if amount is None and historical_daily_revenue > 0:
+        severity_factor = {"high": 0.22, "medium": 0.12, "low": 0.06}.get(severity, 0.06)
+        type_factor = {
+            "stockout": 1.0,
+            "orders": 0.8,
+            "performance": 0.7,
+            "inventory": 0.6,
+            "pricing": 0.55,
+            "catalog": 0.45,
+            "data_quality": 0.35,
+            "sales": 0.3,
+            "system": 0.25,
+        }.get(alert_type, 0.3)
+        amount = round(historical_daily_revenue * severity_factor * type_factor, 2)
+
+    if amount is None or amount <= 0:
+        return {
+            "expected_impact_amount": None,
+            "impact_type": None,
+            "confidence": 0.45,
+            "impact_reason": "缺少可用历史经营均值，暂无法估算潜在损失",
+        }
+
+    impact_type = "loss_avoid"
+    if alert_type in {"system", "data_quality", "catalog"}:
+        impact_type = "cost_save"
+
+    confidence = {"high": 0.85, "medium": 0.72, "low": 0.58}.get(severity, 0.58)
+    if explicit_amount is not None:
+        confidence = min(0.95, confidence + 0.05)
+
+    return {
+        "expected_impact_amount": round(amount, 2),
+        "impact_type": impact_type,
+        "confidence": round(confidence, 2),
+        "impact_reason": None,
+    }
+
+
 async def _generate_smart_alerts(pool) -> list[dict]:
     """Generate real-time alerts based on actual business data."""
     import contextlib
@@ -330,6 +382,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     rate = 0.0
     refund_rate = 0.0
 
+    historical_daily_revenue = 0.0
     if store_records:
         for rec in store_records:
             loss_amount += _parse_data_value(rec.get("stockout_loss_amt"))
@@ -337,6 +390,9 @@ async def _generate_smart_alerts(pool) -> list[dict]:
         rate = (sum(vals) / len(vals) / 100) if vals else 0  # stored as percentage
         vals2 = [_parse_data_value(rec.get("stockout_refund_rate")) for rec in store_records]
         refund_rate = (sum(vals2) / len(vals2) / 100) if vals2 else 0
+        sale_vals = [_parse_data_value(rec.get("sale_amt_gmv")) for rec in store_records]
+        sale_vals = [v for v in sale_vals if v > 0]
+        historical_daily_revenue = (sum(sale_vals) / len(sale_vals)) if sale_vals else 0.0
     else:
         with contextlib.suppress(Exception):
             row = await pool.fetchrow(
@@ -349,6 +405,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
                 loss_amount = _extract_metric(data, "stockout_loss_amt")
                 rate = _extract_metric(data, "overtime_ord_rate")
                 refund_rate = _extract_metric(data, "stockout_refund_rate")
+                historical_daily_revenue = _extract_metric(data, "sale_amt_gmv")
 
     if loss_amount > 0:
         alerts.append(
@@ -545,6 +602,9 @@ async def _generate_smart_alerts(pool) -> list[dict]:
         if alert_id:
             seen.add(alert_id)
         deduped.append(alert)
+    for alert in deduped:
+        alert.update(_estimate_alert_impact(alert, historical_daily_revenue))
+
     deduped.sort(
         key=lambda x: (severity_order.get(x["severity"], 3), not x.get("actionable", False))
     )

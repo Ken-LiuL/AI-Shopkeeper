@@ -17,6 +17,14 @@ export interface DashboardOverview {
   today_orders: number;
   pending_alerts: number;
   pending_tasks: number;
+  top_actions?: Array<{
+    type: 'low_stock' | 'price_risk' | 'customer_risk' | 'alert_pending';
+    title: string;
+    reason: string;
+    expected_impact_amount: number | string;
+    action_url: string;
+    priority: 'high' | 'medium' | 'low';
+  }>;
 }
 
 export interface SalesTrendPoint {
@@ -80,6 +88,10 @@ export interface Alert {
   suggestion?: string;
   created_at: string;
   resolved_at: string | null;
+  expected_impact_amount?: number | null;
+  impact_type?: 'revenue_up' | 'loss_avoid' | 'cost_save' | null;
+  confidence?: number | null;
+  impact_reason?: string | null;
 }
 
 export interface Bundle {

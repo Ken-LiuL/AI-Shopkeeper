@@ -38,6 +38,21 @@ function getAlertRecommendation(alert: Alert): string {
   return 'AI 正在分析最优处理方案，请稍后查看';
 }
 
+function getImpactText(alert: Alert): string {
+  if (alert.expected_impact_amount != null && alert.impact_type) {
+    const prefix = alert.impact_type === 'loss_avoid' ? '预计止损' : alert.impact_type === 'cost_save' ? '预计节省' : '预计增收';
+    return `${prefix} ¥${Number(alert.expected_impact_amount).toFixed(0)}`;
+  }
+  return alert.impact_reason || '预计影响待补充';
+}
+
+function getConfidenceBadge(confidence?: number | null): { text: string; className: string } {
+  const value = Number(confidence || 0);
+  if (value >= 0.8) return { text: '高', className: 'bg-green-100 text-green-700' };
+  if (value >= 0.6) return { text: '中', className: 'bg-amber-100 text-amber-700' };
+  return { text: '低', className: 'bg-slate-100 text-slate-600' };
+}
+
 function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [severityFilter, setSeverityFilter] = useState('');
@@ -236,6 +251,12 @@ function AlertsPage() {
                   </div>
                   <div className="text-sm font-medium text-slate-900">{alert.title}</div>
                   <div className="text-sm text-slate-600">{alert.description}</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="rounded bg-emerald-50 px-2 py-1 font-medium text-emerald-700">{getImpactText(alert)}</span>
+                    <span className={`inline-flex rounded-full px-2 py-1 font-semibold ${getConfidenceBadge(alert.confidence).className}`}>
+                      置信度 {getConfidenceBadge(alert.confidence).text}
+                    </span>
+                  </div>
                   <div className="text-xs text-red-700">
                     {getAlertRecommendation(alert)}
                   </div>
@@ -378,6 +399,12 @@ function AlertsPage() {
                     </TableCell>
                     <TableCell className="max-w-md">
                       <div className="text-sm text-slate-700">{getAlertRecommendation(alert)}</div>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="rounded bg-emerald-50 px-2 py-1 font-medium text-emerald-700">{getImpactText(alert)}</span>
+                        <span className={`inline-flex rounded-full px-2 py-1 font-semibold ${getConfidenceBadge(alert.confidence).className}`}>
+                          {getConfidenceBadge(alert.confidence).text}
+                        </span>
+                      </div>
                       <div className="mt-1 text-xs text-muted-foreground">{alert.description}</div>
                     </TableCell>
                     <TableCell>
