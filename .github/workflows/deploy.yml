@@ -81,23 +81,36 @@ jobs:
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} 'command -v rsync >/dev/null'
 
-      - name: Package & Push code to VPS
+      - name: Sync code to VPS
         run: |
-          tar -czf /tmp/aishop-deploy.tar.gz \
-            Dockerfile.backend \
-            .dockerignore \
-            docker-compose.yml \
-            pyproject.toml \
-            requirements.backend.txt \
-            uv.lock \
-            src \
-            config \
-            migrations \
-            scripts \
-            data \
-            sample
-          scp -i ~/.ssh/id_rsa /tmp/aishop-deploy.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/deploy.tar.gz
+          set -euo pipefail
+          rsync -az --delete \
+            --delete-excluded \
+            --rsync-path="mkdir -p /opt/aishop/repo && rsync" \
+            -e "ssh -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes" \
+            --exclude='__pycache__/' \
+            --exclude='*.pyc' \
+            --exclude='.DS_Store' \
+            --exclude='.pytest_cache/' \
+            --exclude='.mypy_cache/' \
+            --exclude='.ruff_cache/' \
+            --exclude='.venv/' \
+            --include='/Dockerfile.backend' \
+            --include='/.dockerignore' \
+            --include='/docker-compose.yml' \
+            --include='/pyproject.toml' \
+            --include='/requirements.backend.txt' \
+            --include='/uv.lock' \
+            --include='/src/***' \
+            --include='/config/***' \
+            --include='/migrations/***' \
+            --include='/scripts/***' \
+            --include='/data/***' \
+            --include='/sample/***' \
+            --exclude='*' \
+            ./ root@${{ secrets.VPS_HOST }}:/opt/aishop/repo/
 
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
@@ -109,10 +122,8 @@ jobs:
           command_timeout: 20m
           script: |
             set -e
-            echo "=== Extracting code ==="
-            rm -rf /opt/aishop/repo
+            echo "=== Preparing code ==="
             mkdir -p /opt/aishop/repo
-            tar -xzf /opt/aishop/deploy.tar.gz -C /opt/aishop/repo
 
             echo "=== Syncing docker-compose.yml ==="
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
