@@ -9,8 +9,8 @@ COPY src/ src/
 COPY config/ config/
 COPY migrations/ migrations/
 COPY scripts/ scripts/
-COPY data/ data/
-COPY sample/ sample/
+RUN mkdir -p /app/data
+COPY data/cs_knowledge_structured.json data/cs_knowledge_structured.json
 
 COPY scripts/start.sh /app/start.sh
 RUN chmod +x /app/start.sh
