@@ -354,23 +354,25 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = [
+_DEFAULT_ORIGINS = [
     "https://ai-shopkeeper.vercel.app",
     "https://ai-shopkeeper-kk.fly.dev",
-    "http://localhost:3000",
-    "http://localhost:3001",
 ]
+# 本地开发时额外允许 localhost
+if os.environ.get("ENV", "production").lower() in ("dev", "development", "local"):
+    _DEFAULT_ORIGINS.extend(["http://localhost:3000", "http://localhost:3001"])
+
 # 支持环境变量动态追加
 _extra_origins = os.environ.get("ALLOWED_ORIGINS", "")
 if _extra_origins:
-    ALLOWED_ORIGINS.extend(_extra_origins.split(","))
+    _DEFAULT_ORIGINS.extend(o.strip() for o in _extra_origins.split(",") if o.strip())
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=_DEFAULT_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
 
 
