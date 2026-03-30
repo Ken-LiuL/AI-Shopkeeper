@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -873,7 +874,6 @@ class ManualImportService:
                 )
             )
 
-        weighted_issues = missing_price * 3 + missing_category * 2 + len(duplicate_keys) * 5
         quality_report = self._build_quality_report(
             total_rows=len(records),
             issues=issues,
@@ -1040,7 +1040,6 @@ class ManualImportService:
                 )
             )
 
-        weighted_issues = len(duplicate_orders) * 5 + missing_paid * 3 + missing_item_sku * 2 + len(unmatched_detail_orders) * 2
         quality_report = self._build_quality_report(
             total_rows=len(records) + len(detail_rows),
             issues=issues,

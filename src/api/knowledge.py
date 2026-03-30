@@ -23,6 +23,10 @@ def _parse_kb_id(raw_id: str) -> int | None:
     match = _KB_ID_PATTERN.search((raw_id or "").strip())
     if not match:
         return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 _POLICY_TABLE_SQL = """
@@ -48,10 +52,6 @@ async def _ensure_policy_documents_table() -> None:
         raise RuntimeError("Database unavailable")
     async with pool.acquire() as conn:
         await conn.execute(_POLICY_TABLE_SQL)
-    try:
-        return int(match.group(1))
-    except ValueError:
-        return None
 
 
 # ── Product Knowledge Base (pgvector-based) ─────────────────────────

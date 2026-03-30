@@ -14,7 +14,14 @@ from fastapi import APIRouter
 from src.db import postgres as pg
 from src.services.manual_import import ManualImportService
 
-from .schemas import ActionItem, ActionOutcome, APIResponse, DashboardOverview, SalesTrendPoint, TopProduct
+from .schemas import (
+    ActionItem,
+    ActionOutcome,
+    APIResponse,
+    DashboardOverview,
+    SalesTrendPoint,
+    TopProduct,
+)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 logger = logging.getLogger(__name__)
