@@ -1,4 +1,4 @@
-"""通知推送服务 — 支持 Telegram / Webhook"""
+"""通知推送服务 — 支持 Telegram / Webhook / 飞书 / 微信企业 / 钉钉"""
 
 from __future__ import annotations
 
@@ -13,6 +13,13 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 WEBHOOK_URL = os.getenv("ALERT_WEBHOOK_URL", "")
+
+# 飞书机器人 webhook
+FEISHU_WEBHOOK_URL = os.getenv("FEISHU_WEBHOOK_URL", "")
+# 企业微信机器人 webhook
+WECHAT_WEBHOOK_URL = os.getenv("WECHAT_WEBHOOK_URL", "")
+# 钉钉机器人 webhook
+DINGTALK_WEBHOOK_URL = os.getenv("DINGTALK_WEBHOOK_URL", "")
 
 
 async def send_telegram(text: str, chat_id: str = "") -> bool:
@@ -37,7 +44,7 @@ async def send_telegram(text: str, chat_id: str = "") -> bool:
 
 
 async def send_webhook(payload: dict) -> bool:
-    """发送 Webhook 通知"""
+    """发送通用 Webhook 通知"""
     if not WEBHOOK_URL:
         return False
     try:
@@ -49,22 +56,161 @@ async def send_webhook(payload: dict) -> bool:
         return False
 
 
-async def send_alert(title: str, body: str, severity: str = "medium") -> dict[str, Any]:
-    """发送告警通知（Telegram + Webhook）"""
+async def send_feishu(title: str, body: str, severity: str = "medium") -> bool:
+    """发送飞书机器人消息（富文本 post 格式）
+
+    环境变量: FEISHU_WEBHOOK_URL
+    飞书文档: https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot
+    """
+    webhook_url = FEISHU_WEBHOOK_URL
+    if not webhook_url:
+        logger.debug("Feishu webhook not configured (FEISHU_WEBHOOK_URL)")
+        return False
+
     emoji = {"critical": "🚨", "high": "⚠️", "medium": "📋", "low": "💡"}.get(severity, "📋")
-    text = f"{emoji} <b>{title}</b>\n\n{body}"
+    color_map = {"critical": "red", "high": "orange", "medium": "yellow", "low": "green"}
+    color = color_map.get(severity, "yellow")
+
+    payload = {
+        "msg_type": "interactive",
+        "card": {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"tag": "plain_text", "content": f"{emoji} {title}"},
+                "template": color,
+            },
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {"tag": "lark_md", "content": body},
+                }
+            ],
+        },
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(webhook_url, json=payload)
+            data = resp.json()
+            if resp.status_code == 200 and data.get("StatusCode") == 0:
+                logger.info("Feishu webhook sent successfully")
+                return True
+            logger.warning(f"Feishu webhook failed: {resp.status_code} {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"Feishu webhook error: {e}")
+        return False
+
+
+async def send_wechat(title: str, body: str, severity: str = "medium") -> bool:
+    """发送企业微信机器人消息（markdown 格式）
+
+    环境变量: WECHAT_WEBHOOK_URL
+    文档: https://developer.work.weixin.qq.com/document/path/91770
+    """
+    webhook_url = WECHAT_WEBHOOK_URL
+    if not webhook_url:
+        logger.debug("WeChat webhook not configured (WECHAT_WEBHOOK_URL)")
+        return False
+
+    emoji = {"critical": "🚨", "high": "⚠️", "medium": "📋", "low": "💡"}.get(severity, "📋")
+    color_map = {"critical": "warning", "high": "warning", "medium": "info", "low": "comment"}
+    font_color = color_map.get(severity, "info")
+
+    markdown_content = f"## {emoji} {title}\n\n{body}\n\n> 严重程度: <font color=\"{font_color}\">{severity}</font>"
+
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {"content": markdown_content},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(webhook_url, json=payload)
+            data = resp.json()
+            if resp.status_code == 200 and data.get("errcode") == 0:
+                logger.info("WeChat webhook sent successfully")
+                return True
+            logger.warning(f"WeChat webhook failed: {resp.status_code} {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"WeChat webhook error: {e}")
+        return False
+
+
+async def send_dingtalk(title: str, body: str, severity: str = "medium") -> bool:
+    """发送钉钉机器人消息（markdown 格式）
+
+    环境变量: DINGTALK_WEBHOOK_URL
+    文档: https://open.dingtalk.com/document/robots/custom-robot-access
+    """
+    webhook_url = DINGTALK_WEBHOOK_URL
+    if not webhook_url:
+        logger.debug("DingTalk webhook not configured (DINGTALK_WEBHOOK_URL)")
+        return False
+
+    emoji = {"critical": "🚨", "high": "⚠️", "medium": "📋", "low": "💡"}.get(severity, "📋")
+
+    payload = {
+        "msgtype": "markdown",
+        "markdown": {
+            "title": f"{emoji} {title}",
+            "text": f"## {emoji} {title}\n\n{body}\n\n> 严重程度: **{severity}**",
+        },
+        "at": {"isAtAll": severity == "critical"},
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(webhook_url, json=payload)
+            data = resp.json()
+            if resp.status_code == 200 and data.get("errcode") == 0:
+                logger.info("DingTalk webhook sent successfully")
+                return True
+            logger.warning(f"DingTalk webhook failed: {resp.status_code} {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"DingTalk webhook error: {e}")
+        return False
+
+
+async def send_alert(title: str, body: str, severity: str = "medium") -> dict[str, Any]:
+    """发送告警通知（Telegram + Webhook + 飞书 + 微信企业 + 钉钉）"""
+    emoji = {"critical": "🚨", "high": "⚠️", "medium": "📋", "low": "💡"}.get(severity, "📋")
+    telegram_text = f"{emoji} <b>{title}</b>\n\n{body}"
 
     configured_channels: list[str] = []
     sent_channels: list[str] = []
 
+    # Telegram
     if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
         configured_channels.append("telegram")
-        if await send_telegram(text):
+        if await send_telegram(telegram_text):
             sent_channels.append("telegram")
+
+    # 通用 Webhook
     if WEBHOOK_URL:
         configured_channels.append("webhook")
         if await send_webhook({"title": title, "body": body, "severity": severity}):
             sent_channels.append("webhook")
+
+    # 飞书
+    if FEISHU_WEBHOOK_URL:
+        configured_channels.append("feishu")
+        if await send_feishu(title, body, severity):
+            sent_channels.append("feishu")
+
+    # 企业微信
+    if WECHAT_WEBHOOK_URL:
+        configured_channels.append("wechat")
+        if await send_wechat(title, body, severity):
+            sent_channels.append("wechat")
+
+    # 钉钉
+    if DINGTALK_WEBHOOK_URL:
+        configured_channels.append("dingtalk")
+        if await send_dingtalk(title, body, severity):
+            sent_channels.append("dingtalk")
 
     if not configured_channels:
         return {

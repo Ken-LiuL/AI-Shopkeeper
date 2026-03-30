@@ -695,6 +695,14 @@ async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:
             task_id,
             json.dumps(result, default=str),
         )
+        # 扫描完成后自动推送通知（飞书/微信/钉钉/Telegram）
+        try:
+            from src.services.notification import check_and_push_alerts
+
+            push_result = await check_and_push_alerts(pool)
+            logger.info("Alert scan %s: auto-push result: %s", task_id, push_result)
+        except Exception as push_exc:
+            logger.warning("Alert scan %s: auto-push failed: %s", task_id, push_exc)
     except Exception:
         logger.exception("Alert scan %s failed", task_id)
 
@@ -727,17 +735,58 @@ async def push_alerts() -> APIResponse[dict]:
     return APIResponse(data=result)
 
 
-# UNUSED: no frontend caller
 @router.post("/test-push", response_model=APIResponse[dict])
-async def test_push(message: str = "这是一条测试告警") -> APIResponse[dict]:
-    """测试推送通道"""
+async def test_push(
+    message: str = "这是一条测试告警",
+    severity: str = "medium",
+) -> APIResponse[dict]:
+    """手动测试通知推送（飞书/微信企业/钉钉/Telegram/Webhook）
+
+    Query params:
+      - message: 测试消息正文（默认: "这是一条测试告警"）
+      - severity: 严重程度 critical|high|medium|low（默认: medium）
+
+    返回各通道配置状态和推送结果。
+    """
+    import os
+
     from fastapi import HTTPException
 
-    from src.services.notification import send_alert
+    from src.services.notification import (
+        DINGTALK_WEBHOOK_URL,
+        FEISHU_WEBHOOK_URL,
+        TELEGRAM_BOT_TOKEN,
+        TELEGRAM_CHAT_ID,
+        WECHAT_WEBHOOK_URL,
+        WEBHOOK_URL,
+        send_alert,
+    )
+
+    channels_configured = {
+        "telegram": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "webhook": bool(WEBHOOK_URL),
+        "feishu": bool(FEISHU_WEBHOOK_URL),
+        "wechat": bool(WECHAT_WEBHOOK_URL),
+        "dingtalk": bool(DINGTALK_WEBHOOK_URL),
+    }
 
     try:
-        result = await send_alert("测试告警", message, "medium")
+        result = await send_alert("【测试】店铺预警系统", message, severity)
     except Exception as exc:
         logger.error("Test push failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Test push failed: {exc}") from exc
-    return APIResponse(data=result)
+
+    return APIResponse(
+        data={
+            **result,
+            "channels_configured": channels_configured,
+            "tip": "如需启用某通道，请在环境变量中配置对应的 Webhook URL",
+            "env_vars": {
+                "feishu": "FEISHU_WEBHOOK_URL",
+                "wechat": "WECHAT_WEBHOOK_URL",
+                "dingtalk": "DINGTALK_WEBHOOK_URL",
+                "telegram": "TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID",
+                "webhook": "ALERT_WEBHOOK_URL",
+            },
+        }
+    )
