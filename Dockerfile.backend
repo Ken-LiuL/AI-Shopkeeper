@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Only install fonts for PDF/report generation (no browser needed)
+# Only install lightweight CJK fonts for PDF/report generation.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    fonts-noto-cjk \
+    fonts-wqy-zenhei \
     fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 

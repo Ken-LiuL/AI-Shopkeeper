@@ -119,7 +119,7 @@ jobs:
           username: root
           key: ${{ secrets.VPS_SSH_KEY }}
           timeout: 30s
-          command_timeout: 20m
+          command_timeout: 40m
           script: |
             set -e
             echo "=== Preparing code ==="
