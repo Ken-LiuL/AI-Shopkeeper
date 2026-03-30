@@ -226,6 +226,10 @@ class ManualImportService:
             import_summary=summary,
         )
 
+        # ── 导入完成后自动跑派生 ETL ──────────────────────────────
+        if imported_rows > 0:
+            await self._run_post_import_etl(detected_type)
+
         return ImportResult(
             run_id=run_id,
             import_type=detected_type,
@@ -1809,6 +1813,41 @@ class ManualImportService:
                 }
             )
         return normalized
+
+    async def _run_post_import_etl(self, import_type: str) -> None:
+        """导入完成后自动跑派生 ETL，确保下游数据表同步更新。"""
+        logger.info("🔄 运行 post-import ETL (type=%s)...", import_type)
+
+        # 1. 销售历史聚合（订单导入后必跑）
+        if import_type in ("orders", "products"):
+            try:
+                from src.sync.etl_sales_aggregation import run_sales_aggregation_etl
+                result = await run_sales_aggregation_etl(self._pool)
+                logger.info("✅ 销售历史聚合: %s", result)
+            except ImportError:
+                logger.debug("etl_sales_aggregation 不可用，跳过")
+            except Exception as e:
+                logger.warning("⚠️ 销售历史聚合失败: %s", e)
+
+        # 2. 类目映射（商品导入后必跑）
+        if import_type == "products":
+            try:
+                from src.sync.etl_category_mapping import run_category_mapping_etl
+                result = await run_category_mapping_etl(self._pool, None)
+                logger.info("✅ 类目映射: %s", result)
+            except Exception as e:
+                logger.warning("⚠️ 类目映射失败: %s", e)
+
+        # 3. 商品关联挖掘（订单导入后必跑）
+        if import_type == "orders":
+            try:
+                from src.sync.etl_product_associations import run_product_associations_etl
+                result = await run_product_associations_etl(self._pool)
+                logger.info("✅ 商品关联: %s", result)
+            except Exception as e:
+                logger.warning("⚠️ 商品关联失败: %s", e)
+
+        logger.info("✅ post-import ETL 完成")
 
     async def _record_run(
         self,
