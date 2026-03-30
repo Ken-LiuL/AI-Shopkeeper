@@ -420,6 +420,147 @@ async def _fetch_competitor_links(conn: asyncpg.Connection) -> list[dict[str, An
     return records
 
 
+async def _fetch_brands(
+    conn: asyncpg.Connection,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """从 qnh_products 提取品牌节点和 Product→Brand 关系。
+
+    Returns:
+        (brand_nodes, product_brand_links)
+        brand_nodes: [{"name": "欧姆龙"}, ...]
+        product_brand_links: [{"product_id": "...", "brand_name": "欧姆龙"}, ...]
+    """
+    columns = await _table_columns(conn, "qnh_products")
+    brand_col = _pick_column(columns, ["brand", "brand_name"])
+    product_id_col = _pick_column(columns, ["spu_id", "product_id", "id"])
+    if not (brand_col and product_id_col):
+        return [], []
+
+    rows = await conn.fetch(
+        f"""
+        SELECT DISTINCT
+            {_quote_ident(product_id_col)}::text AS product_id,
+            {_quote_ident(brand_col)}::text AS brand_name
+        FROM qnh_products
+        WHERE {_quote_ident(brand_col)} IS NOT NULL
+          AND {_quote_ident(brand_col)} <> ''
+          AND {_quote_ident(product_id_col)} IS NOT NULL
+        """
+    )
+
+    brands: dict[str, dict[str, str]] = {}
+    links: list[dict[str, str]] = []
+    for row in rows:
+        product_id = _safe_text(row["product_id"])
+        brand_name = _safe_text(row["brand_name"])
+        if not product_id or not brand_name:
+            continue
+        brands.setdefault(brand_name, {"name": brand_name})
+        links.append({"product_id": product_id, "brand_name": brand_name})
+
+    return list(brands.values()), links
+
+
+async def _fetch_symptoms_from_knowledge(
+    conn: asyncpg.Connection,
+) -> tuple[
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+]:
+    """从 product_knowledge 提取 Symptom/Usage 节点及关系。
+
+    Returns:
+        (
+            symptom_nodes,
+            product_symptom_links,
+            usage_nodes,
+            product_usage_links,
+        )
+    """
+    if not await _table_exists(conn, "product_knowledge"):
+        return [], [], [], []
+
+    columns = await _table_columns(conn, "product_knowledge")
+    spu_id_col = _pick_column(columns, ["spu_id", "product_id", "id"])
+    suitable_col = _pick_column(columns, ["suitable_for", "indications"])
+    effects_col = _pick_column(columns, ["effects", "main_effects"])
+    usage_col = _pick_column(columns, ["usage_instructions", "usage"])
+
+    if not spu_id_col:
+        return [], [], [], []
+
+    def safe_col(col: str | None, alias: str) -> str:
+        if col:
+            return f"{_quote_ident(col)}::text AS {alias}"
+        return f"NULL::text AS {alias}"
+
+    def _split_phrases(text: str | None) -> list[str]:
+        raw = _safe_text(text)
+        if not raw:
+            return []
+        for sep in ("、", "，", ",", "；", ";", "。", "\n", "；", ":", "："):
+            raw = raw.replace(sep, "|")
+        seen_local: set[str] = set()
+        out: list[str] = []
+        for part in raw.split("|"):
+            part = part.strip()
+            if 2 <= len(part) <= 24 and part not in seen_local:
+                seen_local.add(part)
+                out.append(part)
+        return out
+
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            {_quote_ident(spu_id_col)}::text AS product_id,
+            {safe_col(suitable_col, 'suitable_for')},
+            {safe_col(effects_col, 'effects')},
+            {safe_col(usage_col, 'usage_instructions')}
+        FROM product_knowledge
+        WHERE {_quote_ident(spu_id_col)} IS NOT NULL
+        LIMIT 10000
+        """
+    )
+
+    symptoms: dict[str, dict[str, str]] = {}
+    symptom_links: list[dict[str, str]] = []
+    usages: dict[str, dict[str, str]] = {}
+    usage_links: list[dict[str, str]] = []
+
+    for row in rows:
+        product_id = _safe_text(row["product_id"])
+        if not product_id:
+            continue
+
+        # Symptom 来源：suitable_for / effects
+        symptom_seen: set[str] = set()
+        symptom_text = "|".join(
+            [
+                _safe_text(row["suitable_for"]) or "",
+                _safe_text(row["effects"]) or "",
+            ]
+        )
+        for phrase in _split_phrases(symptom_text):
+            if phrase in symptom_seen:
+                continue
+            symptom_seen.add(phrase)
+            symptoms.setdefault(phrase, {"name": phrase, "description": ""})
+            symptom_links.append({"product_id": product_id, "symptom_name": phrase})
+
+        # Usage 来源：usage_instructions
+        usage_seen: set[str] = set()
+        for phrase in _split_phrases(row["usage_instructions"]):
+            if phrase in usage_seen:
+                continue
+            usage_seen.add(phrase)
+            usages.setdefault(phrase, {"name": phrase, "description": ""})
+            usage_links.append({"product_id": product_id, "usage_name": phrase})
+
+    return list(symptoms.values()), symptom_links, list(usages.values()), usage_links
+
+
 async def _fetch_seasonality(conn: asyncpg.Connection) -> list[dict[str, str]]:
     if not await _table_exists(conn, "product_seasonality"):
         return []
@@ -693,6 +834,12 @@ async def run_graph_builder_etl(pg_pool: asyncpg.Pool, neo4j_driver: AsyncDriver
     associations: list[dict[str, Any]] = []
     competitor_links: list[dict[str, Any]] = []
     seasonality: list[dict[str, str]] = []
+    brand_nodes: list[dict[str, str]] = []
+    product_brand_links: list[dict[str, str]] = []
+    symptom_nodes: list[dict[str, str]] = []
+    product_symptom_links: list[dict[str, str]] = []
+    usage_nodes: list[dict[str, str]] = []
+    product_usage_links: list[dict[str, str]] = []
 
     try:
         async with pg_pool.acquire() as conn:
@@ -701,6 +848,13 @@ async def run_graph_builder_etl(pg_pool: asyncpg.Pool, neo4j_driver: AsyncDriver
             associations = await _fetch_product_associations(conn)
             competitor_links = await _fetch_competitor_links(conn)
             seasonality = await _fetch_seasonality(conn)
+            brand_nodes, product_brand_links = await _fetch_brands(conn)
+            (
+                symptom_nodes,
+                product_symptom_links,
+                usage_nodes,
+                product_usage_links,
+            ) = await _fetch_symptoms_from_knowledge(conn)
     except Exception as exc:
         errors.append(f"postgres fetch failed: {type(exc).__name__}: {exc}")
         logger.exception("Graph builder ETL failed while fetching source data")
@@ -849,6 +1003,8 @@ async def run_graph_builder_etl(pg_pool: asyncpg.Pool, neo4j_driver: AsyncDriver
             WHERE a.product_id <> b.product_id
             MERGE (a)-[r:OFTEN_BOUGHT_WITH]->(b)
             SET r.co_occurrence = toInteger(row.co_occurrence)
+            MERGE (a)-[r2:RELATED_TO]->(b)
+            SET r2.weight = toInteger(row.co_occurrence)
             """,
             associations,
             None,
@@ -887,6 +1043,73 @@ async def run_graph_builder_etl(pg_pool: asyncpg.Pool, neo4j_driver: AsyncDriver
             MERGE (p)-[:PEAKS_IN]->(s)
             """,
             seasonality,
+            None,
+        ),
+        # ── Brand 节点 ────────────────────────────────────────────────────
+        (
+            "brand nodes",
+            """
+            UNWIND $rows AS row
+            MERGE (b:Brand {name: row.name})
+            RETURN b.name AS brand
+            """,
+            brand_nodes,
+            None,
+        ),
+        (
+            "has brand",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Product {product_id: row.product_id})
+            MATCH (b:Brand {name: row.brand_name})
+            MERGE (p)-[:HAS_BRAND]->(b)
+            """,
+            product_brand_links,
+            None,
+        ),
+        # ── Symptom/Usage 节点（来自 product_knowledge）──────────────────
+        (
+            "symptom nodes",
+            """
+            UNWIND $rows AS row
+            MERGE (s:Symptom {name: row.name})
+            SET s.description = coalesce(row.description, '')
+            RETURN s.name AS symptom
+            """,
+            symptom_nodes,
+            None,
+        ),
+        (
+            "has symptom",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Product {product_id: row.product_id})
+            MATCH (s:Symptom {name: row.symptom_name})
+            MERGE (p)-[:HAS_SYMPTOM]->(s)
+            """,
+            product_symptom_links,
+            None,
+        ),
+        (
+            "usage nodes",
+            """
+            UNWIND $rows AS row
+            MERGE (u:Usage {name: row.name})
+            SET u.description = coalesce(row.description, '')
+            RETURN u.name AS usage
+            """,
+            usage_nodes,
+            None,
+        ),
+        (
+            "has usage",
+            """
+            UNWIND $rows AS row
+            MATCH (p:Product {product_id: row.product_id})
+            MATCH (u:Usage {name: row.usage_name})
+            MERGE (p)-[:HAS_USAGE]->(u)
+            """,
+            product_usage_links,
             None,
         ),
     ]
