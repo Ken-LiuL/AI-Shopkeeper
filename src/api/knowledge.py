@@ -57,6 +57,7 @@ async def _ensure_policy_documents_table() -> None:
 # ── Product Knowledge Base (pgvector-based) ─────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.get("/v1/search", response_model=APIResponse[list[dict]])
 async def search_product_knowledge_v1(
     q: str = Query(..., min_length=1, description="搜索关键词"),
@@ -114,6 +115,7 @@ async def search_product_knowledge_v1(
     return APIResponse(data=results)
 
 
+# UNUSED: no frontend caller
 @router.post("/v1/build", response_model=APIResponse[dict])
 async def build_knowledge_v1(
     background_tasks: BackgroundTasks,
@@ -149,6 +151,7 @@ async def build_knowledge_v1(
         return APIResponse(data={"status": "building", "message": "知识库构建已在后台启动"})
 
 
+# UNUSED: no frontend caller
 @router.get("/v1/stats", response_model=APIResponse[dict])
 async def knowledge_stats_v1() -> APIResponse[dict]:
     """GET /api/knowledge/v1/stats — 商品同步 + 知识库统计。"""
@@ -194,6 +197,7 @@ async def knowledge_stats_v1() -> APIResponse[dict]:
     return APIResponse(data=stats)
 
 
+# UNUSED: no frontend caller
 @router.get("/products", response_model=APIResponse[list[dict]])
 async def list_knowledge_products(
     limit: int = Query(50, ge=1, le=200),
@@ -215,6 +219,7 @@ async def list_knowledge_products(
         return APIResponse(data=[], message="Product database unavailable")
 
 
+# UNUSED: no frontend caller
 @router.post("/products", response_model=APIResponse[dict])
 async def add_knowledge_product(body: dict) -> APIResponse[dict]:
     try:
@@ -228,6 +233,7 @@ async def add_knowledge_product(body: dict) -> APIResponse[dict]:
         return APIResponse(success=False, message=str(e))
 
 
+# UNUSED: no frontend caller
 @router.get("/products/{product_id}/graph", response_model=APIResponse[dict])
 async def product_graph(product_id: str) -> APIResponse[dict]:
     try:
@@ -445,6 +451,7 @@ async def delete_policy(policy_id: str) -> APIResponse[dict]:
         return APIResponse(success=False, data={}, message=str(exc))
 
 
+# UNUSED: no frontend caller
 @router.get("/search", response_model=APIResponse[list[dict]])
 async def search_knowledge(
     q: str = Query(..., min_length=1, description="Search query"),

@@ -55,6 +55,7 @@ async def _run_selection(run_id: str, request: SelectionRunRequest, orch: Orches
         )
 
 
+# UNUSED: no frontend caller
 @router.post("/run", response_model=TaskCreatedResponse)
 async def trigger_selection(
     request: SelectionRunRequest,
@@ -74,6 +75,7 @@ async def trigger_selection(
     return TaskCreatedResponse(task_id=run_id, message="Selection run started")
 
 
+# UNUSED: no frontend caller
 @router.get("/runs", response_model=APIResponse[list[SelectionRunSummary]])
 async def list_runs() -> APIResponse[list[SelectionRunSummary]]:
     try:
@@ -93,6 +95,7 @@ async def list_runs() -> APIResponse[list[SelectionRunSummary]]:
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.get("/runs/{run_id}", response_model=APIResponse[SelectionRunDetail])
 async def get_run(run_id: str) -> APIResponse[SelectionRunDetail]:
     try:

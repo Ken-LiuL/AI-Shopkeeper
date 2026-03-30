@@ -149,12 +149,14 @@ async def bundle_recommendations() -> APIResponse[list[dict]]:
         return APIResponse(data=[], message=f"推荐生成失败: {e}")
 
 
+# UNUSED: no frontend caller
 @router.get("/suggestions", response_model=APIResponse[list[dict]])
 async def bundle_suggestions() -> APIResponse[list[dict]]:
     """套餐建议 — /recommendations 的别名"""
     return await bundle_recommendations()
 
 
+# UNUSED: no frontend caller
 @router.get("/{bundle_id}", response_model=APIResponse[dict])
 async def get_bundle(bundle_id: str) -> APIResponse[dict]:
     try:
@@ -170,6 +172,7 @@ async def get_bundle(bundle_id: str) -> APIResponse[dict]:
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.post("/{bundle_id}/activate", response_model=APIResponse[dict])
 async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
     try:
@@ -188,6 +191,7 @@ async def activate_bundle(bundle_id: str) -> APIResponse[dict]:
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.post("/{bundle_id}/deactivate", response_model=APIResponse[dict])
 async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
     try:
@@ -206,6 +210,7 @@ async def deactivate_bundle(bundle_id: str) -> APIResponse[dict]:
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_bundles() -> APIResponse[list[dict]]:
     try:
@@ -242,6 +247,7 @@ async def _run_bundle_generate(
         )
 
 
+# UNUSED: no frontend caller
 @router.post("/generate", response_model=TaskCreatedResponse)
 async def generate_bundles(
     request: BundleGenerateRequest,
@@ -262,6 +268,7 @@ async def generate_bundles(
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.patch("/{bundle_id}", response_model=APIResponse[dict])
 async def update_bundle(bundle_id: str, body: BundleUpdateRequest) -> APIResponse[dict]:
     try:
@@ -286,6 +293,7 @@ async def update_bundle(bundle_id: str, body: BundleUpdateRequest) -> APIRespons
         raise HTTPException(status_code=500, detail="Internal server error") from exc
 
 
+# UNUSED: no frontend caller
 @router.delete("/{bundle_id}", response_model=APIResponse[dict])
 async def delete_bundle(bundle_id: str) -> APIResponse[dict]:
     try:

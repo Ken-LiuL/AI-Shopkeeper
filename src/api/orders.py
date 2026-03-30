@@ -410,6 +410,7 @@ async def order_stats() -> APIResponse[dict]:
 
 
 # Debug endpoint for data structure analysis
+# UNUSED: no frontend caller
 @router.get("/debug-raw")
 async def debug_raw():
     """Debug endpoint to check raw data structure"""
@@ -439,6 +440,7 @@ async def debug_raw():
     }
 
 
+# UNUSED: no frontend caller
 @router.get("/{order_id}", response_model=APIResponse[dict])
 async def get_order(order_id: str) -> APIResponse[dict]:
     """获取订单详情"""
@@ -473,6 +475,7 @@ async def get_order(order_id: str) -> APIResponse[dict]:
 
 
 # 保留原有API兼容性
+# UNUSED: no frontend caller
 @router.get("/recent", response_model=APIResponse[list[dict]])
 async def recent_orders(
     limit: int = Query(10, ge=1, le=100),
@@ -482,6 +485,7 @@ async def recent_orders(
     return APIResponse(data=result.data)
 
 
+# UNUSED: no frontend caller
 @router.get("/trend", response_model=APIResponse[list[dict]])
 async def order_trend(
     days: int = Query(30, ge=1, le=365),
@@ -534,6 +538,7 @@ async def order_trend(
         return APIResponse(success=False, message=str(e), data=[])
 
 
+# UNUSED: no frontend caller
 @router.get("/refunds", response_model=PaginatedResponse[dict])
 async def list_refunds(
     page: int = Query(1, ge=1),
@@ -556,6 +561,7 @@ async def list_refunds(
 
 
 # 兼容性API
+# UNUSED: no frontend caller
 @router.get("", response_model=PaginatedResponse[dict])
 async def list_orders_compat(
     page: int = Query(1, ge=1),

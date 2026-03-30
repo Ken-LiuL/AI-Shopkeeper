@@ -82,6 +82,7 @@ _monitor_cache: dict[str, tuple[float, APIResponse]] = {}
 _CACHE_TTL = 300  # 5 minutes
 
 
+# UNUSED: no frontend caller
 @router.get("/", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitors_root(limit: int = 20) -> APIResponse[CompetitorMonitorResult]:
     """竞品监控根端点 - 默认返回监控结果，支持 limit 参数"""
@@ -137,6 +138,7 @@ async def get_competitors_root(limit: int = 20) -> APIResponse[CompetitorMonitor
         )
 
 
+# UNUSED: no frontend caller
 @router.get("/monitor", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitor_monitor() -> APIResponse[CompetitorMonitorResult]:
     """获取竞品监控概览 - 使用真实数据源优先"""
@@ -475,6 +477,7 @@ async def get_price_changes(
         return APIResponse(data=[])
 
 
+# UNUSED: no frontend caller
 @router.get("/analysis/{product_id}", response_model=APIResponse[ProductCompetitorAnalysis])
 async def get_product_competitor_analysis(
     product_id: str,
@@ -564,6 +567,7 @@ async def get_product_competitor_analysis(
         return APIResponse(success=False, message=f"竞品分析失败: {str(e)}", data=None)
 
 
+# UNUSED: no frontend caller
 @router.get("/alerts", response_model=APIResponse[list[dict]])
 async def get_competitor_alerts() -> APIResponse[list[dict]]:
     """获取竞品价格预警"""
@@ -624,6 +628,7 @@ async def get_competitor_alerts() -> APIResponse[list[dict]]:
         return APIResponse(success=False, message=f"获取竞品预警失败: {str(e)}", data=[])
 
 
+# UNUSED: no frontend caller
 @router.get("/analysis", response_model=APIResponse[dict])
 async def get_competitors_analysis() -> APIResponse[dict]:
     """竞品分析汇总 - 聚合竞品监控数据，返回竞争态势总览"""

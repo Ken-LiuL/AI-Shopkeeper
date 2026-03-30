@@ -208,6 +208,7 @@ async def list_products_v1(
 # ── Fixed-path routes MUST be defined before /{product_id} ──
 
 
+# UNUSED: no frontend caller
 @router.post("/import", response_model=APIResponse[dict])
 async def import_products(body: list[ProductCreateRequest]) -> APIResponse[dict]:
     """Batch import products from JSON payload."""
@@ -275,6 +276,7 @@ async def export_products(
     )
 
 
+# UNUSED: no frontend caller
 @router.get("/categories", response_model=APIResponse[list[dict]])
 async def list_categories() -> APIResponse[list[dict]]:
     from fastapi import HTTPException
@@ -292,6 +294,7 @@ async def list_categories() -> APIResponse[list[dict]]:
     return APIResponse(data=[dict(r) for r in rows])
 
 
+# UNUSED: no frontend caller
 @router.get("/low-stock", response_model=PaginatedResponse[dict])
 async def low_stock(
     threshold: int = Query(10, ge=0),
@@ -597,6 +600,7 @@ class KnowledgeBuildRequest(BaseModel):
     max_images_per_product: int = 3
 
 
+# UNUSED: no frontend caller
 @router.post("/knowledge/search", response_model=APIResponse[list[dict]])
 async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[list[dict]]:
     """商品语义搜索（embedding 向量匹配，fallback SQL ILIKE）。"""
@@ -621,6 +625,7 @@ async def search_product_knowledge(body: KnowledgeSearchRequest) -> APIResponse[
     return APIResponse(data=[dict(r) for r in rows])
 
 
+# UNUSED: no frontend caller
 @router.post("/knowledge/build", response_model=APIResponse[dict])
 async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> APIResponse[dict]:
     """触发商品知识库构建（从 products 同步 → embedding → pgvector）。"""
@@ -641,6 +646,7 @@ async def build_product_knowledge(body: KnowledgeBuildRequest | None = None) -> 
     return APIResponse(data=result)
 
 
+# UNUSED: no frontend caller
 @router.get("/knowledge/stats", response_model=APIResponse[dict])
 async def knowledge_stats() -> APIResponse[dict]:
     """商品知识库统计信息。"""
@@ -669,6 +675,7 @@ async def knowledge_stats() -> APIResponse[dict]:
 # ── Dynamic path routes ─────────────────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.get("/pricing-analysis", response_model=APIResponse[dict])
 async def get_pricing_analysis() -> APIResponse[dict]:
     """商品定价分析 — 按医疗器械行业常见40%毛利假设估算成本，并结合月销/库存做周转调价。"""
@@ -986,6 +993,7 @@ async def get_pricing_analysis() -> APIResponse[dict]:
         return APIResponse(success=False, message=f"获取定价分析失败: {str(e)}", data={})
 
 
+# UNUSED: no frontend caller
 @router.get("", response_model=PaginatedResponse[dict])
 async def list_products(
     page: int = Query(1, ge=1),
@@ -1033,6 +1041,7 @@ async def list_products(
     )
 
 
+# UNUSED: no frontend caller
 @router.post("/batch-cost-price", response_model=APIResponse[dict])
 async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
     """批量更新成本价。Body: [{product_id, cost_price}, ...]"""
@@ -1067,6 +1076,7 @@ async def batch_update_cost_price(items: list[dict]) -> APIResponse[dict]:
     return APIResponse(data={"updated": updated, "not_found": not_found[:20], "errors": errors[:20], "total": len(items)})
 
 
+# UNUSED: no frontend caller
 @router.get("/profit-analysis", response_model=APIResponse[dict])
 async def profit_analysis() -> APIResponse[dict]:
     """利润分析：按商品维度的利润率、毛利贡献"""
@@ -1149,6 +1159,7 @@ async def get_product(product_id: str) -> APIResponse[dict]:
     return APIResponse(data=dict(row))
 
 
+# UNUSED: no frontend caller
 @router.post("", response_model=APIResponse[dict], status_code=201)
 async def create_product(body: ProductCreateRequest) -> APIResponse[dict]:
     from fastapi import HTTPException
@@ -1251,6 +1262,7 @@ async def delete_product(product_id: str) -> APIResponse[dict]:
     return APIResponse(data=dict(row), message="Product deleted")
 
 
+# UNUSED: no frontend caller
 @router.get("/{product_id}/competitors", response_model=APIResponse[list[dict]])
 async def product_competitors(product_id: str) -> APIResponse[list[dict]]:
     from fastapi import HTTPException
@@ -1279,6 +1291,7 @@ async def product_competitors(product_id: str) -> APIResponse[list[dict]]:
     return APIResponse(data=[dict(r) for r in rows])
 
 
+# UNUSED: no frontend caller
 @router.patch("/{product_id}/price", response_model=APIResponse[dict])
 async def update_price(product_id: str, body: dict) -> APIResponse[dict]:
     """Update product price. Body: {retail_price?, cost_price?}"""
@@ -1310,6 +1323,7 @@ async def update_price(product_id: str, body: dict) -> APIResponse[dict]:
     return APIResponse(data=dict(row))
 
 
+# UNUSED: no frontend caller
 @router.get("/{product_id}/sales", response_model=APIResponse[list[SalesRecord]])
 async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
     from fastapi import HTTPException
@@ -1332,6 +1346,7 @@ async def get_sales(product_id: str) -> APIResponse[list[SalesRecord]]:
     )
 
 
+# UNUSED: no frontend caller
 @router.get("/analysis", response_model=APIResponse[dict])
 async def get_product_analysis() -> APIResponse[dict]:
     """商品销售分析：畅销品、滞销品、利润分析"""

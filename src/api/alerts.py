@@ -553,6 +553,7 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     return deduped[:10]
 
 
+# UNUSED: no frontend caller
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_alerts(
     severity: str | None = Query(None),
@@ -698,6 +699,7 @@ async def _run_alert_scan(task_id: str, orch: Orchestrator) -> None:
         logger.exception("Alert scan %s failed", task_id)
 
 
+# UNUSED: no frontend caller
 @router.post("/scan", response_model=APIResponse[AlertScanResponse])
 async def trigger_scan(
     bg: BackgroundTasks,
@@ -708,6 +710,7 @@ async def trigger_scan(
     return APIResponse(data=AlertScanResponse(task_id=task_id, message="Alert scan started"))
 
 
+# UNUSED: no frontend caller
 @router.post("/push", response_model=APIResponse[dict])
 async def push_alerts() -> APIResponse[dict]:
     """手动触发告警推送（Telegram/Webhook）"""
@@ -724,6 +727,7 @@ async def push_alerts() -> APIResponse[dict]:
     return APIResponse(data=result)
 
 
+# UNUSED: no frontend caller
 @router.post("/test-push", response_model=APIResponse[dict])
 async def test_push(message: str = "这是一条测试告警") -> APIResponse[dict]:
     """测试推送通道"""

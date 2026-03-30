@@ -824,6 +824,7 @@ def _calculate_data_completeness(business_data: dict[str, Any]) -> dict[str, Any
     }
 
 
+# UNUSED: no frontend caller
 @router.get("/weekly-summary", response_model=APIResponse[dict])
 async def get_weekly_summary() -> APIResponse[dict]:
     """本周经营总结"""
@@ -916,6 +917,7 @@ async def get_weekly_summary() -> APIResponse[dict]:
         return APIResponse(success=False, message=f"生成周总结失败: {str(e)}", data={})
 
 
+# UNUSED: no frontend caller
 @router.get("/alerts", response_model=APIResponse[list[dict]])
 async def get_business_alerts() -> APIResponse[list[dict]]:
     """业务异常预警"""

@@ -392,6 +392,7 @@ async def chat(
 # ── Quick auto-reply (stateless) ──────────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.post("/auto-reply", response_model=APIResponse[dict])
 async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
     """无需 session 的快速自动回复，用于接入美团客服消息（30秒内响应要求）。"""
@@ -470,6 +471,7 @@ async def auto_reply(request: ChatRequest) -> APIResponse[dict]:
         )
 
 
+# UNUSED: no frontend caller
 @router.post("/chat/stream")
 async def chat_stream(request: ChatRequest):
     """流式客服回复（SSE），提供更快的首字响应体验。"""
@@ -622,6 +624,7 @@ async def list_sessions(
 # ── Get session messages ──────────────────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.get("/sessions/{session_id}/messages", response_model=APIResponse[SessionHistory])
 async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
     sm = _require_redis()
@@ -634,6 +637,7 @@ async def get_session_messages(session_id: str) -> APIResponse[SessionHistory]:
 # ── Delete session ────────────────────────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.delete("/sessions/{session_id}", response_model=APIResponse[dict])
 async def delete_session(session_id: str) -> APIResponse[dict]:
     sm = _require_redis()
@@ -782,6 +786,7 @@ async def get_quality_queue(
 # ── Chat Log Collection (聊天记录采集) ────────────────────
 
 
+# UNUSED: no frontend caller
 @router.post("/log-chat", response_model=APIResponse[dict])
 async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
     """
@@ -837,6 +842,7 @@ async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
 # ── Analytics ─────────────────────────────────────────────
 
 
+# UNUSED: no frontend caller
 @router.get("/stats", response_model=APIResponse[dict])
 async def get_stats() -> APIResponse[dict]:
     """Get customer service statistics (today's AI performance dashboard)."""
@@ -1033,6 +1039,7 @@ async def get_stats() -> APIResponse[dict]:
     )
 
 
+# UNUSED: no frontend caller
 @router.get("/stats-fallback", response_model=APIResponse[dict])
 async def _get_stats_fallback_from_raw() -> APIResponse[dict]:
     """Internal: extract IM task counts from qnh_orders_raw when cs tables are absent."""

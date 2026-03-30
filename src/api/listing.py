@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/listing", tags=["listing"])
 logger = logging.getLogger(__name__)
 
 
+# UNUSED: no frontend caller
 @router.get("/optimization", response_model=APIResponse[dict])
 async def listing_optimization() -> APIResponse[dict]:
     """商品上架优化建议"""
@@ -77,6 +78,7 @@ async def list_listings(
         )
 
 
+# UNUSED: no frontend caller
 @router.put("/{listing_id}", response_model=APIResponse[dict])
 async def update_listing(listing_id: str, body: dict) -> APIResponse[dict]:
     try:
@@ -107,6 +109,7 @@ async def update_listing(listing_id: str, body: dict) -> APIResponse[dict]:
         raise HTTPException(status_code=500, detail="Failed to update listing") from e
 
 
+# UNUSED: no frontend caller
 @router.post("/{listing_id}/publish", response_model=APIResponse[dict])
 async def publish_listing(listing_id: str) -> APIResponse[dict]:
     try:
@@ -126,6 +129,7 @@ async def publish_listing(listing_id: str) -> APIResponse[dict]:
         raise HTTPException(status_code=500, detail="Failed to publish listing") from e
 
 
+# UNUSED: no frontend caller
 @router.delete("/{listing_id}", response_model=APIResponse[dict])
 async def delete_listing(listing_id: str) -> APIResponse[dict]:
     try:
@@ -202,6 +206,7 @@ async def create_listing(
     return TaskCreatedResponse(task_id=listing_id, message="Listing creation started")
 
 
+# UNUSED: no frontend caller
 @router.get("/{listing_id}", response_model=APIResponse[ListingDetail])
 async def get_listing(listing_id: str) -> APIResponse[ListingDetail]:
     try:

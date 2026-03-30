@@ -767,6 +767,7 @@ async def _get_recent_outcomes(
 # Pool is lazily initialized by middleware in main.py
 
 
+# UNUSED: no frontend caller
 @router.get("", response_model=APIResponse[DashboardOverview])
 @router.get("/overview", response_model=APIResponse[DashboardOverview])
 async def overview() -> APIResponse[DashboardOverview]:
@@ -845,6 +846,7 @@ async def dashboard_alerts() -> APIResponse[list[dict]]:
         return APIResponse(data=[], message="Failed to load alerts")
 
 
+# UNUSED: no frontend caller
 @router.get("/sales-trend", response_model=APIResponse[list[SalesTrendPoint]])
 async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
     pool = pg.get_pool()
@@ -940,6 +942,7 @@ async def sales_trend() -> APIResponse[list[SalesTrendPoint]]:
     return APIResponse(data=result_points)
 
 
+# UNUSED: no frontend caller
 @router.get("/top-products", response_model=APIResponse[list[TopProduct]])
 async def top_products() -> APIResponse[list[TopProduct]]:
     pool = pg.get_pool()
@@ -1362,6 +1365,7 @@ async def get_ai_stats() -> APIResponse[dict]:
     })
 
 
+# UNUSED: no frontend caller
 @router.get("/raw-data-debug")
 async def raw_data_debug() -> dict:
     """Debug endpoint: show what's in raw tables."""
@@ -1386,6 +1390,7 @@ async def raw_data_debug() -> dict:
     return result
 
 
+# UNUSED: no frontend caller
 @router.get("/trends", response_model=APIResponse[list[dict]])
 async def sales_trends(
     days: int = 7,

@@ -564,6 +564,7 @@ async def get_suggestions_legacy() -> APIResponse:
         return APIResponse(data=[suggestion.dict() for suggestion in result.data])
 
 
+# UNUSED: no frontend caller
 @router.get("/analysis/{product_id}", response_model=APIResponse[dict])
 async def get_analysis(product_id: str) -> APIResponse:
     """单个商品的定价分析"""
@@ -767,6 +768,7 @@ async def batch_update_prices(req: BatchPriceUpdateRequest) -> APIResponse[Batch
         )
 
 
+# UNUSED: no frontend caller
 @router.post("/apply", response_model=APIResponse[list])
 async def apply_prices(req: ApplyPriceRequest) -> APIResponse:
     """应用价格变更"""

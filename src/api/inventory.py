@@ -511,6 +511,7 @@ async def _build_restock_suggestions(
     return suggestions
 
 
+# UNUSED: no frontend caller
 @router.get("/overview", response_model=APIResponse[dict])
 async def get_inventory_overview() -> APIResponse[dict]:
     """库存总览 - 基于 products 表的数据"""
@@ -620,6 +621,7 @@ async def get_inventory_overview() -> APIResponse[dict]:
         return APIResponse(success=False, message=f"Failed to get overview: {str(e)}", data={})
 
 
+# UNUSED: no frontend caller
 @router.get("/turnover", response_model=APIResponse[list[dict]])
 async def get_inventory_turnover(
     days: int = Query(30, ge=7, le=365, description="统计天数"),
@@ -689,6 +691,7 @@ async def get_inventory_turnover(
         )
 
 
+# UNUSED: no frontend caller
 @router.get("/status", response_model=APIResponse[dict])
 async def get_inventory_status() -> APIResponse[dict]:
     """查询库存状态汇总（低库存 / 缺货 / 正常）"""
@@ -773,6 +776,7 @@ async def get_inventory_list(
         return APIResponse(success=False, message=f"获取库存列表失败: {str(e)}", data=[])
 
 
+# UNUSED: no frontend caller
 @router.get("/low-stock", response_model=APIResponse[list[InventoryListItem]])
 async def get_low_stock_inventory(
     limit: int = Query(200, ge=1, le=1000, description="返回低库存商品数量"),
@@ -786,6 +790,7 @@ async def get_low_stock_inventory(
         return APIResponse(success=False, message=f"获取低库存列表失败: {str(e)}", data=[])
 
 
+# UNUSED: no frontend caller
 @router.get("/out-of-stock", response_model=APIResponse[list[InventoryListItem]])
 async def get_out_of_stock_inventory(
     limit: int = Query(200, ge=1, le=1000, description="返回断货商品数量"),
