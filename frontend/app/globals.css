@@ -15,6 +15,10 @@
   border-radius: 3px;
 }
 
+body {
+  font-family: "SF Pro Text", "SF Pro Display", "Segoe UI", system-ui, sans-serif;
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

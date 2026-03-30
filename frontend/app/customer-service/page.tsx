@@ -390,7 +390,7 @@ function CustomerServicePage() {
         issue_key: issueKey,
         title: item.reason || '客服低分回复',
         status,
-        metadata: item,
+        metadata: { ...item },
       });
       setQualityStatuses((prev) => ({
         ...prev,

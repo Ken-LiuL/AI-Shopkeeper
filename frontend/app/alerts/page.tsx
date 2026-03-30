@@ -25,6 +25,19 @@ function getAlertActionLink(alert: Alert) {
   return '/alerts';
 }
 
+function getAlertRecommendation(alert: Alert): string {
+  if (alert.recommended_action) return alert.recommended_action;
+  if (alert.action_suggestions && alert.action_suggestions.length > 0) {
+    return alert.action_suggestions[0];
+  }
+
+  const type = (alert.type || '').toLowerCase();
+  if (type.includes('stock') || type.includes('inventory')) return '建议立即补货，避免断货影响销售';
+  if (type.includes('price')) return '建议结合销量、库存和成本复核当前价格';
+  if (type.includes('review') || type.includes('rating')) return '建议主动联系客户了解问题并改进';
+  return 'AI 正在分析最优处理方案，请稍后查看';
+}
+
 function AlertsPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [severityFilter, setSeverityFilter] = useState('');

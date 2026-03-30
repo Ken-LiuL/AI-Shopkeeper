@@ -503,7 +503,7 @@ export async function updateIssueAction(body: {
 export interface Alert {
   alert_id: string;
   type: string;
-  severity: 'low' | 'medium' | 'high';
+  severity: 'critical' | 'high' | 'medium' | 'low' | 'warning' | 'info';
   title: string;
   description: string;
   product_id?: string;
@@ -555,6 +555,7 @@ export interface Product {
   name: string;
   retail_price: number;
   estimated_stock?: number;
+  stock?: number;
   monthly_sales?: number;
   threshold?: number;
   cost_price?: number;
@@ -730,12 +731,12 @@ export async function getOrders(
     status,
   });
   if (date) params.set('date', date);
-  return fetchAPI(`/orders/list?${params.toString()}`).then((response: {
+  return fetchAPI<{
     data: Array<Record<string, unknown>>;
     total: number;
     page: number;
     page_size: number;
-  }) => ({
+  }>(`/orders/list?${params.toString()}`).then((response) => ({
     orders: (response.data || []).map((item) => ({
       order_id: String(item.order_id || ''),
       product_name: String(item.product_name || '—'),
