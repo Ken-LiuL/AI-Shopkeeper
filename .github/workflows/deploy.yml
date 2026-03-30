@@ -128,12 +128,21 @@ jobs:
             fi
             echo "✅ Build done"
 
+            echo "=== Verifying built image ==="
+            docker run --rm --entrypoint /bin/sh aishop-app:latest -lc '
+              echo "--- /app/start.sh ---"
+              nl -ba /app/start.sh | sed -n "1,80p"
+              echo "--- python modules ---"
+              python -c "import openpyxl, uvicorn; print(\"openpyxl\", openpyxl.__version__); print(\"uvicorn\", uvicorn.__version__)"
+            '
+
             echo "=== Starting infra (no-recreate) ==="
             cd /opt/aishop
             docker compose up -d --no-recreate postgres neo4j redis 2>/dev/null || true
 
             echo "=== Restarting app only ==="
-            docker compose up -d --force-recreate --no-deps app
+            docker rm -f aishop-app 2>/dev/null || true
+            docker compose up -d --force-recreate --no-build --no-deps app
 
             echo "=== Health check (30s wait) ==="
             sleep 30
