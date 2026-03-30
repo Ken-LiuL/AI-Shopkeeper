@@ -1,8 +1,8 @@
-# AI店长 — 智能零售管理系统
+# AI店长 — 智能医疗器械零售运营系统
 
-> 美团即时零售（医疗器械类目）AI 驱动运营系统，覆盖选品、客服、预警、套餐、上架五大核心环节。
+> 美团即时零售（医疗器械类目）AI 驱动运营系统，覆盖客服、选品、预警、套餐、上架、定价六大核心环节。
 
-[![CI](https://github.com/your-org/ai-store-manager/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/ai-store-manager/actions)
+[![CI](https://github.com/Ken-LiuL/AI-Shopkeeper/actions/workflows/ci.yml/badge.svg)](https://github.com/Ken-LiuL/AI-Shopkeeper/actions)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/license-proprietary-red.svg)]()
 
@@ -13,7 +13,7 @@
 ```
 ┌───────────────────────────────────────────────────────────────┐
 │                        接入层                                  │
-│   React 管理后台 (3000)  ·  企业微信  ·  APScheduler 定时任务  │
+│   Next.js 管理后台  ·  企业微信  ·  APScheduler 定时任务       │
 └──────────────────────────┬────────────────────────────────────┘
                            │  HTTP / WebSocket
                            ▼
@@ -38,9 +38,9 @@
                      │
                      ▼
 ┌───────────────────────────────────────────────────────────────┐
-│                    Skills Layer (MCP)                          │
-│  ActionBook · Neo4jSkill · DatabaseSkill · EmbeddingSkill     │
-│  RerankerSkill · ProphetSkill · CalculatorSkill · Notifier    │
+│                    Skills Layer                                │
+│  Neo4jSkill · DatabaseSkill · EmbeddingSkill · RerankerSkill  │
+│  ProphetSkill · CalculatorSkill · Notifier                    │
 └──────────────────────────┬────────────────────────────────────┘
                            │
          ┌─────────────────┼─────────────────┐
@@ -59,6 +59,7 @@
 | Agent 框架 | LangGraph | ≥ 0.2 |
 | LLM 调用 | OpenRouter (Gemini Flash / DeepSeek V3 / Claude Sonnet) + Anthropic 直连 | — |
 | Web 框架 | FastAPI + Uvicorn | ≥ 0.115 |
+| 前端 | Next.js + TailwindCSS + Recharts | — |
 | 关系数据库 | PostgreSQL | 16 |
 | 图数据库 | Neo4j Community + APOC | 5 |
 | 缓存 | Redis (hiredis) | 7 |
@@ -66,25 +67,33 @@
 | 精排 | BGE-Reranker | — |
 | 时序预测 | Prophet | ≥ 1.1 |
 | 可观测性 | Langfuse + Prometheus + Grafana | — |
-| 前端 | React + Recharts + TailwindCSS | — |
 | CI | GitHub Actions (ruff + pytest + coverage) | — |
 
 ## 功能模块
 
 | Agent / 服务 | 职责 | 说明 |
 |-------------|------|------|
+| **CustomerService** | 智能客服：意图识别→路由→混合检索→精排→GraphRAG→回复生成 | LangGraph 8节点，Chrome 扩展透传 |
 | **Selection** | 智能选品：市场分析→竞品监控→缺品识别→供应链评估→综合评分 | LangGraph 8节点 |
-| **CustomerService** | 智能客服：意图识别→路由→混合检索→精排→GraphRAG→回复生成 | LangGraph 8节点 |
 | **Alert** | 智能预警：Prophet 时序检测→规则引擎→归因分析→行动建议 | LangGraph 3节点 |
 | **Bundle** | 智能套餐：FP-Growth 关联挖掘→场景设计→定价 | LangGraph 3节点 |
-| **Listing** | 智能上架：1688/拼多多解析→标品匹配→信息填充→合规校验 | LangGraph 4节点 |
-| **DailyReport** | 智能日报：销售对比→热销/滞销→客服统计→预警→明日待办→推送 | 每日22:00自动推送 |
-| **Replenishment** | 智能补货：安全库存计算（Z=1.65）→补货建议→一键生成采购单 | 降本核心 |
+| **Listing** | 智能上架：1688/拼多多商品信息解析→标品匹配→信息填充→合规校验 | LangGraph 4节点 |
 | **Pricing** | 动态定价：竞品价格对比→毛利分析→弹性估算→调价建议→批量执行 | 增效核心 |
-| **CSAnalytics** | 客服效果追踪：意图分布→AI处理率→推荐转化率 | 数据闭环 |
-| **FeedbackLoop** | 反馈闭环：选品/套餐/调价效果追踪→自适应权重调整 | 自我进化 |
+| **DailyReport** | 智能日报：销售对比→热销/滞销→客服统计→预警→明日待办→推送 | 每日22:00自动推送 |
+| **Replenishment** | 智能补货：安全库存计算→补货建议→一键生成采购单 | 降本核心 |
 
 > 详细说明见 [docs/AGENTS.md](docs/AGENTS.md)
+
+## 数据导入方式
+
+系统数据通过以下两种方式导入，**不使用爬虫或自动化抓取**：
+
+| 方式 | 说明 |
+|------|------|
+| **Chrome 扩展** | 安装在商家浏览器上，拦截美团商家后台 WebSocket 客服消息，实时转发至后端 AI 客服接口 |
+| **手动上传** | 运营人员将商品数据、订单数据、竞品信息等通过管理后台手动上传（CSV/Excel） |
+
+Chrome 扩展安装说明见 [chrome-extension/README.md](chrome-extension/README.md)。
 
 ## 快速开始（5 分钟）
 
@@ -97,7 +106,8 @@
 ### 1. 克隆 & 安装
 
 ```bash
-git clone <repo-url> && cd ai-store-manager
+git clone https://github.com/Ken-LiuL/AI-Shopkeeper.git
+cd AI-Shopkeeper
 cp .env.example .env
 # 编辑 .env，填入 API Key
 ```
@@ -136,8 +146,7 @@ docker compose --profile app up -d
 | 健康检查 | http://localhost:8000/health |
 | 深度就绪检查 | http://localhost:8000/ready |
 | Neo4j Browser | http://localhost:7474 |
-| 前端管理台 | http://localhost:3000（需单独启动 `cd frontend && npm run dev`）|
-| Prometheus 指标 | http://localhost:9090/metrics |
+| 前端管理台 | http://localhost:3000（`cd frontend && npm run dev`）|
 
 ## API 概览
 
@@ -145,19 +154,19 @@ docker compose --profile app up -d
 
 | 模块 | 端点 | 说明 |
 |------|------|------|
+| 客服 | `POST /api/cs/chat` | 发送咨询消息 |
 | 选品 | `POST /api/selection/run` | 触发选品分析 |
 | | `GET /api/selection/recommendations` | 获取最新推荐 |
-| 客服 | `POST /api/cs/chat` | 发送咨询消息 |
 | 预警 | `POST /api/alerts/scan` | 触发预警扫描 |
 | | `GET /api/alerts` | 查询预警列表 |
 | 套餐 | `POST /api/bundles/generate` | 触发套餐生成 |
 | 上架 | `POST /api/listing/create` | 创建上架任务 |
 | | `POST /api/listing/parse` | 解析商品链接 |
+| 定价 | `GET /api/pricing/suggestions` | 调价建议 |
+| | `POST /api/pricing/apply` | 批量调价 |
 | 商品 | `GET/POST/PUT /api/products` | 商品 CRUD |
 | 补货 | `GET /api/replenishment/suggestions` | 补货建议 |
 | | `POST /api/replenishment/purchase-order` | 生成采购单 |
-| 定价 | `GET /api/pricing/suggestions` | 调价建议 |
-| | `POST /api/pricing/apply` | 批量调价 |
 | 分析 | `GET /api/analytics/customer-service` | 客服统计 |
 | | `GET /api/analytics/conversion` | 转化追踪 |
 | 仪表盘 | `GET /api/dashboard/overview` | 运营概览 |
@@ -172,14 +181,14 @@ docker compose --profile app up -d
        ▼
   Orchestrator.run(task_type, input)
        │
-       ├─ task_type="selection" ──→ SelectionGraph.ainvoke()
-       │     fetch_data → [market ∥ competitor ∥ inventory ∥ seasonal]
-       │     → gap_identification → supplier_evaluation → scorer
-       │
        ├─ task_type="customer_service" ──→ CSGraph.ainvoke()
        │     intent → route ─┬─ faq → reply
        │                     ├─ search → rerank → graphrag → reply
        │                     └─ human (转人工)
+       │
+       ├─ task_type="selection" ──→ SelectionGraph.ainvoke()
+       │     fetch_data → [market ∥ competitor ∥ inventory ∥ seasonal]
+       │     → gap_identification → supplier_evaluation → scorer
        │
        ├─ task_type="alert" ──→ AlertGraph.ainvoke()
        │     anomaly_detection ─┬─ 无异常 → END
@@ -213,8 +222,6 @@ docker compose --profile app up -d
 | `LANGFUSE_PUBLIC_KEY` | 否 | Langfuse 追踪 Public Key | — |
 | `LANGFUSE_SECRET_KEY` | 否 | Langfuse 追踪 Secret Key | — |
 | `LANGFUSE_HOST` | 否 | Langfuse 服务地址 | `http://localhost:3000` |
-| `QNH_USERNAME` | 否 | 牵牛花登录账号 | — |
-| `QNH_PASSWORD` | 否 | 牵牛花登录密码 | — |
 | `WECHAT_WEBHOOK_URL` | 否 | 企业微信机器人 Webhook | — |
 
 > *二选一：使用 OpenRouter 填 `OPENROUTER_API_KEY`，直连 Anthropic 填 `ANTHROPIC_API_KEY`。
@@ -270,8 +277,7 @@ src/
 │   ├── alert/           # 预警 Agent
 │   ├── bundle/          # 套餐 Agent
 │   └── listing/         # 上架 Agent
-├── skills/              # MCP Skills Layer
-│   ├── actionbook.py    # 数据采集（美团/1688/拼多多）
+├── skills/              # Skills Layer
 │   ├── neo4j_skill.py   # 知识图谱 + 向量检索
 │   ├── database.py      # PostgreSQL CRUD
 │   ├── embedding.py     # BGE 向量化
@@ -282,8 +288,11 @@ src/
 ├── models/              # Pydantic 数据模型
 ├── db/                  # 数据库连接管理（postgres/neo4j/redis）
 ├── api/                 # FastAPI 路由
-├── sync/                # 牵牛花数据同步引擎
+├── sync/                # ETL 数据处理（手动上传后处理）
 └── learning/            # 自适应学习（权重/阈值/版本管理）
+
+chrome-extension/        # Chrome 扩展（客服消息透传）
+frontend/                # Next.js 管理后台
 ```
 
 ## 部署
@@ -317,7 +326,7 @@ docker compose --profile app up -d
 | [docs/AGENTS.md](docs/AGENTS.md) | Agent 详细说明 |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | 部署指南 |
 | [docs/客户方案书.md](docs/客户方案书.md) | 客户方案书 |
-| [SPEC.md](SPEC.md) | 完整技术规格书 |
+| [SPEC.md](SPEC.md) | 完整技术规格书（历史版本，部分内容已过时） |
 
 ## 许可证
 
