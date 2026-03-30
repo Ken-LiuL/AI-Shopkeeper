@@ -121,6 +121,35 @@ async def main():
         except Exception as e:
             logger.error("❌ %s 导入失败: %s", import_type, e, exc_info=True)
 
+    # ── 数据导入完成后，自动跑派生 ETL ──────────────────────────
+    logger.info("🔄 运行数据派生 ETL...")
+
+    # 1. 销售历史聚合（从订单表生成）
+    try:
+        from src.sync.etl_sales_aggregation import run_sales_aggregation_etl
+        result = await run_sales_aggregation_etl(pool)
+        logger.info("✅ 销售历史聚合: %s", result)
+    except ImportError:
+        logger.info("⏩ etl_sales_aggregation 尚未创建，跳过")
+    except Exception as e:
+        logger.warning("⚠️ 销售历史聚合失败: %s", e)
+
+    # 2. 类目映射
+    try:
+        from src.sync.etl_category_mapping import run_category_mapping_etl
+        result = await run_category_mapping_etl(pool, None)
+        logger.info("✅ 类目映射: %s", result)
+    except Exception as e:
+        logger.warning("⚠️ 类目映射失败: %s", e)
+
+    # 3. 商品关联挖掘
+    try:
+        from src.sync.etl_product_associations import run_product_associations_etl
+        result = await run_product_associations_etl(pool)
+        logger.info("✅ 商品关联: %s", result)
+    except Exception as e:
+        logger.warning("⚠️ 商品关联失败: %s", e)
+
     await pg_db.close()
     logger.info("🎉 完成!")
 
