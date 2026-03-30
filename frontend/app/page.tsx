@@ -68,8 +68,8 @@ function DashboardPage() {
   if (loading) {
     return (
       <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+          {[1, 2, 3, 4, 5].map((i) => (
             <Card key={i}>
               <CardContent className="p-6">
                 <div className="h-20 bg-muted animate-pulse rounded"></div>
@@ -105,26 +105,41 @@ function DashboardPage() {
     );
   }
 
+  const todayGMV = Number(overview?.today_gmv || 0);
+  const yesterdayGMV = Number(overview?.yesterday_gmv || 0);
+  const todayOrders = Number(overview?.today_orders || 0);
+  const yesterdayOrders = Number(overview?.yesterday_orders || 0);
+  const avgOrderValue = Number(overview?.avg_order_value || 0);
+
   const commandStats = [
     {
-      title: '待处理事项',
-      value: Number(overview?.action_items?.length || overview?.pending_tasks || 0).toLocaleString(),
-      hint: '来自导入 review、预警和库存风险'
+      title: '今日 GMV',
+      value: `¥${todayGMV.toLocaleString()}`,
+      hint: yesterdayGMV > 0
+        ? `昨日 ¥${yesterdayGMV.toLocaleString()}，${todayGMV >= yesterdayGMV ? '▲' : '▼'} ${yesterdayGMV > 0 ? Math.abs(Math.round((todayGMV - yesterdayGMV) / yesterdayGMV * 100)) : 0}%`
+        : '今日真实订单 GMV',
     },
     {
-      title: '高风险预警',
-      value: alerts.filter((alert) => ['critical', 'high'].includes(alert.severity || '')).length.toLocaleString(),
-      hint: '优先处理断货、主档缺口和严重异常'
+      title: '今日订单数',
+      value: todayOrders.toLocaleString(),
+      hint: yesterdayOrders > 0
+        ? `昨日 ${yesterdayOrders} 单，${todayOrders >= yesterdayOrders ? '▲' : '▼'} ${yesterdayOrders > 0 ? Math.abs(Math.round((todayOrders - yesterdayOrders) / yesterdayOrders * 100)) : 0}%`
+        : '基于真实订单数据',
     },
     {
-      title: '今日订单',
-      value: Number(overview?.today_orders || 0).toLocaleString(),
-      hint: '基于当前人工导入后的真实订单'
+      title: '客单价',
+      value: avgOrderValue > 0 ? `¥${avgOrderValue.toFixed(2)}` : '—',
+      hint: '今日平均每单金额',
     },
     {
-      title: '今日营收',
-      value: overview?.today_gmv ? `¥${Number(overview.today_gmv).toLocaleString()}` : '¥0',
-      hint: '用于判断当日经营节奏，不再作为主界面中心'
+      title: '低库存商品',
+      value: Number(overview?.low_stock_count || 0).toLocaleString(),
+      hint: '库存 < 10 件，建议及时补货',
+    },
+    {
+      title: '待处理预警',
+      value: Number(overview?.pending_alerts || 0).toLocaleString(),
+      hint: '优先处理断货、主档缺口和严重异常',
     },
   ];
 
@@ -267,7 +282,7 @@ function DashboardPage() {
         </Card>
       )}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {commandStats.map((stat) => (
           <Card key={stat.title} className="border-slate-200">
             <CardContent className="p-5">

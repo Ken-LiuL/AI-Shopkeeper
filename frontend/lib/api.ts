@@ -184,12 +184,15 @@ export interface DashboardOverview {
   total_products: number;
   today_orders: number;
   today_gmv: string;
+  yesterday_orders: number;
+  yesterday_gmv: string;
   avg_rating: number;
   avg_order_value: string;
   total_customers: number;
   conversion_rate: number;
   pending_alerts: number;
   pending_tasks: number;
+  low_stock_count: number;
   recent_sync_state?: SyncerStatus[];
   action_items?: Array<{
     priority: 'high' | 'medium' | 'low';

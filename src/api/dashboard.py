@@ -167,9 +167,75 @@ async def _column_exists(pool, table_name: str, column_name: str) -> bool:
         return False
 
 
-async def _get_today_order_metrics(pool) -> tuple[int, float]:
+async def _get_daily_order_metrics(pool) -> tuple[int, float, float, int, float]:
+    """Read today's and yesterday's metrics from qnh_daily_metrics (ETL table).
+
+    Returns:
+        (today_orders, today_gmv, today_avg_order_value, yesterday_orders, yesterday_gmv)
+    """
+    # ── Priority 1: qnh_daily_metrics (ETL generated) ──
+    if await _table_exists(pool, "qnh_daily_metrics"):
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT metric_date,
+                       COALESCE(valid_order_count, 0) AS order_count,
+                       COALESCE(valid_order_amount, 0) AS gmv,
+                       COALESCE(avg_order_value, 0)   AS avg_order_value
+                FROM qnh_daily_metrics
+                WHERE metric_date IN (CURRENT_DATE, CURRENT_DATE - INTERVAL '1 day')
+                  AND channel IS NULL
+                ORDER BY metric_date DESC
+                """,
+            )
+            import datetime as _dt
+            from datetime import date as _date
+            by_date = {str(r["metric_date"]): r for r in rows}
+            today_str = str(_date.today())
+            yesterday_str = str(_date.today() - _dt.timedelta(days=1))
+
+            t = by_date.get(today_str)
+            y = by_date.get(yesterday_str)
+
+            today_orders = int(t["order_count"]) if t else 0
+            today_gmv = float(t["gmv"]) if t else 0.0
+            today_avg = float(t["avg_order_value"]) if t else 0.0
+            yesterday_orders = int(y["order_count"]) if y else 0
+            yesterday_gmv = float(y["gmv"]) if y else 0.0
+
+            if today_orders > 0 or yesterday_orders > 0:
+                return today_orders, today_gmv, today_avg, yesterday_orders, yesterday_gmv
+        except Exception as e:
+            logger.debug("qnh_daily_metrics read failed: %s", e)
+
+    # ── Priority 2: qnh_orders (normalized orders table) ──
+    if await _table_exists(pool, "qnh_orders"):
+        try:
+            row = await pool.fetchrow(
+                """
+                SELECT
+                    COUNT(*) FILTER (WHERE DATE(order_time AT TIME ZONE 'Asia/Shanghai') = CURRENT_DATE) AS today_cnt,
+                    COALESCE(SUM(total_amount) FILTER (WHERE DATE(order_time AT TIME ZONE 'Asia/Shanghai') = CURRENT_DATE), 0) AS today_gmv,
+                    COUNT(*) FILTER (WHERE DATE(order_time AT TIME ZONE 'Asia/Shanghai') = CURRENT_DATE - 1) AS yesterday_cnt,
+                    COALESCE(SUM(total_amount) FILTER (WHERE DATE(order_time AT TIME ZONE 'Asia/Shanghai') = CURRENT_DATE - 1), 0) AS yesterday_gmv
+                FROM qnh_orders
+                WHERE order_time >= CURRENT_DATE - INTERVAL '2 days'
+                  AND COALESCE(status, '') NOT IN ('cancelled', 'refunded')
+                """
+            )
+            if row:
+                t_cnt = int(row["today_cnt"] or 0)
+                t_gmv = float(row["today_gmv"] or 0)
+                y_cnt = int(row["yesterday_cnt"] or 0)
+                y_gmv = float(row["yesterday_gmv"] or 0)
+                t_avg = t_gmv / t_cnt if t_cnt > 0 else 0.0
+                return t_cnt, t_gmv, t_avg, y_cnt, y_gmv
+        except Exception as e:
+            logger.debug("qnh_orders read failed: %s", e)
+
+    # ── Fallback: qnh_orders_raw (legacy) ──
     if not await _table_exists(pool, "qnh_orders_raw"):
-        return 0, 0.0
+        return 0, 0.0, 0.0, 0, 0.0
 
     try:
         has_total = await _column_exists(pool, "qnh_orders_raw", "total")
@@ -189,9 +255,35 @@ async def _get_today_order_metrics(pool) -> tuple[int, float]:
             WHERE {where_clause}
             """
         )
-        return int((row and row["cnt"]) or 0), float((row and row["revenue"]) or 0)
+        cnt = int((row and row["cnt"]) or 0)
+        rev = float((row and row["revenue"]) or 0)
+        return cnt, rev, (rev / cnt if cnt > 0 else 0.0), 0, 0.0
     except Exception:
-        return 0, 0.0
+        return 0, 0.0, 0.0, 0, 0.0
+
+
+async def _get_low_stock_count(pool) -> int:
+    """Count products with low/zero stock."""
+    # ── Priority 1: qnh_inventory ──
+    if await _table_exists(pool, "qnh_inventory"):
+        try:
+            count = await pool.fetchval(
+                "SELECT COUNT(*) FROM qnh_inventory WHERE COALESCE(stock, 0) < 10"
+            )
+            if count is not None:
+                return int(count)
+        except Exception:
+            pass
+
+    # ── Fallback: products table ──
+    if await _table_exists(pool, "products"):
+        with contextlib.suppress(Exception):
+            count = await pool.fetchval(
+                "SELECT COUNT(*) FROM products WHERE status = 'active' AND COALESCE(stock, 0) < 10"
+            )
+            return int(count or 0)
+
+    return 0
 
 
 async def _get_inventory_alert_count(pool) -> int:
@@ -784,8 +876,10 @@ async def overview() -> APIResponse[DashboardOverview]:
                 await pool.fetchval("SELECT COUNT(*) FROM products WHERE status = 'active'") or 0
             )
 
-    today_orders, today_gmv = await _get_today_order_metrics(pool)
-    avg_order_value = (today_gmv / today_orders) if today_orders > 0 else 0.0
+    today_orders, today_gmv, avg_order_value, yesterday_orders, yesterday_gmv = (
+        await _get_daily_order_metrics(pool)
+    )
+    low_stock_count = await _get_low_stock_count(pool)
     avg_rating = await _get_avg_rating(pool)
     pending_alerts = await _get_pending_alert_count(pool)
     recent_sync_state = await _get_recent_sync_state(pool, limit=5)
@@ -819,12 +913,15 @@ async def overview() -> APIResponse[DashboardOverview]:
             total_products=total_products,
             today_orders=today_orders,
             today_gmv=Decimal(str(round(today_gmv, 2))),
+            yesterday_orders=yesterday_orders,
+            yesterday_gmv=Decimal(str(round(yesterday_gmv, 2))),
             avg_rating=avg_rating,
             avg_order_value=Decimal(str(round(avg_order_value, 2))),
             total_customers=0,
             conversion_rate=0.0,
             pending_alerts=pending_alerts,
             pending_tasks=pending_tasks,
+            low_stock_count=low_stock_count,
             recent_sync_state=recent_sync_state,
             action_items=action_items,
             recent_outcomes=recent_outcomes,

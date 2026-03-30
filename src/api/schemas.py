@@ -249,12 +249,15 @@ class DashboardOverview(BaseModel):
     total_products: int = 0
     today_orders: int = 0
     today_gmv: Decimal = Decimal("0")
+    yesterday_orders: int = 0
+    yesterday_gmv: Decimal = Decimal("0")
     avg_rating: float = 0.0
     avg_order_value: Decimal = Decimal("0")
     total_customers: int = 0
     conversion_rate: float = 0.0
     pending_alerts: int = 0
     pending_tasks: int = 0
+    low_stock_count: int = 0
     recent_sync_state: list[dict[str, Any]] = Field(default_factory=list)
     action_items: list[ActionItem] = Field(default_factory=list)
     recent_outcomes: list[ActionOutcome] = Field(default_factory=list)
