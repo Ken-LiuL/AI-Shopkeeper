@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 const coreNav = [
   { href: '/', label: 'AI 指挥台', icon: '🧭' },
   { href: '/boss', label: '老板助手', icon: '🤖' },
+  { href: '/onboarding', label: '🚀 快速上手', icon: '✨' },
   { href: '/alerts', label: '预警处理', icon: '🔔' },
   { href: '/inventory', label: '库存修复', icon: '📦' },
   { href: '/products', label: '商品修复', icon: '🧾' },

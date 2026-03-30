@@ -17,6 +17,7 @@ function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [showOnboardingEntry, setShowOnboardingEntry] = useState(false);
   const [insightsTime] = useState(() => {
     const now = new Date();
     return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
@@ -63,6 +64,16 @@ function DashboardPage() {
     };
 
     fetchData();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const shouldShow = localStorage.getItem('show_onboarding_cta') === '1';
+    const completed = localStorage.getItem('ai-shopkeeper-onboarding-10min-completed') === 'true';
+    if (shouldShow && !completed) {
+      setShowOnboardingEntry(true);
+    }
+    localStorage.setItem('show_onboarding_cta', '0');
   }, []);
 
   if (loading) {
@@ -212,9 +223,18 @@ function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">AI 指挥台</h1>
-        <p className="text-muted-foreground">让系统把数据翻译成动作，而不是让你自己读图表。</p>
+      <div className="space-y-3">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">AI 指挥台</h1>
+          <p className="text-muted-foreground">让系统把数据翻译成动作，而不是让你自己读图表。</p>
+        </div>
+        {showOnboardingEntry && (
+          <a href="/onboarding">
+            <Button variant="outline" className="border-blue-200 text-blue-700 hover:bg-blue-50">
+              🚀 开始10分钟试用
+            </Button>
+          </a>
+        )}
       </div>
 
       {aiStats && (
