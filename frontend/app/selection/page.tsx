@@ -123,6 +123,29 @@ function SelectionPage() {
     }
   }
 
+  async function adoptProducts(productIds: string[]) {
+    if (productIds.length === 0) {
+      setMessage('请先选择要上架的商品。');
+      return;
+    }
+    const key = productIds.length === 1 ? `${productIds[0]}_adopt` : 'adopt';
+    setProcessingKey(key);
+    try {
+      const result = await fetchAPI<{ updated: number; product_ids: string[] }>('/selection/adopt', {
+        method: 'POST',
+        body: JSON.stringify({ product_ids: productIds }),
+      });
+      setSelectedProducts(new Set());
+      setMessage(`已上架 ${result.updated ?? productIds.length} 个商品`);
+      // Refresh list to reflect any status changes
+      void loadData();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : '上架操作失败');
+    } finally {
+      setProcessingKey(null);
+    }
+  }
+
   async function applySelectionAction(
     productIds: string[],
     action: 'select' | 'reject',
@@ -301,6 +324,13 @@ function SelectionPage() {
           <div className="flex gap-2">
             <Button
               disabled={processingKey !== null}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              onClick={() => void adoptProducts(Array.from(selectedProducts))}
+            >
+              {processingKey === 'adopt' ? '上架中...' : `批量上架 (${selectedProducts.size})`}
+            </Button>
+            <Button
+              disabled={processingKey !== null}
               onClick={() => void applySelectionAction(Array.from(selectedProducts), 'select')}
             >
               {processingKey === 'select' ? '处理中...' : `纳入重点 (${selectedProducts.size})`}
@@ -402,14 +432,21 @@ function SelectionPage() {
 
                     <div className="flex gap-2 lg:w-[220px] lg:flex-col">
                       <Button
-                        disabled={processingKey === product.product_id}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                        disabled={processingKey === `${product.product_id}_adopt` || processingKey === product.product_id}
+                        onClick={() => void adoptProducts([product.product_id])}
+                      >
+                        {processingKey === `${product.product_id}_adopt` ? '上架中...' : '上架'}
+                      </Button>
+                      <Button
+                        disabled={processingKey === `${product.product_id}_adopt` || processingKey === product.product_id}
                         onClick={() => void applySelectionAction([product.product_id], 'select')}
                       >
                         {processingKey === product.product_id ? '处理中...' : '纳入重点'}
                       </Button>
                       <Button
                         variant="outline"
-                        disabled={processingKey === product.product_id}
+                        disabled={processingKey === `${product.product_id}_adopt` || processingKey === product.product_id}
                         onClick={() => void applySelectionAction([product.product_id], 'reject')}
                       >
                         暂不考虑

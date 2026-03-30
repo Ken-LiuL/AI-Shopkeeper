@@ -7,6 +7,7 @@ import math
 from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from pydantic import BaseModel
 
 from src.agents.orchestrator import Orchestrator
 from src.db import postgres as pg
@@ -20,6 +21,10 @@ from .schemas import (
     SelectionRunSummary,
     TaskCreatedResponse,
 )
+
+
+class AdoptRequest(BaseModel):
+    product_ids: list[str]
 
 router = APIRouter(prefix="/api/selection", tags=["selection"])
 logger = logging.getLogger(__name__)
@@ -116,6 +121,36 @@ async def get_run(run_id: str) -> APIResponse[SelectionRunDetail]:
     except Exception as exc:
         logger.error("Failed to get selection run %s: %s", run_id, exc)
         raise HTTPException(status_code=500, detail="Internal server error") from exc
+
+
+@router.post("/adopt", response_model=APIResponse[dict])
+async def adopt_products(body: AdoptRequest) -> APIResponse[dict]:
+    """将选品推荐商品一键上架（更新 status 为 active）。"""
+    if not body.product_ids:
+        raise HTTPException(status_code=400, detail="product_ids 不能为空")
+
+    pool = pg.get_pool()
+    try:
+        result = await pool.execute(
+            """UPDATE products
+               SET status = 'active', updated_at = NOW()
+               WHERE product_id = ANY($1::text[])""",
+            body.product_ids,
+        )
+        # asyncpg returns e.g. "UPDATE 5"
+        updated_count = int(result.split()[-1]) if result else 0
+        logger.info(
+            "Selection adopt: updated %d products to active, ids=%s",
+            updated_count,
+            body.product_ids,
+        )
+        return APIResponse(
+            data={"updated": updated_count, "product_ids": body.product_ids},
+            message=f"已上架 {updated_count} 个商品",
+        )
+    except Exception as exc:
+        logger.error("Failed to adopt products: %s", exc)
+        raise HTTPException(status_code=500, detail="上架操作失败") from exc
 
 
 @router.get("/recommendations", response_model=APIResponse[list[dict]])
