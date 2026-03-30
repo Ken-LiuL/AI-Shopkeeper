@@ -229,6 +229,64 @@ async def send_alert(title: str, body: str, severity: str = "medium") -> dict[st
     }
 
 
+async def send_report(title: str, body: str) -> dict[str, Any]:
+    """发送日报通知（飞书 + 微信企业 + 钉钉 + Telegram + Webhook）
+
+    与 send_alert 不同，日报为信息类推送，使用 info/green 样式，无严重程度语义。
+    """
+    telegram_text = f"📊 <b>{title}</b>\n\n{body}"
+
+    configured_channels: list[str] = []
+    sent_channels: list[str] = []
+
+    # Telegram
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        configured_channels.append("telegram")
+        if await send_telegram(telegram_text):
+            sent_channels.append("telegram")
+
+    # 通用 Webhook
+    if WEBHOOK_URL:
+        configured_channels.append("webhook")
+        if await send_webhook({"title": title, "body": body, "type": "daily_report"}):
+            sent_channels.append("webhook")
+
+    # 飞书（green 主题）
+    if FEISHU_WEBHOOK_URL:
+        configured_channels.append("feishu")
+        if await send_feishu(title, body, severity="low"):
+            sent_channels.append("feishu")
+
+    # 企业微信
+    if WECHAT_WEBHOOK_URL:
+        configured_channels.append("wechat")
+        if await send_wechat(title, body, severity="low"):
+            sent_channels.append("wechat")
+
+    # 钉钉
+    if DINGTALK_WEBHOOK_URL:
+        configured_channels.append("dingtalk")
+        if await send_dingtalk(title, body, severity="low"):
+            sent_channels.append("dingtalk")
+
+    if not configured_channels:
+        logger.info("No notification channels configured for daily report")
+        return {
+            "sent": False,
+            "reason": "notification_not_configured",
+            "channels_attempted": [],
+            "channels_sent": [],
+        }
+
+    sent = bool(sent_channels)
+    return {
+        "sent": sent,
+        "reason": "sent" if sent else "notification_delivery_failed",
+        "channels_attempted": configured_channels,
+        "channels_sent": sent_channels,
+    }
+
+
 async def check_and_push_alerts(pool) -> dict:
     """检查待处理的告警并推送"""
     from datetime import datetime, timedelta

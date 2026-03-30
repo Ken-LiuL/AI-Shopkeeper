@@ -17,8 +17,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 
 from src.db import postgres as pg
+from src.services import notification
 from src.services.raw_data import fetch_latest_raw
-from src.skills.notifier import NotifierSkill
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,8 @@ class DailyReport:
     alert_details: list[dict[str, Any]] = field(default_factory=list)
     # 明日待办
     todo_items: list[str] = field(default_factory=list)
+    # 低库存商品数（来自 qnh_inventory）
+    low_stock_count: int = 0
     # 竞品动态
     competitor_changes: list[dict[str, Any]] = field(default_factory=list)
     # 牵牛花数据 — 核心 KPI、热销商品、消费排行、渠道分布、趋势数据
@@ -173,52 +175,63 @@ class DailyReportService:
         )
         report.competitor_changes = [dict(r) for r in comp_rows]
 
+        # ── 从 qnh 结构化表补充/覆盖关键数据 ──
+        await self._enrich_from_qnh_structured(pool, report, report_date)
+
         return report
 
     async def push_report(self, report: DailyReport) -> bool:
-        """通过企业微信推送日报"""
-        webhook_url = os.environ.get("WECHAT_WEBHOOK_URL", "")
-        notifier = NotifierSkill(webhook_url=webhook_url)
+        """生成 markdown 日报并通过 notification.send_report() 多渠道推送"""
+        title = f"【AI店长日报】{report.date}"
+        body = self._build_markdown_body(report)
 
-        # 构建推送消息
-        arrow_up = "📈"
-        arrow_down = "📉"
+        result = await notification.send_report(title, body)
+        sent = result.get("sent", False)
+        logger.info(
+            "Daily report push result: sent=%s channels=%s",
+            sent,
+            result.get("channels_sent"),
+        )
+        return sent
+
+    def _build_markdown_body(self, report: DailyReport) -> str:
+        """构建 markdown 格式日报正文（兼容飞书/微信/钉钉 markdown）"""
 
         def trend(pct: float) -> str:
             if pct > 0:
-                return f"{arrow_up}+{pct:.1f}%"
+                return f"📈 +{pct:.1f}%"
             elif pct < 0:
-                return f"{arrow_down}{pct:.1f}%"
+                return f"📉 {pct:.1f}%"
             return "→ 持平"
 
-        lines = [
-            f"📊 【AI店长日报】{report.date}",
-            "",
-            "💰 销售概览:",
-            f"  • 销售额: ¥{report.revenue:,.0f}  {trend(report.revenue_vs_yesterday)} vs昨日  {trend(report.revenue_vs_last_week)} vs上周",
-            f"  • 订单数: {report.order_count}  {trend(report.order_vs_yesterday)} vs昨日",
-            f"  • 客单价: ¥{report.avg_order_value:.0f}",
+        lines: list[str] = []
+
+        # ── 销售概览 ──
+        lines += [
+            "## 💰 销售概览",
+            f"- **销售额**: ¥{report.revenue:,.0f}  {trend(report.revenue_vs_yesterday)} vs昨日  {trend(report.revenue_vs_last_week)} vs上周",
+            f"- **订单数**: {report.order_count}  {trend(report.order_vs_yesterday)} vs昨日",
+            f"- **客单价**: ¥{report.avg_order_value:.0f}",
         ]
 
-        if report.top_products:
-            lines.append("")
-            lines.append("🔥 热销 Top 3:")
-            for i, p in enumerate(report.top_products, 1):
-                lines.append(f"  {i}. {p['name']}  销量{p['qty']}  ¥{p.get('revenue', 0):,.0f}")
+        # ── 低库存 ──
+        if report.low_stock_count:
+            lines.append(f"- **低库存商品**: {report.low_stock_count} 个")
 
-        if report.slow_products:
-            lines.append("")
-            lines.append("🐌 滞销 Top 3:")
-            for i, p in enumerate(report.slow_products, 1):
-                lines.append(
-                    f"  {i}. {p['name']}  库存{p.get('stock', 0)}  7日仅售{p.get('daily_sales', 0)}"
-                )
+        # ── 热销 Top 5（qnh_orders 数据优先） ──
+        if report.top_products:
+            lines += ["", "## 🔥 热销商品 Top 5"]
+            for i, p in enumerate(report.top_products[:5], 1):
+                name = p.get("name") or p.get("productName", "未知")
+                qty = p.get("qty") or p.get("salesCount") or p.get("saleCount", "")
+                rev = p.get("revenue") or p.get("salesAmount") or p.get("saleAmount", "")
+                rev_str = f"  ¥{float(rev):,.0f}" if rev != "" else ""
+                lines.append(f"{i}. **{name}**  销量 {qty}{rev_str}")
 
         # ── 牵牛花核心 KPI ──
         if report.store_kpi:
             kpi = report.store_kpi
-            lines.append("")
-            lines.append("📊 核心 KPI（牵牛花）:")
+            lines += ["", "## 📊 核心 KPI（牵牛花）"]
             for label, key in [
                 ("有效订单金额", "validOrderAmount"),
                 ("有效订单数", "validOrderCount"),
@@ -227,57 +240,141 @@ class DailyReportService:
             ]:
                 val = kpi.get(key, kpi.get(label))
                 if val is not None:
-                    lines.append(f"  • {label}: {val}")
+                    lines.append(f"- **{label}**: {val}")
 
-        # ── 热销商品 Top 10 ──
+        # ── 牵牛花热销 Top 10 ──
         if report.hotsale_top10:
-            lines.append("")
-            lines.append("🏆 热销商品 Top 10:")
+            lines += ["", "## 🏆 热销商品 Top 10（牵牛花）"]
             for i, p in enumerate(report.hotsale_top10, 1):
                 name = p.get("productName", p.get("name", "未知"))
                 sales = p.get("salesAmount", p.get("saleAmount", ""))
                 qty = p.get("salesCount", p.get("saleCount", ""))
-                lines.append(f"  {i}. {name}  销额{sales}  销量{qty}")
+                lines.append(f"{i}. {name}  销额 {sales}  销量 {qty}")
 
-        # ── 消费排行 Top 10 ──
+        # ── 高价值客户 Top 5 ──
         if report.customer_top10:
-            lines.append("")
-            lines.append("👑 高价值客户 Top 10:")
+            lines += ["", "## 👑 高价值客户 Top 5"]
             for i, c in enumerate(report.customer_top10[:5], 1):
                 name = c.get("customerName", c.get("nickname", "匿名"))
                 amount = c.get("consumeAmount", c.get("totalAmount", ""))
-                lines.append(f"  {i}. {name}  消费{amount}")
+                lines.append(f"{i}. {name}  消费 {amount}")
 
         # ── 渠道分布 ──
         if report.channel_distribution:
-            lines.append("")
-            lines.append("📡 渠道分布:")
+            lines += ["", "## 📡 渠道分布"]
             for ch in report.channel_distribution:
                 name = ch.get("channelName", ch.get("channel", "未知"))
                 ratio = ch.get("orderRatio", ch.get("ratio", ""))
-                lines.append(f"  • {name}: {ratio}")
+                lines.append(f"- {name}: {ratio}")
 
-        lines.append("")
-        lines.append(
-            f"💬 客服: 咨询{report.cs_total}次  AI处理{report.cs_ai_ratio:.0%}  转人工{report.cs_human_transfer}"
-        )
+        # ── 客服统计 ──
+        lines += [
+            "",
+            "## 💬 客服统计",
+            f"- 咨询 {report.cs_total} 次  AI处理 {report.cs_ai_ratio:.0%}  转人工 {report.cs_human_transfer}",
+        ]
 
+        # ── 预警摘要 ──
         if report.alerts_triggered:
-            lines.append(
-                f"🔔 预警: 触发{report.alerts_triggered}  待处理{report.alerts_pending}  已解决{report.alerts_resolved}"
-            )
+            lines += [
+                "",
+                "## 🔔 今日预警",
+                f"- 触发 **{report.alerts_triggered}**  待处理 **{report.alerts_pending}**  已解决 {report.alerts_resolved}",
+            ]
+            for a in report.alert_details[:3]:
+                sev = a.get("severity", "")
+                msg = a.get("message", a.get("root_cause", ""))
+                lines.append(f"  - [{sev}] {msg}")
 
+        # ── 明日待办 ──
         if report.todo_items:
-            lines.append("")
-            lines.append("📋 明日待办:")
+            lines += ["", "## 📋 明日待办"]
             for item in report.todo_items:
-                lines.append(f"  • {item}")
+                lines.append(f"- {item}")
 
-        lines.append(f"\n⏰ {datetime.now().strftime('%H:%M')} 自动生成")
+        lines += ["", f"> ⏰ {datetime.now().strftime('%H:%M')} 自动生成"]
 
-        return await notifier.send_text("\n".join(lines))
+        return "\n".join(lines)
 
     # ── 私有方法 ──
+
+    async def _enrich_from_qnh_structured(
+        self, pool, report: DailyReport, report_date: date
+    ) -> None:
+        """从牵牛花结构化表（qnh_daily_metrics / qnh_orders / qnh_inventory）读取数据。
+
+        若表不存在或字段不匹配，静默降级，不影响已有数据。
+        """
+        # 1. qnh_daily_metrics — GMV、订单数、客单价（覆盖 orders 表汇总值）
+        try:
+            row = await pool.fetchrow(
+                "SELECT * FROM qnh_daily_metrics WHERE date::date = $1 LIMIT 1",
+                report_date,
+            )
+            if row:
+                d = dict(row)
+                gmv = d.get("gmv") or d.get("total_amount") or d.get("revenue") or d.get("valid_order_amount")
+                cnt = d.get("order_count") or d.get("valid_order_count") or d.get("orders")
+                aov = d.get("avg_order_value") or d.get("customer_price")
+                if gmv is not None:
+                    report.revenue = float(gmv)
+                if cnt is not None:
+                    report.order_count = int(cnt)
+                if aov is not None:
+                    report.avg_order_value = float(aov)
+                elif report.order_count > 0:
+                    report.avg_order_value = round(report.revenue / report.order_count, 2)
+                logger.debug("Enriched KPI from qnh_daily_metrics for %s", report_date)
+        except Exception as e:
+            logger.debug("qnh_daily_metrics not available: %s", e)
+
+        # 2. qnh_orders — Top 5 热销商品（覆盖 order_items 聚合结果）
+        try:
+            rows = await pool.fetch(
+                """
+                SELECT
+                    COALESCE(product_id, '') AS product_id,
+                    COALESCE(product_name, name, '') AS name,
+                    SUM(COALESCE(quantity, qty, 1))::int AS qty,
+                    SUM(COALESCE(amount, price, 0)) AS revenue
+                FROM qnh_orders
+                WHERE (order_date::date = $1 OR created_at::date = $1)
+                GROUP BY product_id, product_name, name
+                ORDER BY qty DESC
+                LIMIT 5
+                """,
+                report_date,
+            )
+            if rows:
+                report.top_products = [dict(r) for r in rows]
+                logger.debug("Enriched top_products from qnh_orders for %s", report_date)
+        except Exception as e:
+            logger.debug("qnh_orders not available: %s", e)
+
+        # 3. qnh_inventory — 低库存商品数
+        try:
+            count = await pool.fetchval(
+                """
+                SELECT COUNT(*)::int FROM qnh_inventory
+                WHERE COALESCE(stock, quantity, 0) < COALESCE(safety_stock, min_stock, 10)
+                """
+            )
+            if count is not None:
+                report.low_stock_count = int(count)
+                logger.debug("Enriched low_stock_count=%d from qnh_inventory", report.low_stock_count)
+        except Exception as e:
+            logger.debug("qnh_inventory not available: %s", e)
+
+        # 4. alerts — 今日新增预警数（补充到 alerts_triggered，已有则取较大值）
+        try:
+            today_alert_count = await pool.fetchval(
+                "SELECT COUNT(*)::int FROM alerts WHERE created_at::date = $1",
+                report_date,
+            )
+            if today_alert_count is not None and today_alert_count > report.alerts_triggered:
+                report.alerts_triggered = int(today_alert_count)
+        except Exception as e:
+            logger.debug("alerts count query failed: %s", e)
 
     async def _enrich_from_raw_tables(self, pool, report: DailyReport) -> None:
         """从牵牛花 raw 表读取数据，填充日报的扩展字段。"""

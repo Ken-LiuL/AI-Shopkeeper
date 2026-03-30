@@ -1045,10 +1045,10 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
         replace_existing=True,
     )
 
-    # 每日报告 (22:00)
+    # 每日报告 (UTC 13:00 = CST 21:00)
     scheduler.add_job(
         _make_heartbeat_task("daily_report", daily_report_task),
-        CronTrigger.from_crontab(tasks.get("daily_report", "0 22 * * *")),
+        CronTrigger.from_crontab(tasks.get("daily_report", "0 13 * * *")),
         id="daily_report",
         replace_existing=True,
     )
