@@ -95,7 +95,8 @@ jobs:
             config \
             migrations \
             scripts \
-            data
+            data \
+            sample
           scp -i ~/.ssh/id_rsa /tmp/aishop-deploy.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/deploy.tar.gz
 
       - name: Deploy on VPS
