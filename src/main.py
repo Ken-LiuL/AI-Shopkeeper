@@ -43,6 +43,7 @@ from src.api.stores import router as stores_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.sync_status import router as sync_status_router
 from src.api.system import router as system_router
+from src.api.settings import router as settings_router
 from src.auth.router import router as auth_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
@@ -468,6 +469,7 @@ app.include_router(pricing_router)
 # products_pricing_router moved above products_router
 app.include_router(feedback_router)
 app.include_router(inventory_router)
+app.include_router(settings_router)
 app.include_router(insights_router)
 app.include_router(stores_router)
 app.include_router(ab_testing_router)

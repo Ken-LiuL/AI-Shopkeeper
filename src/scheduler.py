@@ -1103,6 +1103,18 @@ def _register_remote_safe_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None
     )
 
 
+async def _weight_learning_task() -> None:
+    """参数自学习：选品权重学习（每周日 3:00 CST）。"""
+    from src.services.parameter_learning import run_weight_learning_task
+    await run_weight_learning_task()
+
+
+async def _threshold_adaptation_task() -> None:
+    """参数自学习：异常检测阈值自适应（每周日 4:00 CST）。"""
+    from src.services.parameter_learning import run_threshold_adaptation_task
+    await run_threshold_adaptation_task()
+
+
 def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
     """Jobs enabled in local mode.
 
@@ -1115,6 +1127,28 @@ def _register_local_only_jobs(scheduler: AsyncIOScheduler, tasks: dict) -> None:
         _make_heartbeat_task("prophet_retrain", prophet_retrain_task),
         CronTrigger.from_crontab(tasks.get("prophet_retrain", "0 3 * * 0")),
         id="prophet_retrain",
+        replace_existing=True,
+    )
+
+    # 参数自学习：选品权重学习 (每周日 3:00 CST)
+    scheduler.add_job(
+        _make_heartbeat_task("weight_learning", _weight_learning_task),
+        CronTrigger.from_crontab(
+            tasks.get("weight_learning", "0 3 * * 0"),
+            timezone=SH_TZ,
+        ),
+        id="weight_learning",
+        replace_existing=True,
+    )
+
+    # 参数自学习：阈值自适应 (每周日 4:00 CST)
+    scheduler.add_job(
+        _make_heartbeat_task("threshold_adaptation", _threshold_adaptation_task),
+        CronTrigger.from_crontab(
+            tasks.get("threshold_adaptation", "0 4 * * 0"),
+            timezone=SH_TZ,
+        ),
+        id="threshold_adaptation",
         replace_existing=True,
     )
 
