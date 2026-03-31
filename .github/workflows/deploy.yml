@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: deploy-${{ github.ref }}
@@ -84,46 +83,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare image metadata
-        id: image
-        run: |
-          OWNER_LC="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
-          echo "image=ghcr.io/${OWNER_LC}/ai-shopkeeper-backend" >> "$GITHUB_OUTPUT"
-          echo "tag=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Login to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Build and push backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile.backend
-          push: true
-          platforms: linux/amd64
-          tags: |
-            ${{ steps.image.outputs.image }}:${{ steps.image.outputs.tag }}
-            ${{ steps.image.outputs.image }}:latest
-          cache-from: type=gha,scope=backend-image
-          cache-to: type=gha,mode=max,scope=backend-image
-
       - name: Setup SSH key
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.VPS_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ssh-keyscan -H ${{ secrets.VPS_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} 'mkdir -p /opt/aishop'
 
-      - name: Sync docker-compose.yml to VPS
+      - name: Sync backend sources to VPS
         run: |
-          scp -i ~/.ssh/id_rsa docker-compose.yml root@${{ secrets.VPS_HOST }}:/opt/aishop/docker-compose.yml
+          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} 'mkdir -p /opt/aishop/repo /opt/aishop/repo/data'
+          tar -czf - \
+            src \
+            config \
+            migrations \
+            scripts \
+            requirements.backend.txt \
+            Dockerfile.backend \
+            docker-compose.yml \
+            data/cs_knowledge_structured.json \
+            | ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} \
+              'tar -xzf - -C /opt/aishop/repo'
 
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
@@ -135,18 +115,14 @@ jobs:
           command_timeout: 40m
           script: |
             set -e
-            IMAGE_REPO="${{ steps.image.outputs.image }}"
-            IMAGE_TAG="${{ steps.image.outputs.tag }}"
-
-            echo "=== Login to GHCR ==="
-            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-
-            echo "=== Pull image from GHCR ==="
-            docker pull "${IMAGE_REPO}:${IMAGE_TAG}"
-            docker tag "${IMAGE_REPO}:${IMAGE_TAG}" aishop-app:latest
+            echo "=== Build image on VPS (reuse local cache) ==="
+            docker build \
+              -t aishop-app:latest \
+              -f /opt/aishop/repo/Dockerfile.backend \
+              /opt/aishop/repo
             echo "✅ Image ready"
 
-            echo "=== Verifying pulled image ==="
+            echo "=== Verifying built image ==="
             docker run --rm --entrypoint /bin/sh aishop-app:latest -lc '
               echo "--- /app/start.sh ---"
               nl -ba /app/start.sh | sed -n "1,80p"
@@ -156,12 +132,12 @@ jobs:
 
             echo "=== Starting infra (no-recreate) ==="
             cd /opt/aishop
+            cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
             docker compose up -d --no-recreate postgres neo4j redis 2>/dev/null || true
 
             echo "=== Restarting app only ==="
             docker rm -f aishop-app 2>/dev/null || true
             docker compose up -d --force-recreate --no-build app
-            docker logout ghcr.io || true
 
             echo "=== Health check (up to 150s) ==="
             for i in $(seq 1 30); do
