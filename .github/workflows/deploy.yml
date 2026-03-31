@@ -80,6 +80,7 @@ jobs:
     needs: detect-changes
     if: needs.detect-changes.outputs.backend == 'true'
     runs-on: ubuntu-latest
+    # Keep this workflow file itself in the backend filter so no-op deploy edits can trigger VPS redeploys.
     steps:
       - uses: actions/checkout@v4
 
