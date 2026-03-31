@@ -1,15 +1,18 @@
 {
   "manifest_version": 3,
   "name": "AI店长 - 客服助手",
-  "version": "3.0.2",
-  "description": "AI店长客服助手 v3 — 数据驱动多会话、全量聊天记录采集、建议/半自动/全自动三种模式",
-  "permissions": ["storage"],
+  "version": "3.1.0",
+  "description": "AI店长客服助手 v3 — 数据驱动多会话、全量聊天记录采集、建议/半自动/全自动三种模式；支持 1688/拼多多商品一键导入",
+  "permissions": ["storage", "tabs"],
   "host_permissions": [
     "https://*.meituan.com/*",
     "https://*.meituan.net/*",
     "https://*.sankuai.com/*",
     "https://*.dpfile.com/*",
-    "http://192.144.227.205:8000/*"
+    "http://192.144.227.205:8000/*",
+    "https://*.1688.com/*",
+    "https://*.pinduoduo.com/*",
+    "https://*.yangkeduo.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -25,6 +28,17 @@
       "css": ["panel.css"],
       "run_at": "document_start",
       "all_frames": true
+    },
+    {
+      "matches": [
+        "https://*.1688.com/*",
+        "https://detail.1688.com/*",
+        "https://*.pinduoduo.com/*",
+        "https://mobile.yangkeduo.com/*"
+      ],
+      "js": ["listing_content_script.js"],
+      "css": ["listing_panel.css"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

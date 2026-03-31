@@ -110,6 +110,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true; // async
   }
 
+  if (message.type === 'LISTING_IMPORT') {
+    handleListingImport(message.payload)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true; // async
+  }
+
+  if (message.type === 'LISTING_STATUS') {
+    handleListingStatus(message.taskId)
+      .then((result) => sendResponse(result))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true; // async
+  }
+
   return false;
 });
 
@@ -489,6 +503,80 @@ async function handleFeedback(payload) {
   } catch (err) {
     // Feedback failures are non-critical — log but don't block
     addLog('error', `反馈发送失败: ${err.message}`);
+    return { success: false, error: err.message };
+  }
+}
+
+/* ═══════════════════ Listing Import ═══════════════════ */
+async function handleListingImport(payload) {
+  const settings = await getApiSettings();
+  const importUrl = `${settings.chatBase}/api/listing/create`;
+
+  const body = {
+    source_url: payload.source_url || '',
+    platform: payload.source_platform === 'pdd' ? 'pdd' : 'alibaba',
+    raw_product_data: JSON.stringify(payload),
+  };
+
+  const headers = { 'Content-Type': 'application/json' };
+  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(importUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errText = await response.text().catch(() => '');
+      const msg = `商品导入失败: HTTP ${response.status}${errText ? ` - ${errText.slice(0, 80)}` : ''}`;
+      addLog('error', msg);
+      return { success: false, error: msg };
+    }
+
+    const data = await response.json();
+    const taskId = data.data?.task_id || data.task_id || data.id || null;
+    addLog('success', `商品导入已提交: task_id=${taskId || '无'}`, payload.source_url?.slice(0, 80));
+    return { success: true, taskId };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    const isTimeout = err.name === 'AbortError';
+    const msg = isTimeout ? '商品导入请求超时，请稍后重试' : `商品导入异常: ${err.message}`;
+    addLog('error', msg);
+    return { success: false, error: msg };
+  }
+}
+
+async function handleListingStatus(taskId) {
+  if (!taskId) return { success: false, error: '缺少 taskId' };
+
+  const settings = await getApiSettings();
+  const statusUrl = `${settings.chatBase}/api/listing/${encodeURIComponent(taskId)}/status`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const response = await fetch(statusUrl, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    const data = await response.json();
+    const inner = data.data || data;
+    return { success: true, ...inner };
+  } catch (err) {
+    clearTimeout(timeoutId);
     return { success: false, error: err.message };
   }
 }

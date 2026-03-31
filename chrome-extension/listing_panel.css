@@ -1,0 +1,423 @@
+/* AI店长 — 商品导入面板样式 */
+
+/* ---- 悬浮导入按钮 ---- */
+#aidz-listing-fab {
+  position: fixed;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 99999;
+  background: linear-gradient(135deg, #ff9500, #ff6a00);
+  color: #fff;
+  border: none;
+  border-radius: 28px;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(255, 106, 0, 0.4);
+  white-space: nowrap;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  transition: opacity 0.2s, transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  writing-mode: vertical-lr;
+  text-orientation: mixed;
+  padding: 16px 10px;
+  letter-spacing: 2px;
+}
+
+#aidz-listing-fab:hover {
+  opacity: 0.92;
+  box-shadow: 0 6px 22px rgba(255, 106, 0, 0.55);
+}
+
+#aidz-listing-fab:active {
+  transform: translateY(-50%) scale(0.96);
+}
+
+/* ---- 右侧滑出面板 ---- */
+#aidz-listing-panel {
+  position: fixed;
+  top: 0;
+  right: -440px;
+  width: 420px;
+  max-width: 96vw;
+  height: 100vh;
+  background: #fff;
+  border-left: 1px solid #e0e0e0;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.14);
+  z-index: 99998;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 13px;
+  color: #333;
+  transition: right 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+#aidz-listing-panel.open {
+  right: 0;
+}
+
+/* ---- 面板 Header ---- */
+.aidz-lp-header {
+  background: linear-gradient(135deg, #ff9500, #ff6a00);
+  color: #fff;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.aidz-lp-header h2 {
+  font-size: 15px;
+  font-weight: 700;
+  flex: 1;
+}
+
+.aidz-lp-platform-badge {
+  background: rgba(255, 255, 255, 0.28);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.aidz-lp-close {
+  background: rgba(255, 255, 255, 0.25);
+  border: none;
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 28px;
+  text-align: center;
+  padding: 0;
+  transition: background 0.15s;
+}
+
+.aidz-lp-close:hover {
+  background: rgba(255, 255, 255, 0.45);
+}
+
+/* ---- 面板 Body ---- */
+.aidz-lp-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+}
+
+.aidz-lp-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.aidz-lp-body::-webkit-scrollbar-thumb {
+  background: #ddd;
+  border-radius: 2px;
+}
+
+/* ---- 状态视图 ---- */
+.aidz-lp-view {
+  display: none;
+}
+
+.aidz-lp-view.active {
+  display: block;
+}
+
+/* 加载中 */
+.aidz-lp-loading {
+  text-align: center;
+  padding: 40px 20px;
+  color: #888;
+}
+
+.aidz-lp-spinner {
+  display: inline-block;
+  width: 32px;
+  height: 32px;
+  border: 3px solid #ffe0b2;
+  border-top-color: #ff6a00;
+  border-radius: 50%;
+  animation: aidz-spin 0.8s linear infinite;
+  margin-bottom: 12px;
+}
+
+@keyframes aidz-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 错误 */
+.aidz-lp-error-box {
+  background: #fff3f3;
+  border: 1px solid #ffcdd2;
+  border-radius: 8px;
+  padding: 14px 16px;
+  color: #c62828;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.aidz-lp-error-box .aidz-lp-error-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+/* ---- 商品信息表单 ---- */
+.aidz-lp-section {
+  margin-bottom: 14px;
+}
+
+.aidz-lp-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #ff6a00;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #ffe0b2;
+}
+
+.aidz-lp-field {
+  margin-bottom: 8px;
+}
+
+.aidz-lp-field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 3px;
+}
+
+.aidz-lp-field input,
+.aidz-lp-field textarea {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.2s;
+  color: #333;
+  background: #fafafa;
+}
+
+.aidz-lp-field input:focus,
+.aidz-lp-field textarea:focus {
+  border-color: #ff9500;
+  background: #fff;
+}
+
+.aidz-lp-field textarea {
+  min-height: 64px;
+}
+
+/* 规格预览 */
+.aidz-lp-specs-box {
+  background: #f8f8f8;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #555;
+  line-height: 1.6;
+  max-height: 120px;
+  overflow-y: auto;
+}
+
+.aidz-lp-specs-row {
+  display: flex;
+  gap: 6px;
+}
+
+.aidz-lp-specs-row .lp-spec-key {
+  color: #888;
+  flex-shrink: 0;
+  min-width: 60px;
+}
+
+.aidz-lp-specs-row .lp-spec-val {
+  color: #333;
+  word-break: break-all;
+}
+
+/* 图片缩略图 */
+.aidz-lp-images-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.aidz-lp-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid #eee;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.aidz-lp-thumb:hover {
+  border-color: #ff9500;
+}
+
+.aidz-lp-image-count {
+  font-size: 11px;
+  color: #888;
+  align-self: center;
+}
+
+/* ---- 进度视图 ---- */
+.aidz-lp-progress-wrap {
+  padding: 20px 0;
+}
+
+.aidz-lp-progress-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+
+.aidz-lp-step-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+  line-height: 1.3;
+}
+
+.aidz-lp-step-text {
+  flex: 1;
+  line-height: 1.5;
+}
+
+.aidz-lp-step-text .step-label {
+  font-weight: 600;
+  color: #333;
+}
+
+.aidz-lp-step-text .step-desc {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+}
+
+.aidz-lp-progress-bar-wrap {
+  background: #f0f0f0;
+  border-radius: 6px;
+  height: 8px;
+  overflow: hidden;
+  margin: 8px 0 16px;
+}
+
+.aidz-lp-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #ff9500, #ff6a00);
+  border-radius: 6px;
+  transition: width 0.4s ease;
+}
+
+/* ---- 完成视图 ---- */
+.aidz-lp-done-box {
+  background: #f1f8e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 10px;
+  padding: 18px 16px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+
+.aidz-lp-done-icon {
+  font-size: 36px;
+  margin-bottom: 8px;
+}
+
+.aidz-lp-done-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #2e7d32;
+  margin-bottom: 4px;
+}
+
+.aidz-lp-done-desc {
+  font-size: 12px;
+  color: #558b2f;
+  line-height: 1.5;
+}
+
+/* ---- Footer 操作区 ---- */
+.aidz-lp-footer {
+  border-top: 1px solid #f0f0f0;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.aidz-lp-btn-primary {
+  width: 100%;
+  padding: 11px;
+  background: linear-gradient(135deg, #ff9500, #ff6a00);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: opacity 0.2s;
+  font-family: inherit;
+}
+
+.aidz-lp-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.aidz-lp-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.aidz-lp-btn-secondary {
+  width: 100%;
+  padding: 8px;
+  background: #f5f5f5;
+  color: #555;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-family: inherit;
+}
+
+.aidz-lp-btn-secondary:hover {
+  background: #eee;
+}
+
+.aidz-lp-status-msg {
+  font-size: 11px;
+  text-align: center;
+  color: #888;
+  min-height: 14px;
+}
+
+.aidz-lp-status-msg.error {
+  color: #e53935;
+}
+
+.aidz-lp-status-msg.success {
+  color: #4caf50;
+}

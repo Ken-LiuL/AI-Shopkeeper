@@ -163,6 +163,34 @@
     .conn-ok { background: #4caf50; }
     .conn-err { background: #e53935; }
     .conn-unknown { background: #aaa; }
+
+    /* Listing imports */
+    .listing-record {
+      border: 1px solid #eee;
+      border-radius: 8px;
+      padding: 9px 11px;
+      margin-bottom: 7px;
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .listing-record:hover { border-color: #ff9500; background: #fffaf2; }
+    .listing-record-title {
+      font-size: 12px; font-weight: 600; color: #333;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      margin-bottom: 4px;
+    }
+    .listing-record-meta {
+      display: flex; gap: 8px; align-items: center; font-size: 10px; color: #999;
+    }
+    .listing-badge {
+      padding: 1px 6px; border-radius: 8px; font-size: 10px; font-weight: 600;
+    }
+    .listing-badge.alibaba { background: #fff3e0; color: #e65100; }
+    .listing-badge.pdd { background: #fce4ec; color: #c2185b; }
+    .listing-badge.completed { background: #e8f5e9; color: #2e7d32; }
+    .listing-badge.pending { background: #e3f2fd; color: #1565c0; }
+    .listing-badge.failed { background: #ffebee; color: #c62828; }
+    .listing-empty { text-align: center; color: #bbb; font-size: 12px; padding: 24px 12px; }
   </style>
 </head>
 <body>
@@ -180,6 +208,7 @@
   <div class="tabs">
     <div class="tab active" data-tab="cs">客服设置</div>
     <div class="tab" data-tab="reviews">评价数据</div>
+    <div class="tab" data-tab="listing">上架导入</div>
     <div class="tab" data-tab="stats">反馈统计</div>
     <div class="tab" data-tab="debug">调试日志</div>
   </div>
@@ -238,6 +267,24 @@
     </div>
     <button class="secondary" id="reviewRefresh" style="margin-top:10px">🔄 刷新状态</button>
     <div class="status" id="reviewStatus"></div>
+  </div>
+
+  <!-- 上架导入 -->
+  <div class="tab-panel" id="tab-listing">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <span style="font-size:11px;font-weight:600;color:#555">最近导入记录</span>
+      <button class="danger" id="clearImports" style="width:auto;padding:3px 8px;font-size:11px;margin:0">清空</button>
+    </div>
+    <div id="listingRecords">
+      <div class="listing-empty">暂无导入记录<br>在 1688 或拼多多商品页点击「导入AI店长」按钮</div>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:#888;line-height:1.6;padding:0 2px">
+      <b>使用说明：</b><br>
+      1. 打开 1688 或拼多多商品详情页<br>
+      2. 点击页面右侧橙色「导入AI店长」按钮<br>
+      3. 确认商品信息后点击「确认导入」<br>
+      4. AI 自动生成上架标题、描述等内容
+    </div>
   </div>
 
   <!-- 反馈统计 -->

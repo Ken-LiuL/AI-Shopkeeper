@@ -63,6 +63,7 @@ document.querySelectorAll('.tab').forEach((tab) => {
     if (tab.dataset.tab === 'debug') refreshLogs();
     if (tab.dataset.tab === 'stats') refreshStats();
     if (tab.dataset.tab === 'reviews') refreshReviewStatus();
+    if (tab.dataset.tab === 'listing') refreshListingImports();
   });
 });
 
@@ -242,3 +243,57 @@ refreshReviewStatus();
 chrome.runtime.sendMessage({ type: 'TEST_CONNECTION' }, (result) => {
   setConnDot(result?.success ?? null);
 });
+
+/* ═══════════════════ Listing Import Records ═══════════════════ */
+function refreshListingImports() {
+  chrome.storage.local.get(['listingImports'], (data) => {
+    const records = data.listingImports || [];
+    const container = document.getElementById('listingRecords');
+    if (!container) return;
+
+    if (records.length === 0) {
+      container.innerHTML = '<div class="listing-empty">暂无导入记录<br>在 1688 或拼多多商品页点击「导入AI店长」按钮</div>';
+      return;
+    }
+
+    container.innerHTML = records.map((rec, idx) => {
+      const platform = rec.platform === 'pdd' ? '拼多多' : '1688';
+      const platformCls = rec.platform === 'pdd' ? 'pdd' : 'alibaba';
+      const statusLabel = rec.status === 'completed' ? '已完成' : rec.status === 'failed' ? '失败' : '处理中';
+      const statusCls = rec.status === 'completed' ? 'completed' : rec.status === 'failed' ? 'failed' : 'pending';
+      const timeStr = rec.time ? new Date(rec.time).toLocaleString() : '—';
+      return `
+        <div class="listing-record" data-idx="${idx}" data-url="${encodeURIComponent(rec.url || '')}">
+          <div class="listing-record-title">${escapeHtmlPopup(rec.title || '未知商品')}</div>
+          <div class="listing-record-meta">
+            <span class="listing-badge ${platformCls}">${platform}</span>
+            <span class="listing-badge ${statusCls}">${statusLabel}</span>
+            <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${timeStr}</span>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // 点击跳转到对应商品原页面
+    container.querySelectorAll('.listing-record').forEach((el) => {
+      el.addEventListener('click', () => {
+        const url = decodeURIComponent(el.dataset.url || '');
+        if (url) chrome.tabs.create({ url });
+      });
+    });
+  });
+}
+
+function escapeHtmlPopup(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+const clearImportsBtn = document.getElementById('clearImports');
+if (clearImportsBtn) {
+  clearImportsBtn.addEventListener('click', () => {
+    chrome.storage.local.set({ listingImports: [] }, () => refreshListingImports());
+  });
+}
