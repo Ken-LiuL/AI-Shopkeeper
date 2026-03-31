@@ -563,6 +563,13 @@ async def _generate_reply(
 
         if isinstance(suggested_action, dict) and suggested_action.get("type") == "transfer_human":
             needs_human = True
+            # action 明确要求转人工 → 置信度强制为 0
+            confidence = 0.0
+
+        # 投诉 / 医疗建议类 → 置信度上限 0.5，必须转人工
+        if intent in {"complaint", "medical_advice"}:
+            confidence = min(confidence, 0.5)
+            needs_human = True
 
         return reply_text, needs_human, suggested_action, confidence
 

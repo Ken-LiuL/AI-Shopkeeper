@@ -2739,6 +2739,31 @@ async def _chat_via_pipeline(
         suggested_action = result_state.get("suggested_action") or {"type": "none"}
         product_cards = result_state.get("product_cards") or []
 
+        # ── 置信度兜底：基于 intent_confidence 决定是否强制转人工 ──────────
+        _CONF_LOW = float(os.environ.get("CS_CONFIDENCE_LOW", "0.4"))
+        _CONF_MED = float(os.environ.get("CS_CONFIDENCE_MED", "0.6"))
+        intent_confidence = float(result_state.get("intent_confidence", 1.0) or 1.0)
+
+        if intent_confidence < _CONF_LOW:
+            logger.warning(
+                "[CS-CONFIDENCE] LOW session=%s confidence=%.3f intent=%s → force transfer",
+                session_id,
+                intent_confidence,
+                intent,
+            )
+            needs_human = True
+            reply_text = "亲，您的问题我需要转接专业客服为您解答，请稍等一下哦~ 🙏"
+            suggested_action = {"type": "transfer_human", "reason": "low_confidence"}
+        elif intent_confidence < _CONF_MED:
+            logger.warning(
+                "[CS-CONFIDENCE] MED session=%s confidence=%.3f intent=%s → mark human (AI reply kept)",
+                session_id,
+                intent_confidence,
+                intent,
+            )
+            needs_human = True
+            # 保留 AI 回复文本，仅标记转人工
+
         if pool:
             asyncio.create_task(
                 _log_conversation(
