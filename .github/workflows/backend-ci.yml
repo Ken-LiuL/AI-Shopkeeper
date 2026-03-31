@@ -27,21 +27,30 @@ jobs:
         run: ruff check src/ --ignore E402
 
       - name: Python syntax check (all src/)
-        run: python -c "
-          import ast, glob, sys
+        run: |
+          python3 - <<'PY'
+          import ast
+          import glob
+          import sys
+
           errors = []
-          for f in sorted(glob.glob('src/**/*.py', recursive=True)):
+          files = sorted(glob.glob("src/**/*.py", recursive=True))
+
+          for path in files:
               try:
-                  ast.parse(open(f).read())
-              except SyntaxError as e:
-                  errors.append(f'{f}: {e}')
+                  with open(path, encoding="utf-8") as f:
+                      ast.parse(f.read())
+              except SyntaxError as exc:
+                  errors.append(f"{path}: {exc}")
+
           if errors:
-              print('Syntax errors found:')
-              for e in errors:
-                  print(f'  ❌ {e}')
+              print("Syntax errors found:")
+              for err in errors:
+                  print(f"  {err}")
               sys.exit(1)
-          print(f'✅ All {len(glob.glob(\"src/**/*.py\", recursive=True))} files OK')
-          "
+
+          print(f"All {len(files)} files OK")
+          PY
 
   docker-build:
     name: Docker Build Test
