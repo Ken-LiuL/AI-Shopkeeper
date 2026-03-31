@@ -6,31 +6,29 @@ import { useState, useEffect } from 'react';
 
 const coreNav = [
   { href: '/', label: 'AI 指挥台', icon: '🧭' },
-  { href: '/boss', label: '老板助手', icon: '🤖' },
-  { href: '/onboarding', label: '🚀 快速上手', icon: '✨' },
-  { href: '/alerts', label: '预警处理', icon: '🔔' },
-  { href: '/inventory', label: '库存修复', icon: '📦' },
-  { href: '/products', label: '商品修复', icon: '🧾' },
+  { href: '/customer-service', label: '智能客服', icon: '💬' },
   { href: '/listing', label: '智能上架', icon: '📤' },
-  { href: '/orders', label: '异常订单', icon: '📋' },
-  { href: '/customer-service', label: '客服质量', icon: '💬' },
+  { href: '/alerts', label: '智能预警', icon: '🔔' },
   { href: '/knowledge', label: '知识中心', icon: '📚' },
 ];
 
-const settingsNav = [
-  { href: '/settings/sync', label: '数据导入', icon: '📥' },
-];
+// 以下页面暂时隐藏，待功能完善后恢复
+// { href: '/boss', label: '老板助手', icon: '🤖' },
+// { href: '/inventory', label: '库存修复', icon: '📦' },
+// { href: '/products', label: '商品修复', icon: '🧾' },
+// { href: '/orders', label: '异常订单', icon: '📋' },
+// { href: '/selection', label: '重点运营', icon: '🎯' },
+// { href: '/bundles', label: '套餐候选', icon: '🎁' },
+// { href: '/pricing', label: '价格复核', icon: '💰' },
 
-const growthNav = [
-  { href: '/selection', label: '重点运营', icon: '🎯' },
-  { href: '/bundles', label: '套餐候选', icon: '🎁' },
-  { href: '/pricing', label: '价格复核', icon: '💰' },
+const dataNav = [
+  { href: '/settings/sync', label: '数据导入', icon: '📥' },
+  { href: '/onboarding', label: '快速上手', icon: '✨' },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isGrowthOpen, setIsGrowthOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [username] = useState(() => {
     if (typeof window === 'undefined') return 'admin';
@@ -92,7 +90,7 @@ export function Sidebar() {
       </div>
       <nav className="flex-1 py-4 px-4">
         <div className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-          核心工作流
+          核心功能
         </div>
         <div className="space-y-1">
         {coreNav.map((item) => {
@@ -115,52 +113,14 @@ export function Sidebar() {
           );
         })}
         </div>
-
-        <div className="mt-6">
-          <button
-            type="button"
-            onClick={() => setIsGrowthOpen((prev) => !prev)}
-            className="flex w-full items-center justify-between px-3 py-2 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400"
-          >
-            <span>增长与实验</span>
-            <span className={cn("transition-transform", isGrowthOpen ? "rotate-180" : "")}>▼</span>
-          </button>
-          {isGrowthOpen ? (
-            <div className="mt-2 space-y-1">
-              {growthNav.map((item) => {
-                const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-                return (
-                  <Link
-                    key={item.href}
-                    href={item.href}
-                    onClick={closeMobileMenu}
-                    className={cn(
-                      "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors",
-                      active
-                        ? "bg-blue-50 text-blue-700 border border-blue-200"
-                        : "text-gray-500 hover:bg-gray-50 hover:text-gray-900"
-                    )}
-                  >
-                    <span className="text-base">{item.icon}</span>
-                    <span>{item.label}</span>
-                  </Link>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="px-3 py-2 text-xs leading-5 text-slate-500">
-              这里只保留当前数据能支撑的增长动作。竞品和上架暂不进入现阶段产品主线。
-            </div>
-          )}
-        </div>
       </nav>
-      {/* Settings nav */}
+      {/* Data management nav */}
       <div className="px-4 pb-2">
         <div className="mb-2 px-3 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-400">
-          设置
+          数据管理
         </div>
         <div className="space-y-1">
-          {settingsNav.map((item) => {
+          {dataNav.map((item) => {
             const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
             return (
               <Link
