@@ -5,10 +5,15 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Track application start time for uptime calculation
+_APP_START_TIME: float = time.monotonic()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -393,53 +398,78 @@ async def ensure_pg_pool(request, call_next):
 # ─── Health check ────────────────────────────────────────────
 @app.get("/health", tags=["system"])
 async def health_check():
-    """Basic liveness probe."""
-    from src.api.schemas import APIResponse
-
-    return APIResponse(success=True, data={"status": "ok"}, message="System is healthy")
+    """Lightweight liveness probe — should respond in milliseconds."""
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "uptime_seconds": int(time.monotonic() - _APP_START_TIME),
+    }
 
 
 @app.get("/ready", tags=["system"])
 async def readiness_check():
-    """Deep readiness probe — verify all dependencies."""
-    from src.api.schemas import APIResponse
+    """Deep readiness probe — checks all dependencies with latency measurement.
 
-    checks: dict[str, bool] = {}
+    Status semantics:
+    - "ok"       — all services healthy
+    - "degraded" — only non-critical services (Neo4j) are down
+    - "down"     — critical services (PostgreSQL or Redis) are down
+    """
+    import asyncio
 
-    # PostgreSQL
+    checks: dict[str, dict] = {}
+
+    # ── PostgreSQL (critical) ────────────────────────────────
+    t0 = time.monotonic()
     try:
         await pg_db.fetchval("SELECT 1")
-        checks["postgres"] = True
-    except Exception:
-        checks["postgres"] = False
+        checks["postgresql"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        checks["postgresql"] = {"status": "down", "error": str(e)[:200]}
 
-    # Neo4j — 始终检查（vector_backend 固定为 neo4j）
-    active_backend = "neo4j"
-    try:
-        await neo4j_db.query("RETURN 1 AS n")
-        checks["neo4j"] = True
-    except Exception:
-        checks["neo4j"] = False
-
-    # Redis
+    # ── Redis (critical) ─────────────────────────────────────
+    t0 = time.monotonic()
     try:
         await redis_db.get_redis().ping()
-        checks["redis"] = True
-    except Exception:
-        checks["redis"] = False
+        checks["redis"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        checks["redis"] = {"status": "down", "error": str(e)[:200]}
 
-    all_ok = all(checks.values())
-    status = "ok" if all_ok else "degraded"
+    # ── Neo4j (non-critical) ─────────────────────────────────
+    t0 = time.monotonic()
+    try:
+        await asyncio.wait_for(neo4j_db.query("RETURN 1 AS n"), timeout=3.0)
+        checks["neo4j"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        checks["neo4j"] = {"status": "down", "error": str(e)[:200]}
 
-    return APIResponse(
-        success=all_ok,
-        data={
-            "status": status,
-            "vector_backend": active_backend,
-            **checks,
-        },
-        message=f"System is {'ready' if all_ok else 'degraded'} (vector={active_backend})",
-    )
+    # ── cs_agent (non-critical) ──────────────────────────────
+    t0 = time.monotonic()
+    try:
+        # Verify importability and LangGraph graph compilation (no LLM calls)
+        from src.agents.customer_service.graph import compile_customer_service_graph
+        compile_customer_service_graph()
+        checks["cs_agent"] = {"status": "ok", "latency_ms": round((time.monotonic() - t0) * 1000)}
+    except Exception as e:
+        checks["cs_agent"] = {"status": "down", "error": str(e)[:200]}
+
+    # ── Determine overall status ─────────────────────────────
+    critical_services = ("postgresql", "redis")
+    critical_down = any(checks.get(s, {}).get("status") == "down" for s in critical_services)
+    any_down = any(v.get("status") == "down" for v in checks.values())
+
+    if critical_down:
+        overall = "down"
+    elif any_down:
+        overall = "degraded"
+    else:
+        overall = "ok"
+
+    return {
+        "status": overall,
+        "checks": checks,
+        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+    }
 
 
 # ─── Register API routers ───────────────────────────────────
