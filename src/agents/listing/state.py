@@ -45,5 +45,11 @@ class ListingState(TypedDict, total=False):
     # Compliance 数据驱动上下文
     policy_documents_context: list[dict[str, Any]]
 
+    # Filler 硬编码合规后处理：自动修复项（传给 compliance_node 合并）
+    filler_auto_fixed: list[dict[str, Any]]
+
+    # 结构化最终结果（compliance_node 完成后生成）
+    final_result: dict[str, Any]
+
     # 元数据
     errors: list[str]

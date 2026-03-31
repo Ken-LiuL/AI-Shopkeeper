@@ -6,6 +6,10 @@ import json
 import logging
 from typing import Any
 
+from src.compliance.medical_device_rules import (
+    apply_title_clean,
+    check_text_violations,
+)
 from src.db import postgres as pg
 
 from ..llm import MODEL_DEEPSEEK, MODEL_FLASH, MODEL_SONNET, call_tool, call_tool_with_reflection
@@ -359,6 +363,79 @@ async def matcher_node(state: ListingState) -> dict:
         }
 
 
+def _apply_listing_compliance_filter(
+    listing_info: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """
+    对 filler LLM 输出做硬编码合规后处理。
+
+    检查 title / selling_points / description 是否含违规词，
+    能自动修复的直接替换，无法修复的标记为 issue 供 compliance_node 合并。
+
+    Returns:
+        (cleaned_listing_info, auto_fixed_items)
+        auto_fixed_items 格式与 ViolationItem 兼容，附加 original_text。
+    """
+    if not isinstance(listing_info, dict):
+        return listing_info, []
+
+    cleaned = dict(listing_info)
+    auto_fixed_items: list[dict[str, Any]] = []
+
+    # ── 标题清洗 ──────────────────────────────────────────────────────────
+    raw_title = str(cleaned.get("title") or "")
+    cleaned_title, removed_words = apply_title_clean(raw_title)
+    if removed_words:
+        auto_fixed_items.append({
+            "field": "title",
+            "action": "remove_marketing_words",
+            "original_text": raw_title,
+            "fixed_text": cleaned_title,
+            "matched_words": removed_words,
+            "rule_category": "标题营销词",
+            "severity": "warning",
+            "auto_fixed": True,
+        })
+        cleaned["title"] = cleaned_title
+
+    # ── 标题违规词检查 ────────────────────────────────────────────────────
+    title_after, title_violations = check_text_violations(
+        cleaned.get("title", ""), field_name="title", auto_fix=True
+    )
+    if title_violations:
+        if title_after != cleaned.get("title"):
+            cleaned["title"] = title_after
+        for v in title_violations:
+            auto_fixed_items.append(dict(v))
+
+    # ── 卖点逐条检查 ──────────────────────────────────────────────────────
+    selling_points = cleaned.get("selling_points") or []
+    if isinstance(selling_points, list):
+        cleaned_points: list[str] = []
+        for i, point in enumerate(selling_points):
+            point_str = str(point)
+            fixed_point, point_violations = check_text_violations(
+                point_str, field_name=f"selling_points[{i}]", auto_fix=True
+            )
+            cleaned_points.append(fixed_point)
+            for v in point_violations:
+                auto_fixed_items.append(dict(v))
+        cleaned["selling_points"] = cleaned_points
+
+    # ── 描述检查 ──────────────────────────────────────────────────────────
+    description = str(cleaned.get("description") or "")
+    if description:
+        fixed_desc, desc_violations = check_text_violations(
+            description, field_name="description", auto_fix=True
+        )
+        if fixed_desc != description:
+            cleaned["description"] = fixed_desc
+        for v in desc_violations:
+            auto_fixed_items.append(dict(v))
+
+    return cleaned, auto_fixed_items
+
+
 async def filler_node(state: ListingState) -> dict:
     """Filler Sub-Agent: 填充上架信息 + 标题SEO + 定价"""
     try:
@@ -382,14 +459,149 @@ async def filler_node(state: ListingState) -> dict:
             market_avg_price=state.get("market_avg_price", 0),
         )
         result = await call_tool(prompt, LISTING_INFO_TOOL, model=MODEL_DEEPSEEK)
+
+        # ── 硬编码合规后处理（LLM 输出层之后） ───────────────────────────
+        filtered_result, auto_fixed_items = _apply_listing_compliance_filter(result)
+        if auto_fixed_items:
+            logger.info(
+                "Filler compliance filter applied %d fix(es) to listing_info",
+                len(auto_fixed_items),
+            )
+
         return {
-            "listing_info": result,
+            "listing_info": filtered_result,
+            "filler_auto_fixed": auto_fixed_items,
             "template_products": template_products,
             "store_category_hierarchy": category_tree,
         }
     except Exception as e:
         logger.error(f"Filler failed: {e}")
         return {"errors": state.get("errors", []) + [f"filler: {e}"]}
+
+
+def _build_compliance_result(
+    llm_result: dict[str, Any],
+    filler_auto_fixed: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """
+    合并 LLM 合规校验结果与 filler 硬编码修复记录，生成增强版合规结果。
+
+    增加字段：
+      - auto_fixed:            已自动修复的问题（来自 filler 后处理）
+      - requires_manual_review: 需人工确认的问题（fatal/error 且未自动修复）
+      - summary:               一句话摘要
+    """
+    issues: list[dict[str, Any]] = llm_result.get("issues") or []
+    can_proceed: bool = bool(llm_result.get("can_proceed", True))
+    passed: bool = bool(llm_result.get("passed", can_proceed))
+
+    # ── 分类 filler 修复记录 ──────────────────────────────────────────────
+    auto_fixed: list[dict[str, Any]] = [
+        item for item in filler_auto_fixed if item.get("auto_fixed")
+    ]
+    unfixed_violations: list[dict[str, Any]] = [
+        item for item in filler_auto_fixed if not item.get("auto_fixed")
+    ]
+
+    # ── 需人工确认 = LLM fatal/error issues + 未自动修复的 filler violations ─
+    requires_manual_review: list[dict[str, Any]] = [
+        issue for issue in issues
+        if issue.get("severity") in ("fatal", "error")
+    ] + [
+        {
+            "source": "filler_filter",
+            "field": v.get("field", ""),
+            "matched_text": v.get("matched_text", ""),
+            "rule_category": v.get("rule_category", ""),
+            "severity": v.get("severity", "error"),
+            "suggestion": v.get("suggestion", ""),
+        }
+        for v in unfixed_violations
+    ]
+
+    # ── 摘要 ──────────────────────────────────────────────────────────────
+    fatal_count = sum(1 for i in issues if i.get("severity") == "fatal")
+    error_count = sum(1 for i in issues if i.get("severity") == "error")
+    warning_count = sum(1 for i in issues if i.get("severity") == "warning")
+    auto_fix_count = len(auto_fixed)
+    manual_count = len(requires_manual_review)
+
+    if not passed and (fatal_count > 0 or error_count > 0):
+        summary = (
+            f"合规校验未通过：{fatal_count} 条严重问题、{error_count} 条错误"
+            + (f"、{auto_fix_count} 条已自动修复" if auto_fix_count else "")
+            + f"，需人工确认 {manual_count} 条"
+        )
+    elif warning_count > 0 or manual_count > 0:
+        summary = (
+            f"通过合规校验，有 {warning_count} 条警告"
+            + (f"、{auto_fix_count} 条已自动修复" if auto_fix_count else "")
+            + (f"，需人工确认 {manual_count} 条" if manual_count else "")
+        )
+    else:
+        summary = "通过合规校验" + (f"，{auto_fix_count} 条已自动修复" if auto_fix_count else "")
+
+    return {
+        **llm_result,
+        "passed": passed,
+        "can_proceed": can_proceed,
+        "issues": issues,
+        "auto_fixed": auto_fixed,
+        "requires_manual_review": requires_manual_review,
+        "summary": summary,
+    }
+
+
+def _build_final_result(state: ListingState, compliance_enriched: dict[str, Any]) -> dict[str, Any]:
+    """
+    将 LangGraph state 中的各阶段结果组装为标准化最终输出格式。
+    """
+    parsed = state.get("parsed_product") or {}
+    parsed_data = parsed.get("parsed_data") or {} if isinstance(parsed, dict) else {}
+    matched = state.get("matched_standard") or {}
+    listing = state.get("listing_info") or {}
+
+    can_proceed: bool = bool(compliance_enriched.get("can_proceed", True))
+    has_fatal = any(
+        i.get("severity") == "fatal"
+        for i in (compliance_enriched.get("issues") or [])
+    )
+    ready_to_publish: bool = can_proceed and not has_fatal
+
+    return {
+        "parsed": {
+            "cleaned_title": parsed.get("cleaned_title", ""),
+            "brand": parsed_data.get("brand", ""),
+            "category": parsed_data.get("category", ""),
+            "barcode": parsed_data.get("barcode", ""),
+            "specifications": parsed_data.get("specifications", {}),
+            "compliance_info": parsed_data.get("compliance_info", {}),
+            "confidence": parsed.get("confidence", 0.0),
+        },
+        "matching": {
+            "standard_id": matched.get("matched_id", ""),
+            "standard_name": matched.get("matched_name", ""),
+            "confidence": state.get("match_confidence", 0.0),
+            "match_reason": matched.get("match_reason", ""),
+        },
+        "listing": {
+            "title": listing.get("title", ""),
+            "price": listing.get("price") or listing.get("suggested_price", 0.0),
+            "selling_points": listing.get("selling_points") or [],
+            "keywords": listing.get("keywords") or [],
+            "description": listing.get("description", ""),
+            "category": listing.get("category", ""),
+        },
+        "compliance": {
+            "passed": compliance_enriched.get("passed", False),
+            "can_proceed": can_proceed,
+            "issues": compliance_enriched.get("issues") or [],
+            "auto_fixed": compliance_enriched.get("auto_fixed") or [],
+            "requires_manual_review": compliance_enriched.get("requires_manual_review") or [],
+            "summary": compliance_enriched.get("summary", ""),
+        },
+        "ready_to_publish": ready_to_publish,
+    }
 
 
 async def compliance_node(state: ListingState) -> dict:
@@ -411,6 +623,7 @@ async def compliance_node(state: ListingState) -> dict:
             listing_info=_safe_json(listing_with_policy),
             product_category=category,
         )
+
         def _reflect_compliance(initial_result_str: str) -> str:
             return f"""请审查以下合规校验结论，检查：
 1. 是否遗漏了关键合规风险点
@@ -431,21 +644,28 @@ async def compliance_node(state: ListingState) -> dict:
         )
         result_dict = result if isinstance(result, dict) else {"result": result}
 
+        # ── 合并 filler 硬编码修复记录，生成增强版合规结果 ───────────────
+        filler_auto_fixed: list[dict[str, Any]] = state.get("filler_auto_fixed") or []
+        compliance_enriched = _build_compliance_result(result_dict, filler_auto_fixed)
+
+        # ── 构建结构化最终结果 ────────────────────────────────────────────
+        final_result = _build_final_result(state, compliance_enriched)
+
         if pool:
             try:
                 from src.agents.action_tracker import record_action
 
                 parsed_data = parsed.get("parsed_data", {}) if isinstance(parsed, dict) else {}
                 matched = state.get("matched_standard") or {}
-                issue_count = len(result_dict.get("issues", [])) if isinstance(result_dict, dict) else 0
+                issue_count = len(compliance_enriched.get("issues", []))
                 await record_action(
                     pool=pool,
                     agent_type="listing",
                     action_type="listing_compliance",
                     product_id=matched.get("matched_id") or None,
                     product_name=parsed.get("cleaned_title") or parsed_data.get("title"),
-                    decision=result_dict,
-                    confidence=1.0 if result_dict.get("passed") else 0.6,
+                    decision=compliance_enriched,
+                    confidence=1.0 if compliance_enriched.get("passed") else 0.6,
                     context_summary=f"category={category}, issues={issue_count}",
                     baseline_metrics={
                         "match_confidence": state.get("match_confidence"),
@@ -456,8 +676,9 @@ async def compliance_node(state: ListingState) -> dict:
                 logger.warning("Failed to record listing compliance action: %s", e)
 
         return {
-            "compliance_check": result,
+            "compliance_check": compliance_enriched,
             "policy_documents_context": policy_docs,
+            "final_result": final_result,
         }
     except Exception as e:
         logger.error(f"Compliance check failed: {e}")
