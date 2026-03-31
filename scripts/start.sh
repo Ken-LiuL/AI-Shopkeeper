@@ -4,6 +4,7 @@ set -e
 
 # ── 等待 PostgreSQL 就绪 ──────────────────────────────────────────
 echo "[start.sh] 等待 PostgreSQL 就绪..."
+pg_ready=0
 for i in $(seq 1 30); do
     if python3 -c "
 import asyncio, os, sys
@@ -17,11 +18,17 @@ async def check():
 asyncio.run(check())
 " 2>/dev/null; then
         echo "[start.sh] PostgreSQL 已就绪"
+        pg_ready=1
         break
     fi
     echo "[start.sh] 等待 PostgreSQL... ($i/30)"
     sleep 2
 done
+
+if [ "$pg_ready" -ne 1 ]; then
+    echo "[start.sh] PostgreSQL 超时未就绪，退出"
+    exit 1
+fi
 
 # ── 运行数据库 migration ──────────────────────────────────────────
 echo "[start.sh] 运行 migrations..."

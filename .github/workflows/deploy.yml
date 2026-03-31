@@ -140,9 +140,18 @@ jobs:
 
             echo "=== Restarting app only ==="
             docker rm -f aishop-app 2>/dev/null || true
-            docker compose up -d --force-recreate --no-build --no-deps app
+            docker compose up -d --force-recreate --no-build app
 
-            echo "=== Health check (30s wait) ==="
-            sleep 30
-            curl -sf http://localhost:8000/health && echo "✅ Backend healthy" || \
-              (echo "❌ Unhealthy" && docker logs aishop-app --tail 50 && exit 1)
+            echo "=== Health check (up to 150s) ==="
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8000/health >/dev/null; then
+                echo "✅ Backend healthy"
+                exit 0
+              fi
+              echo "Waiting for backend health... ($i/30)"
+              sleep 5
+            done
+            echo "❌ Unhealthy"
+            docker compose ps
+            docker logs aishop-app --tail 100
+            exit 1
