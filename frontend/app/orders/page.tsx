@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { AIInsightCard } from '@/components/ai-insight-card';
 import { getManualImportReview, getOrders, getOrderStats, lookupIssueActions, updateIssueAction, type IssueActionRecord, type ManualImportReview, type Order, type OrderStats } from '@/lib/api';
 
 
@@ -111,6 +112,16 @@ export default function OrdersPage() {
   const mismatchCount = Number(review?.open_summary?.order_amount_mismatch ?? review?.summary.order_amount_mismatch ?? 0);
   const refundRate = Number(stats?.refund_rate || 0);
   const completionRate = Number(stats?.completion_rate || 0);
+
+  const orderInsight = useMemo(() => {
+    if (!stats) return null;
+    const parts: string[] = [];
+    if (refundRate > 0.05) parts.push(`退单率${(refundRate * 100).toFixed(1)}%偏高`);
+    if (completionRate < 0.8) parts.push(`完成率${(completionRate * 100).toFixed(1)}%偏低`);
+    if (stats.avg_delivery_time > 48) parts.push(`平均配送时长${stats.avg_delivery_time.toFixed(0)}小时偏慢`);
+    if (parts.length === 0) return '订单运营状况正常，无明显异常。';
+    return `发现 ${parts.length} 个关注点：${parts.join('；')}。`;
+  }, [stats, refundRate, completionRate]);
   const mismatchRows = useMemo(
     () => ((review?.tables?.order_amount_mismatch as Array<Record<string, unknown>> | undefined) || []),
     [review]
@@ -266,6 +277,8 @@ export default function OrdersPage() {
           </button>
         </div>
       </div>
+
+      <AIInsightCard insight={orderInsight} loading={loading && !stats} />
 
       <div className="grid gap-4 md:grid-cols-4">
         <button

@@ -195,17 +195,22 @@ async def _generate_ai_pricing_analysis(product_data: list[dict]) -> list[dict]:
 
     prompt = f"""
     分析以下商品的定价策略，为每个商品生成调价建议。考虑因素：
-    1. 成本价和当前毛利率
-    2. 竞品价格对比
-    3. 销量表现
-    4. 品类平均毛利率
+    1. 成本价和当前毛利率（毛利率低于15%必须预警并建议涨价）
+    2. 竞品价格对比（如有竞品数据）
+    3. 销量表现（月销量>50件可微涨价试探，月销量<10件考虑降价促销）
+    4. 品类平均毛利率（与品类均值差距超过10个百分点时需特别说明）
+
+    重要提醒：即使没有竞品数据，也必须根据以下维度给出具体调价建议，不能说"维持当前价格"：
+    1. 当前毛利率 vs 品类平均毛利率的差距（差距大则建议靠拢均值）
+    2. 月销量高低（高销量可微涨价试探，低销量考虑降价促销）
+    3. 成本价/售价比（毛利率低于15%是硬性预警，必须给出调价建议）
 
     商品数据：
     {json.dumps(product_data, ensure_ascii=False, indent=2)}
 
     为每个商品生成具体的定价建议，包括：
-    - 建议价格（基于市场竞争力和盈利能力）
-    - 调价理由（详细说明）
+    - 建议价格（基于市场竞争力和盈利能力，必须给出具体数字）
+    - 调价理由（详细说明，不得使用"维持当前价格"等模糊表述）
     - 信心度(0-1)
     - 预期影响（销量/利润变化预测）
     """
@@ -382,10 +387,10 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                     confidence = 0.75
                     potential_impact = "提价后预计销量下降8-12%，但整体利润显著增加"
 
-                # 价格比竞品高很多，考虑降价（但保护毛利率）
+                # 价格比竞品高，考虑降价（但保护毛利率）
                 elif (
                     product["avg_competitor_price"] > 0
-                    and current_price > product["avg_competitor_price"] * 1.25
+                    and current_price > product["avg_competitor_price"] * 1.1
                 ):
                     # 降价但不能低于15%毛利率
                     competitive_price = product["avg_competitor_price"] * 1.1  # 比竞品高10%
@@ -410,13 +415,40 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                     potential_impact = "轻微提价预计对销量影响较小，利润提升明显"
 
                 # 低销量但高毛利率商品，考虑降价促销
-                elif product["monthly_sales"] < 10 and current_margin > 40:
+                elif product["monthly_sales"] < 10 and current_margin > 45:
                     suggested_price = max(
                         current_price * 0.92, min_price_for_25_margin
                     )  # 降价不超过8%
-                    reason = f"月销量{product['monthly_sales']}件偏低，但毛利率{current_margin:.1f}%较高，建议适度降价促销"
-                    confidence = 0.65
-                    potential_impact = "降价促销预计销量提升30-50%，整体收益可能增加"
+                    reason = f"月销量{product['monthly_sales']}件偏低，但毛利率{current_margin:.1f}%较高，适当降价可提升转化率"
+                    confidence = 0.75
+                    potential_impact = "降价8%预计销量提升30-50%，整体收益可能增加"
+
+                else:
+                    # 无主要风险，提供有意义的定价健康诊断而非"维持当前价格"
+                    if cost_price > 0 and current_price > 0:
+                        category_avg = product.get("category_avg_margin", 25.0)
+                        if current_margin < category_avg - 10:
+                            reason = f"当前毛利率{current_margin:.1f}%比品类均值{category_avg:.1f}%低{category_avg - current_margin:.1f}个百分点，建议逐步调价向品类均值靠拢"
+                            confidence = 0.70
+                            potential_impact = "对标品类均值后利润率可改善约{:.0f}%".format(category_avg - current_margin)
+                        elif product["avg_competitor_price"] > 0 and current_price > product["avg_competitor_price"] * 1.05:
+                            suggested_price = product["avg_competitor_price"] * 1.03
+                            reason = f"当前价格比竞品均价高{((current_price / product['avg_competitor_price'] - 1) * 100):.0f}%，建议小幅调整以提升竞争力"
+                            confidence = 0.70
+                            potential_impact = "微调定价后预计转化率提升5-10%"
+                        elif product.get("monthly_sales", 0) == 0 and cost_price > 0:
+                            reason = f"近期无销售记录，当前毛利率{current_margin:.1f}%，建议检查商品上架状态并考虑适当降价促活"
+                            suggested_price = current_price * 0.95
+                            confidence = 0.65
+                            potential_impact = "降价5%促活，有望恢复销量"
+                        else:
+                            reason = f"当前毛利率{current_margin:.1f}%（品类均值{product.get('category_avg_margin', 25.0):.1f}%），月销量{int(product.get('monthly_sales') or 0)}件，定价基本合理；建议持续监控市场变化，适时微调"
+                            confidence = 0.60
+                            potential_impact = "当前价格结构健康，持续监控即可"
+                    else:
+                        reason = "成本数据缺失，无法评估毛利空间，建议先补齐成本价以获得更准确的定价建议"
+                        confidence = 0.40
+                        potential_impact = "补齐成本数据后可启用智能定价分析"
 
             # 如果有AI建议，作为补充参考
             if ai_suggestion:
@@ -464,9 +496,17 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
             logger.warning("暂无价格建议数据，请先完善商品成本信息或补充更多订单数据")
             suggestions = []
 
+        # 生成总体定价健康度摘要
+        low_margin_count = sum(1 for s in suggestions if s.impact_type == "revenue_up")
+        high_price_count = sum(1 for s in suggestions if s.current_price > s.suggested_price * 1.05)
+        if suggestions:
+            summary = f"共{len(suggestions)}个调价建议：{low_margin_count}个建议涨价（含毛利预警），{high_price_count}个建议降价"
+        else:
+            summary = "暂无价格建议，请先补齐成本价或更多订单数据"
+
         return APIResponse(
             data=suggestions,
-            message="基于当前商品、订单和库存数据生成" if suggestions else "暂无价格建议，请先补齐成本价或更多订单数据",
+            message=summary,
         )
 
     except Exception as e:

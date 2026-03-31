@@ -104,6 +104,15 @@ async def _check_store_metrics_anomaly(pool, threshold: float = 0.15) -> list[di
         alerts = []
         # raw_data 结构: 包含各指标的同比/环比字段
         items = data if isinstance(data, list) else [data]
+        if len(items) < 3:
+            return [{
+                "type": "data_insufficient",
+                "severity": "info",
+                "title": "数据积累中",
+                "message": f"需要至少3天历史数据才能进行门店KPI异常检测（当前{len(items)}条记录）",
+                "recommendation": "请继续正常运营，系统将自动开始监测",
+                "is_info": True,
+            }]
         for item in items:
             for key in ("validOrderAmount", "customerPrice", "deliveryFee", "validOrderCount"):
                 yoy = item.get(f"{key}YearOnYear") or item.get(f"{key}_yoy")
@@ -144,6 +153,15 @@ async def _check_traffic_trend_anomaly(pool, consecutive_days: int = 3) -> list[
         alerts = []
         # raw_data 通常是按日期排序的列表
         items = data if isinstance(data, list) else []
+        if len(items) < 3:
+            return [{
+                "type": "data_insufficient",
+                "severity": "info",
+                "title": "数据积累中",
+                "message": f"需要至少3天历史数据才能进行流量趋势异常检测（当前{len(items)}天）",
+                "recommendation": "请继续正常运营，系统将自动开始监测",
+                "is_info": True,
+            }]
         if len(items) >= consecutive_days:
             # 检查最近 N 天是否连续下降
             recent = items[-consecutive_days:]

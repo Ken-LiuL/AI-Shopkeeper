@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { AIInsightCard } from '@/components/ai-insight-card';
 import { Input } from '@/components/ui/input';
 import {
   Table,
@@ -172,6 +173,26 @@ function ProductsPage() {
   // Use low_stock_items as the main products data if products array is not available
   const products = data?.products || [];
   const filteredProducts = products;
+
+  const productInsight = useMemo(() => {
+    if (!products.length) return null;
+    const zeroStockCount = products.filter((p) => p.status === 'out_of_stock').length;
+    const lowStockItems = restockSuggestions?.length || 0;
+    const parts: string[] = [];
+    if (zeroStockCount > 0) parts.push(`${zeroStockCount}个商品已断货`);
+    if (lowStockItems > 0) parts.push(`${lowStockItems}个商品建议补货`);
+    const productsWithMargin = products.filter((p) => p.retail_price && p.cost_price);
+    const avgMargin =
+      productsWithMargin.length > 0
+        ? productsWithMargin.reduce((sum, p) => {
+            const m = ((p.retail_price - (p.cost_price ?? 0)) / p.retail_price) * 100;
+            return sum + m;
+          }, 0) / productsWithMargin.length
+        : null;
+    if (avgMargin !== null && avgMargin < 20) parts.push(`平均毛利率${avgMargin.toFixed(1)}%偏低`);
+    if (parts.length === 0) return `共${products.length}个商品，库存和毛利状况正常。`;
+    return `检测到 ${parts.length} 个问题：${parts.join('；')}。建议优先处理断货和低毛利商品。`;
+  }, [products, restockSuggestions]);
   const stockoutButSelling = Number(review?.open_summary?.stockout_but_selling ?? review?.summary.stockout_but_selling ?? 0);
   const catalogGaps = Number(review?.open_summary?.catalog_gaps ?? review?.summary.catalog_gaps ?? 0);
   const missingPrice = Number(review?.open_summary?.products_missing_price ?? review?.summary.products_missing_price ?? 0);
@@ -458,6 +479,8 @@ function ProductsPage() {
           </a>
         </div>
       </div>
+
+      <AIInsightCard insight={productInsight} loading={loading && !data} />
 
       <div className="grid gap-4 md:grid-cols-4">
         <a href="/inventory" className="block rounded-xl border border-red-200 bg-red-50 p-4 transition-colors hover:bg-red-100">

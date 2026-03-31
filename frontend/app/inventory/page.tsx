@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { AIInsightCard } from '@/components/ai-insight-card';
 import { Input } from '@/components/ui/input';
 import {
   Table,
@@ -164,6 +165,17 @@ export default function InventoryPage() {
     return { total: items.length, stockout, stockoutButSelling, lowStock, missingCost, monthlySales };
   }, [items, review]);
 
+  const inventoryInsight = useMemo(() => {
+    if (!items.length) return null;
+    const totalValue = items.reduce((sum, i) => sum + (i.stock_value ?? 0), 0);
+    const parts: string[] = [];
+    if (summary.stockout > 0) parts.push(`${summary.stockout}个SKU断货`);
+    if (summary.lowStock > 0) parts.push(`${summary.lowStock}个SKU低于安全库存`);
+    if (parts.length === 0)
+      return `库存健康，共${items.length}个SKU，总价值约¥${totalValue.toFixed(0)}。`;
+    return `库存风险：${parts.join('，')}。总库存价值约¥${totalValue.toFixed(0)}。`;
+  }, [items, summary]);
+
   const renderBadge = (item: InventoryListItem) => {
     if (item.risk_level === 'stockout_but_selling') {
       return <Badge variant="destructive">断货且仍有销量</Badge>;
@@ -192,6 +204,8 @@ export default function InventoryPage() {
           导出 Excel
         </button>
       </div>
+
+      <AIInsightCard insight={inventoryInsight} loading={loading && !items.length} />
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
