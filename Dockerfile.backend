@@ -1,9 +1,19 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG PIP_EXTRA_INDEX_URL=
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=300
 
 WORKDIR /app
 
 COPY requirements.backend.txt ./
-RUN pip install --no-cache-dir --prefer-binary --retries 10 --timeout 120 -r requirements.backend.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    PIP_INDEX_URL="${PIP_INDEX_URL}" \
+    PIP_EXTRA_INDEX_URL="${PIP_EXTRA_INDEX_URL}" \
+    pip install --prefer-binary --retries 20 --timeout 300 -r requirements.backend.txt
 
 COPY src/ src/
 COPY config/ config/
