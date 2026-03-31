@@ -11,6 +11,7 @@ const coreNav = [
   { href: '/alerts', label: '预警处理', icon: '🔔' },
   { href: '/inventory', label: '库存修复', icon: '📦' },
   { href: '/products', label: '商品修复', icon: '🧾' },
+  { href: '/listing', label: '智能上架', icon: '📤' },
   { href: '/orders', label: '异常订单', icon: '📋' },
   { href: '/customer-service', label: '客服质量', icon: '💬' },
   { href: '/knowledge', label: '知识中心', icon: '📚' },
