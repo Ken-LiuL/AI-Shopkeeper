@@ -8,7 +8,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.api.ab_testing import router as ab_testing_router
-from src.api.export import router as export_router
 from src.api.alerts import router as alerts_router
 from src.api.boss_assistant import router as boss_assistant_router
 from src.api.bundles import router as bundles_router
@@ -29,6 +28,7 @@ from src.api.chat import router as chat_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
+from src.api.export import router as export_router
 from src.api.feedback import router as feedback_router
 from src.api.insights import router as insights_router
 from src.api.inventory import router as inventory_router
@@ -44,11 +44,11 @@ from src.api.products import router as products_router
 from src.api.products import v1_router as products_v1_router
 from src.api.replenishment import router as replenishment_router
 from src.api.selection import router as selection_router
+from src.api.settings import router as settings_router
 from src.api.stores import router as stores_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.sync_status import router as sync_status_router
 from src.api.system import router as system_router
-from src.api.settings import router as settings_router
 from src.auth.router import router as auth_router
 from src.config import get_settings
 from src.db import neo4j as neo4j_db
@@ -401,7 +401,7 @@ async def health_check():
     """Lightweight liveness probe — should respond in milliseconds."""
     return {
         "status": "ok",
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
         "uptime_seconds": int(time.monotonic() - _APP_START_TIME),
     }
 
@@ -468,7 +468,7 @@ async def readiness_check():
     return {
         "status": overall,
         "checks": checks,
-        "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "timestamp": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
 

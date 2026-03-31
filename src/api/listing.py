@@ -5,12 +5,11 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks
 
-from src.agents.orchestrator import Orchestrator
 from src.db import postgres as pg
 
-from .deps import gen_id, get_orchestrator
+from .deps import gen_id
 from .errors import NotFoundError
 from .schemas import (
     APIResponse,

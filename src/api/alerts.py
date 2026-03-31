@@ -808,7 +808,6 @@ async def test_push(
 
     返回各通道配置状态和推送结果。
     """
-    import os
 
     from fastapi import HTTPException
 
@@ -817,8 +816,8 @@ async def test_push(
         FEISHU_WEBHOOK_URL,
         TELEGRAM_BOT_TOKEN,
         TELEGRAM_CHAT_ID,
-        WECHAT_WEBHOOK_URL,
         WEBHOOK_URL,
+        WECHAT_WEBHOOK_URL,
         send_alert,
     )
 

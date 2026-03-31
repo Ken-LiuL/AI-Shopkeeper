@@ -60,12 +60,9 @@ def is_non_actionable_placeholder(message: str) -> bool:
     stripped = message.strip()
     if not stripped:
         return True
-    for pat in placeholder_patterns:
-        if stripped == pat:
-            return True
-    if stripped.startswith("[") and stripped.endswith("]") and len(stripped) < 20:
+    if stripped in placeholder_patterns:
         return True
-    return False
+    return stripped.startswith("[") and stripped.endswith("]") and len(stripped) < 20
 
 
 def has_recent_fast_greeting(
@@ -74,9 +71,7 @@ def has_recent_fast_greeting(
 ) -> bool:
     """检查是否在冷却期内已发过快速回复。"""
     last_ts = _fast_path_timestamps.get(session_id)
-    if last_ts and (time.time() - last_ts) < cooldown:
-        return True
-    return False
+    return bool(last_ts and (time.time() - last_ts) < cooldown)
 
 
 def try_fast_path(

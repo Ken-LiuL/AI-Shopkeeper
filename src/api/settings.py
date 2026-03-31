@@ -24,7 +24,8 @@ async def get_learning_status() -> APIResponse[dict]:
     """返回当前生效的权重、阈值，以及最近一次参数版本的时间。"""
     try:
         import yaml
-        from src.services.parameter_learning import SCORING_YAML, ANOMALY_YAML
+
+        from src.services.parameter_learning import ANOMALY_YAML, SCORING_YAML
 
         # 当前权重
         with open(SCORING_YAML, encoding="utf-8") as f:

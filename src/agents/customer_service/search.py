@@ -11,10 +11,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +26,6 @@ async def full_pipeline_search(message: str, pool=None) -> list[dict]:
     """
     if not pool:
         return []
-
-    results: list[dict] = []
 
     # ── Step 1-2: 向量检索 ──────────────────────────────────
     async def _vector_search():
@@ -229,7 +227,5 @@ async def store_cached_retrieval(redis_client, cache_key: str, results: list[dic
     """缓存检索结果到 Redis。"""
     if not redis_client or not results:
         return
-    try:
+    with contextlib.suppress(Exception):
         await redis_client.setex(cache_key, 300, json.dumps(results, default=str))
-    except Exception:
-        pass

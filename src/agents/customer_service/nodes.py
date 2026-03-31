@@ -16,18 +16,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import hashlib
 import json
 import logging
 import os
-import random
 import re
 import time
-import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
+# P1-1: 合规过滤层（医疗器械红线）
+from src.agents.customer_service.compliance import (
+    COMPLIANCE_STREAM_HOLDBACK_CHARS as _COMPLIANCE_STREAM_HOLDBACK_CHARS_NEW,
+)
+from src.agents.customer_service.compliance import (
+    soft_filter as _compliance_soft_filter,
+)
 from src.services.knowledge_service import (
     load_structured_knowledge,
     search_faq_context,
@@ -67,18 +71,6 @@ logger = logging.getLogger(__name__)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 USE_LANGGRAPH_PIPELINE: bool = (
     os.environ.get("CS_USE_PIPELINE", "true").lower() == "true"
-)
-
-
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# P1-1: 合规过滤层（医疗器械红线）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-from src.agents.customer_service.compliance import (
-    COMPLIANCE_STREAM_HOLDBACK_CHARS as _COMPLIANCE_STREAM_HOLDBACK_CHARS_NEW,
-    soft_filter as _compliance_soft_filter,
 )
 
 _MAX_REPLY_TEXT_LEN = 220
@@ -2300,11 +2292,11 @@ async def _chat_via_pipeline(
         product_cards = result_state.get("product_cards") or []
 
         # ── 置信度兜底：基于 intent_confidence 决定是否强制转人工 ──────────
-        _CONF_LOW = float(os.environ.get("CS_CONFIDENCE_LOW", "0.4"))
-        _CONF_MED = float(os.environ.get("CS_CONFIDENCE_MED", "0.6"))
+        conf_low = float(os.environ.get("CS_CONFIDENCE_LOW", "0.4"))
+        conf_med = float(os.environ.get("CS_CONFIDENCE_MED", "0.6"))
         intent_confidence = float(result_state.get("intent_confidence", 1.0) or 1.0)
 
-        if intent_confidence < _CONF_LOW:
+        if intent_confidence < conf_low:
             logger.warning(
                 "[CS-CONFIDENCE] LOW session=%s confidence=%.3f intent=%s → force transfer",
                 session_id,
@@ -2314,7 +2306,7 @@ async def _chat_via_pipeline(
             needs_human = True
             reply_text = "亲，您的问题我需要转接专业客服为您解答，请稍等一下哦~ 🙏"
             suggested_action = {"type": "transfer_human", "reason": "low_confidence"}
-        elif intent_confidence < _CONF_MED:
+        elif intent_confidence < conf_med:
             logger.warning(
                 "[CS-CONFIDENCE] MED session=%s confidence=%.3f intent=%s → mark human (AI reply kept)",
                 session_id,

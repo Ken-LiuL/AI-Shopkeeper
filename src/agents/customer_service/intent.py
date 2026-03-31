@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +87,9 @@ def quick_intent_guess(
 
 def should_run_product_pipeline(quick_intent: str, conversation_history: list[dict] | None) -> bool:
     """判断是否需要运行商品检索管线。"""
-    if quick_intent in PRODUCT_INTENTS:
-        return True
-    if conversation_history and _history_has_product_signals(conversation_history):
-        return True
-    return False
+    return quick_intent in PRODUCT_INTENTS or bool(
+        conversation_history and _history_has_product_signals(conversation_history)
+    )
 
 
 def _history_has_product_signals(conversation_history: list[dict]) -> bool:

@@ -90,10 +90,10 @@ class IsolationForestSkill:
         for row in rows:
             feature_matrix.append([float(row[m] or 0) for m in metrics])
 
-        X = np.array(feature_matrix)
+        X = np.array(feature_matrix)  # noqa: N806
 
         # 标准化（防止量纲差异影响）
-        X_scaled = _standardize(X)
+        X_scaled = _standardize(X)  # noqa: N806
 
         # 训练并预测（-1=异常, 1=正常）
         predictions = self.model.fit_predict(X_scaled)
@@ -207,8 +207,8 @@ class IsolationForestSkill:
                 float(row["sales_slope"] or 0),
             ])
 
-        X = np.array(feature_matrix)
-        X_scaled = _standardize(X)
+        X = np.array(feature_matrix)  # noqa: N806
+        X_scaled = _standardize(X)  # noqa: N806
 
         # 为商品级检测使用独立模型实例（避免覆盖已 fit 的 store-level 模型）
         product_model = IsolationForest(
@@ -246,7 +246,7 @@ class IsolationForestSkill:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _standardize(X: np.ndarray) -> np.ndarray:
+def _standardize(X: np.ndarray) -> np.ndarray:  # noqa: N803
     """逐列 Z-score 标准化，std=0 的列置 0 避免 NaN。"""
     mean = X.mean(axis=0)
     std = X.std(axis=0)
