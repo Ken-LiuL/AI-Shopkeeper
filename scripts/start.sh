@@ -11,10 +11,11 @@ import asyncio, os, sys
 sys.path.insert(0, '/app')
 from src.db import postgres as pg
 async def check():
-    await pg.init(os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@postgres:5432/ai_store'))
+    os.environ.setdefault('DATABASE_URL', 'postgresql://postgres:postgres@postgres:5432/ai_store')
+    await pg.init_pool()
     pool = pg.get_pool()
     await pool.fetchval('SELECT 1')
-    await pg.close()
+    await pg.close_pool()
 asyncio.run(check())
 " 2>/dev/null; then
         echo "[start.sh] PostgreSQL 已就绪"
@@ -37,8 +38,8 @@ import asyncio, os, sys, glob
 sys.path.insert(0, '/app')
 from src.db import postgres as pg
 async def run():
-    dsn = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@postgres:5432/ai_store')
-    await pg.init(dsn)
+    os.environ.setdefault('DATABASE_URL', 'postgresql://postgres:postgres@postgres:5432/ai_store')
+    await pg.init_pool()
     pool = pg.get_pool()
     await pool.execute('CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW())')
     for f in sorted(glob.glob('migrations/postgres/*.sql')):
@@ -52,7 +53,7 @@ async def run():
                 print(f'  ✅ {name}')
             except Exception as e:
                 print(f'  ⚠️ {name}: {e}')
-    await pg.close()
+    await pg.close_pool()
 asyncio.run(run())
 " || echo "[start.sh] ⚠️ migration 失败（非致命）"
 
