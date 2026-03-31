@@ -14,18 +14,26 @@ interface ListingCreateResponse {
   message?: string;
 }
 
+interface ListingStatusResponse {
+  listing_id: string;
+  status: 'processing' | 'completed' | 'failed';
+  current_step?: string;
+  step_detail?: string;
+}
+
 interface ListingDetailResponse {
   listing_id: string;
   status: 'processing' | 'completed' | 'failed';
-  product_data: {
-    parsed_product?: ParsedProduct;
-    matched_standard?: MatchedStandard | null;
-    match_confidence?: number;
-    listing_info?: ListingInfo;
-    compliance_check?: ComplianceCheck;
-    errors?: string[];
-  };
+  parsed_product?: ParsedProduct;
+  matched_standard?: MatchedStandard | null;
+  match_confidence?: number;
+  listing_info?: ListingInfo;
+  compliance_check?: ComplianceCheck;
+  errors?: string[];
+  current_step?: string;
+  step_detail?: string;
   created_at?: string;
+  finished_at?: string;
 }
 
 interface ParsedProduct {
@@ -82,6 +90,14 @@ const PIPELINE_STEPS = [
   { label: '生成上架信息', icon: '✍️' },
   { label: '合规校验', icon: '✅' },
 ];
+
+/** Map backend current_step value → pipeline step index (0-based) */
+const STEP_MAP: Record<string, number> = {
+  parsing: 0,
+  matching: 1,
+  filling: 2,
+  compliance: 3,
+};
 
 // ─── Color helpers ────────────────────────────────────────────────────────────
 
@@ -145,38 +161,41 @@ function ListingPage() {
     setEditDesc(info.description || '');
   }, []);
 
-  const simulatePipeline = useCallback((taskId: string) => {
-    let current = 0;
-    const advance = () => {
-      current += 1;
-      if (current < PIPELINE_STEPS.length) {
-        setPipelineStep(current);
-        pollTimerRef.current = setTimeout(advance, 2000);
-      }
-    };
-    setPipelineStep(0);
-    pollTimerRef.current = setTimeout(advance, 2000);
-
-    // 独立轮询结果
+  /**
+   * Poll backend status endpoint every 2s.
+   * Uses current_step to drive the progress indicator.
+   * When status === 'completed' | 'failed', fetches full detail and transitions to result.
+   */
+  const pollPipeline = useCallback((taskId: string) => {
     const poll = async () => {
       try {
-        const data = await fetchAPI<{ data: ListingDetailResponse }>(`/listing/${taskId}`);
-        const detail: ListingDetailResponse = (data as unknown as { data: ListingDetailResponse }).data ?? (data as unknown as ListingDetailResponse);
-        if (detail.status === 'completed' || detail.status === 'failed') {
-          if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        const statusData = await fetchAPI<ListingStatusResponse>(`/listing/${taskId}/status`);
+
+        // Update pipeline step indicator based on current_step
+        if (statusData.current_step && statusData.current_step in STEP_MAP) {
+          setPipelineStep(STEP_MAP[statusData.current_step]);
+        }
+
+        if (statusData.status === 'completed' || statusData.status === 'failed') {
+          // Fetch full detail
+          const detail = await fetchAPI<ListingDetailResponse>(`/listing/${taskId}`);
           setResult(detail);
-          if (detail.product_data?.listing_info) {
-            initEditFields(detail.product_data.listing_info);
+          if (detail.listing_info) {
+            initEditFields(detail.listing_info);
           }
           setStep('result');
         } else {
-          pollTimerRef.current = setTimeout(poll, 3000);
+          pollTimerRef.current = setTimeout(poll, 2000);
         }
       } catch {
-        pollTimerRef.current = setTimeout(poll, 4000);
+        // Retry on error
+        pollTimerRef.current = setTimeout(poll, 3000);
       }
     };
-    setTimeout(poll, 4000);
+
+    setPipelineStep(0);
+    // Start polling after a short delay to let backend spin up
+    pollTimerRef.current = setTimeout(poll, 2000);
   }, [initEditFields]);
 
   const handleSubmit = useCallback(async () => {
@@ -193,12 +212,12 @@ function ListingPage() {
         }),
       });
       const taskId = res.task_id;
-      simulatePipeline(taskId);
+      pollPipeline(taskId);
     } catch (e) {
       setError((e as Error).message || '请求失败，请重试');
       setStep('input');
     }
-  }, [rawText, platform, simulatePipeline]);
+  }, [rawText, platform, pollPipeline]);
 
   const handleReset = () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
@@ -234,6 +253,11 @@ function ListingPage() {
             <CardTitle className="text-base">商品信息输入</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Chrome 扩展提示 */}
+            <div className="rounded-lg bg-blue-50 border border-blue-100 px-3 py-2 text-xs text-blue-600 leading-relaxed">
+              💡 提示：安装 AI店长 Chrome 扩展后，可在 1688/拼多多商品页一键导入，无需手动粘贴。
+            </div>
+
             <p className="text-sm text-gray-500">
               将 1688 或拼多多商品页面的信息复制粘贴到这里，AI 会自动解析并生成美团上架信息
             </p>
@@ -362,14 +386,14 @@ function ListingPage() {
           {result.status === 'failed' && (
             <div className="rounded-lg border border-red-200 bg-red-50 p-4">
               <p className="text-sm font-medium text-red-700">❌ 解析失败</p>
-              {(result.product_data?.errors || []).map((e, i) => (
+              {(result.errors || []).map((e, i) => (
                 <p key={i} className="text-xs text-red-600 mt-1">{e}</p>
               ))}
             </div>
           )}
 
           {/* ① 商品解析结果 */}
-          {result.product_data?.parsed_product && (
+          {result.parsed_product && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -377,7 +401,7 @@ function ListingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ParsedProductCard data={result.product_data.parsed_product} />
+                <ParsedProductCard data={result.parsed_product} />
               </CardContent>
             </Card>
           )}
@@ -391,14 +415,14 @@ function ListingPage() {
             </CardHeader>
             <CardContent>
               <MatchedStandardCard
-                matched={result.product_data?.matched_standard ?? null}
-                confidence={result.product_data?.match_confidence ?? 0}
+                matched={result.matched_standard ?? null}
+                confidence={result.match_confidence ?? 0}
               />
             </CardContent>
           </Card>
 
           {/* ③ 上架信息（可编辑） */}
-          {result.product_data?.listing_info && (
+          {result.listing_info && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -425,11 +449,11 @@ function ListingPage() {
                       type="text"
                     />
                   </div>
-                  {result.product_data.listing_info.price_analysis && (
+                  {result.listing_info.price_analysis && (
                     <div>
                       <label className="block text-xs font-medium text-gray-600 mb-1">定价分析</label>
                       <p className="text-xs text-gray-500 mt-2 leading-relaxed">
-                        {String(result.product_data.listing_info.price_analysis)}
+                        {String(result.listing_info.price_analysis)}
                       </p>
                     </div>
                   )}
@@ -467,7 +491,7 @@ function ListingPage() {
           )}
 
           {/* ④ 合规校验 */}
-          {result.product_data?.compliance_check && (
+          {result.compliance_check && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -475,7 +499,7 @@ function ListingPage() {
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <ComplianceCard data={result.product_data.compliance_check} />
+                <ComplianceCard data={result.compliance_check} />
               </CardContent>
             </Card>
           )}
@@ -483,7 +507,7 @@ function ListingPage() {
           {/* ⑤ 底部操作 */}
           <div className="flex flex-wrap gap-3 pt-2">
             <Button
-              disabled={result.product_data?.compliance_check?.can_list === false}
+              disabled={result.compliance_check?.can_list === false}
               className="flex-1 sm:flex-none"
             >
               ✅ 确认上架
