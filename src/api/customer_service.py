@@ -839,6 +839,22 @@ async def log_chat(request: LogChatRequest) -> APIResponse[dict]:
         return APIResponse(data={"logged": False, "reason": str(e)[:100]})
 
 
+# ── CS Metrics ────────────────────────────────────────────
+
+
+@router.get("/metrics", response_model=APIResponse[dict])
+async def get_cs_metrics(
+    days: int = Query(7, ge=1, le=90, description="统计周期（天），默认7天"),
+) -> APIResponse[dict]:
+    """客服效果量化指标（基于 cs_metrics 埋点表）。"""
+    from src.db import postgres as pg_db
+    from src.services.cs_metrics import get_cs_stats
+
+    pool = pg_db.get_pool()
+    stats = await get_cs_stats(pool, days=days)
+    return APIResponse(data=stats)
+
+
 # ── Analytics ─────────────────────────────────────────────
 
 

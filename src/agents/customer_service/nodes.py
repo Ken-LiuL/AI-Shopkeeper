@@ -4,10 +4,10 @@ CustomerService Agent 新版实现 - 完整检索管线
 管线：意图识别 → 向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富 → LLM 生成
 
 模块拆分:
-- fast_path.py   — 快速路径秒回
-- intent.py      — 意图识别 + 分流逻辑
-- search.py      — Hybrid Search + Reranker + GraphRAG 检索管线
-- nodes.py       — 主编排入口 (chat 函数) + 历史遗留代码
+- fast_path.py   - 快速路径秒回
+- intent.py      - 意图识别 + 分流逻辑
+- search.py      - Hybrid Search + Reranker + GraphRAG 检索管线
+- nodes.py       - 主编排入口 (chat 函数) + 历史遗留代码
 
 TODO: 后续逐步将 nodes.py 中的内联实现替换为对子模块的调用。
 """
@@ -249,42 +249,24 @@ def _fast_path_reply(
 # P1-1: 合规过滤层（医疗器械红线）
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-# 医疗器械合规词替换表（顺序敏感：长词优先）
-_COMPLIANCE_MAP: list[tuple[str, str]] = [
-    ("100%有效", "效果显著"),
-    ("100%治好", "有效辅助改善"),
-    ("100%治愈", "有效辅助改善"),
-    ("彻底治好", "有效辅助改善"),
-    ("彻底治愈", "有效辅助改善"),
-    ("根治", "有效辅助改善"),
-    ("治愈", "辅助改善"),
-    ("保证疗效", "有助于改善"),
-    ("代替就医", "辅助居家健康管理"),
-    ("替代就医", "辅助居家健康管理"),
-    ("包治百病", "广泛适用"),
-    ("药到病除", "效果显著"),
-]
+from src.agents.customer_service.compliance import (
+    COMPLIANCE_STREAM_HOLDBACK_CHARS as _COMPLIANCE_STREAM_HOLDBACK_CHARS_NEW,
+    soft_filter as _compliance_soft_filter,
+)
+
 _MAX_REPLY_TEXT_LEN = 220
-_COMPLIANCE_STREAM_HOLDBACK_CHARS = max((len(forbidden) for forbidden, _ in _COMPLIANCE_MAP), default=1) - 1
-
-
-def _compliance_filter(reply_text: str) -> str:
-    """
-    P1-1 合规过滤层（额外安全层，不替代 prompt 引导）。
-    过滤医疗器械禁用词，替换为合规表述。
-    """
-    filtered = reply_text
-    for forbidden, replacement in _COMPLIANCE_MAP:
-        if forbidden in filtered:
-            new_text = filtered.replace(forbidden, replacement)
-            logger.info(f"[CS-COMPLIANCE] Filtered: {forbidden} -> {replacement}")
-            filtered = new_text
-    return filtered
+# 流式回写保留的最大前瞻字符数
+_COMPLIANCE_STREAM_HOLDBACK_CHARS = _COMPLIANCE_STREAM_HOLDBACK_CHARS_NEW
 
 
 def _postprocess_reply_text(reply_text: str) -> str:
-    """统一回复后处理：合规过滤 + 长度限制。"""
-    processed = _compliance_filter(reply_text or "")
+    """统一回复后处理：软合规过滤 + 长度限制。
+
+    注意：此处仅执行软替换（不做硬拦截）。
+    硬拦截需要 session_id 上下文，由调用方（_chat_via_pipeline / _chat_legacy）
+    在返回前调用 compliance.check() 完成。
+    """
+    processed = _compliance_soft_filter(reply_text or "")
     if len(processed) > _MAX_REPLY_TEXT_LEN:
         processed = processed[:_MAX_REPLY_TEXT_LEN].rstrip()
     return processed
@@ -460,7 +442,7 @@ def _build_logistics_reply_from_extension_context(
     parts: list[str] = []
 
     if status:
-        parts.append(f"亲，我这边帮您看到了当前配送状态是“{status}”。")
+        parts.append(f"亲，我这边帮您看到了当前配送状态是\u201c{status}\u201d。")
     else:
         parts.append("亲，我这边已经帮您查询到订单配送进度了。")
 
@@ -474,7 +456,7 @@ def _build_logistics_reply_from_extension_context(
         else:
             parts.append("预计会尽快送达，建议您再留意一下骑手动态。")
 
-    if rider and rider not in ("—", "-", "暂无", "未分配"):
+    if rider and rider not in ("\u2014", "-", "暂无", "未分配"):
         parts.append(f"当前骑手信息：{rider}。")
 
     if order_time:
@@ -1525,6 +1507,7 @@ async def _chat_legacy(
     global _knowledge_base_cache, _cache_loaded
 
     _t0 = time.time()
+    _legacy_received_at = datetime.now(UTC)
     ai_reply_id = new_ai_reply_id()
     context_trace: dict[str, Any] = {
         "has_extension_context": False,
@@ -1538,7 +1521,7 @@ async def _chat_legacy(
             logger.info("[CS] Placeholder message skip LLM: session=%s message=%s", session_id, message[:80])
             return {
                 "session_id": session_id,
-                "reply": "亲，已收到这条图片/卡片消息。为便于我准确处理，麻烦再发一下您的具体问题（例如“什么时候到”“怎么使用”）。",
+                "reply": "亲，已收到这条图片/卡片消息。为便于我准确处理，麻烦再发一下您的具体问题（例如\u201c什么时候到\u201d\u201c怎么使用\u201d）。",
                 "ai_reply_id": ai_reply_id,
                 "intent": "other",
                 "sources": [],
@@ -1546,6 +1529,7 @@ async def _chat_legacy(
                 "action": {"type": "none"},
                 "product_cards": [],
                 "context_trace": context_trace,
+                "compliance_filtered": False,
             }
 
         # P0-1: Fast-path 秒回（确定性高频简单消息，无需调 LLM）
@@ -1558,8 +1542,29 @@ async def _chat_legacy(
         if _fast is not None:
             if isinstance(_fast, dict):
                 _fast.setdefault("context_trace", context_trace)
+                _fast.setdefault("compliance_filtered", False)
             _t_fast = time.time()
             logger.info(f"[CS-PERF] Fast-path total: {(_t_fast - _t0)*1000:.0f}ms")
+            # Metrics: fast-path hit
+            _fast_replied_at = datetime.now(UTC)
+            try:
+                from src.services.cs_metrics import record_cs_metric as _record_metric
+                asyncio.create_task(
+                    _record_metric(
+                        pool,
+                        session_id=session_id,
+                        ai_reply_id=ai_reply_id,
+                        received_at=_legacy_received_at,
+                        replied_at=_fast_replied_at,
+                        intent=_fast.get("intent") if isinstance(_fast, dict) else "greeting",
+                        confidence=1.0,
+                        needs_human=False,
+                        was_fast_path=True,
+                        compliance_filtered=False,
+                    )
+                )
+            except Exception:
+                pass
             return _fast
 
         # 1. 加载知识库（带缓存）
@@ -2627,6 +2632,35 @@ async def _chat_legacy(
             f"post-llm={(_t_end - _t_post_llm)*1000:.0f}ms) "
             f"| reply_len={len(reply_text)}"
         )
+        # Metrics: main LLM path
+        _legacy_replied_at = datetime.now(UTC)
+
+        # ── P1-1 合规过滤（硬拦截 + 软替换） ───────────────────────────────
+        from src.agents.customer_service.compliance import check as _compliance_check
+        _compliance_result = _compliance_check(reply_text, session_id=session_id)
+        if _compliance_result.needs_human:
+            needs_human = True
+        reply_text = _compliance_result.text
+
+        _compliance_was_filtered = _compliance_result.was_filtered
+        try:
+            from src.services.cs_metrics import record_cs_metric as _record_metric
+            asyncio.create_task(
+                _record_metric(
+                    pool,
+                    session_id=session_id,
+                    ai_reply_id=ai_reply_id,
+                    received_at=_legacy_received_at,
+                    replied_at=_legacy_replied_at,
+                    intent=intent,
+                    confidence=confidence,
+                    needs_human=needs_human,
+                    was_fast_path=False,
+                    compliance_filtered=_compliance_was_filtered,
+                )
+            )
+        except Exception:
+            pass
         return {
             "session_id": session_id,
             "reply": reply_text,
@@ -2637,6 +2671,7 @@ async def _chat_legacy(
             "action": suggested_action,
             "product_cards": product_cards,  # P2-1
             "context_trace": context_trace,
+            "compliance_filtered": _compliance_was_filtered,
         }
 
     except Exception as e:
@@ -2665,6 +2700,7 @@ async def _chat_legacy(
             "error_code": error_code,
             "error_detail": error_detail,
             "context_trace": context_trace,
+            "compliance_filtered": False,
         }
 
 
@@ -2682,6 +2718,7 @@ async def _chat_via_pipeline(
     """通过 LangGraph 5 步管线执行客服回复。"""
     from .pipeline import build_cs_pipeline
 
+    _pipeline_received_at = datetime.now(UTC)
     ai_reply_id = new_ai_reply_id()
     context_trace: dict[str, Any] = {
         "has_extension_context": bool(
@@ -2778,9 +2815,38 @@ async def _chat_via_pipeline(
                 )
             )
 
+        # Metrics: pipeline path
+        _pipeline_replied_at = datetime.now(UTC)
+        try:
+            from src.services.cs_metrics import record_cs_metric as _record_metric
+            asyncio.create_task(
+                _record_metric(
+                    pool,
+                    session_id=session_id,
+                    ai_reply_id=ai_reply_id,
+                    received_at=_pipeline_received_at,
+                    replied_at=_pipeline_replied_at,
+                    intent=intent,
+                    confidence=float(result_state.get("intent_confidence", 0.8) or 0.8),
+                    needs_human=needs_human,
+                    was_fast_path=False,
+                    compliance_filtered=False,
+                )
+            )
+        except Exception:
+            pass
+
+        # ── P1-1 合规过滤（硬拦截 + 软替换） ───────────────────────────────
+        from src.agents.customer_service.compliance import check as _compliance_check
+        postprocessed = _postprocess_reply_text(reply_text)
+        compliance_result = _compliance_check(postprocessed, session_id=session_id)
+        if compliance_result.needs_human:
+            needs_human = True
+        final_reply = compliance_result.text
+
         return {
             "session_id": session_id,
-            "reply": _postprocess_reply_text(reply_text),
+            "reply": final_reply,
             "ai_reply_id": ai_reply_id,
             "intent": intent,
             "sources": sources,
@@ -2788,6 +2854,7 @@ async def _chat_via_pipeline(
             "action": suggested_action,
             "product_cards": product_cards,
             "context_trace": context_trace,
+            "compliance_filtered": compliance_result.was_filtered,
         }
     except Exception as e:
         logger.error("[CS] Pipeline execution failed, fallback to legacy: %s", e, exc_info=True)
