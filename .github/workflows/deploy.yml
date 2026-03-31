@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   detect-changes:
@@ -79,31 +78,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Prepare image metadata
-        id: image-meta
-        env:
-          REPO_OWNER: ${{ github.repository_owner }}
-        run: |
-          owner="$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
-          echo "image_repo=ghcr.io/${owner}/ai-shopkeeper-backend" >> "$GITHUB_OUTPUT"
-
       - uses: docker/setup-buildx-action@v3
 
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
-      - name: Build & Push backend image
+      - name: Build backend image
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile.backend
-          push: true
-          tags: |
-            ${{ steps.image-meta.outputs.image_repo }}:${{ github.sha }}
-            ${{ steps.image-meta.outputs.image_repo }}:latest
+          load: true
+          platforms: linux/amd64
+          tags: aishop-app:ci-${{ github.sha }}
           cache-from: type=gha,scope=backend-image
           cache-to: type=gha,mode=max,scope=backend-image
 
@@ -119,6 +103,11 @@ jobs:
         run: |
           scp -i ~/.ssh/id_rsa docker-compose.yml root@${{ secrets.VPS_HOST }}:/opt/aishop/docker-compose.yml
 
+      - name: Upload backend image to VPS
+        run: |
+          docker save aishop-app:ci-${{ github.sha }} | gzip -1 > /tmp/aishop-app.tar.gz
+          scp -i ~/.ssh/id_rsa /tmp/aishop-app.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/aishop-app.tar.gz
+
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -129,14 +118,12 @@ jobs:
           command_timeout: 40m
           script: |
             set -e
-            IMAGE_REPO="${{ steps.image-meta.outputs.image_repo }}"
             IMAGE_TAG="${{ github.sha }}"
 
-            echo "=== Pulling backend image from GHCR ==="
-            echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-            docker pull "${IMAGE_REPO}:${IMAGE_TAG}"
-            docker logout ghcr.io
-            docker tag "${IMAGE_REPO}:${IMAGE_TAG}" aishop-app:latest
+            echo "=== Loading backend image ==="
+            gzip -dc /opt/aishop/aishop-app.tar.gz | docker load
+            rm -f /opt/aishop/aishop-app.tar.gz
+            docker tag "aishop-app:ci-${IMAGE_TAG}" aishop-app:latest
             echo "✅ Image ready"
 
             echo "=== Verifying built image ==="
