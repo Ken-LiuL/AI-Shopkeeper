@@ -189,8 +189,40 @@ class ListingCreateRequest(BaseModel):
 class ListingDetail(BaseModel):
     listing_id: str
     status: str
-    product_data: dict[str, Any] = Field(default_factory=dict)
+    current_step: str | None = None
+    step_detail: str | None = None
+    parsed_product: dict[str, Any] | None = None
+    matched_standard: dict[str, Any] | None = None
+    match_confidence: float | None = None
+    listing_info: dict[str, Any] | None = None
+    compliance_check: dict[str, Any] | None = None
+    errors: list[Any] | None = None
     created_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class ListingStatusResponse(BaseModel):
+    listing_id: str
+    status: str
+    current_step: str | None = None
+    step_detail: str | None = None
+    created_at: datetime | None = None
+
+
+class BatchListingItem(BaseModel):
+    platform: str = "alibaba"
+    raw_product_data: str = ""
+    source_url: str = ""
+
+
+class BatchListingRequest(BaseModel):
+    items: list[BatchListingItem] = Field(default_factory=list)
+
+
+class BatchListingResponse(BaseModel):
+    success: bool = True
+    task_ids: list[str] = Field(default_factory=list)
+    message: str = ""
 
 
 # ── Products ─────────────────────────────────────────────────
