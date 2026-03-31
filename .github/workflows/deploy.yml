@@ -131,6 +131,7 @@ jobs:
               python -c "import openpyxl, uvicorn; print(\"openpyxl\", openpyxl.__version__); print(\"uvicorn\", uvicorn.__version__)"
             '
 
+            # Keep infra startup best-effort so app rollout is not blocked by optional services.
             echo "=== Starting infra (non-blocking) ==="
             cd /opt/aishop
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
