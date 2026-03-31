@@ -613,6 +613,45 @@ async def _generate_smart_alerts(pool) -> list[dict]:
     return deduped[:10]
 
 
+@router.get("/status", response_model=APIResponse[dict])
+async def get_alerts_status() -> APIResponse[dict]:
+    """获取预警数据积累状态，帮助新店用户了解系统何时开始工作"""
+    pool = pg.get_pool()
+    days_of_data = 0
+
+    # 检测各数据源天数
+    sources_checked: dict[str, int] = {}
+    for table, date_col in [("qnh_traffic", "traffic_date"), ("qnh_sales_history", "date")]:
+        try:
+            result = await pool.fetchrow(
+                f"SELECT COUNT(DISTINCT {date_col})::int AS days FROM {table} WHERE {date_col} >= CURRENT_DATE - INTERVAL '30 days'"
+            )
+            if result:
+                sources_checked[table] = int(result["days"] or 0)
+        except Exception:
+            pass
+
+    if sources_checked:
+        days_of_data = max(sources_checked.values())
+
+    has_sufficient_data = days_of_data >= 3
+
+    if has_sufficient_data:
+        message = f"已有{days_of_data}天运营数据，预警系统正常运行"
+    elif days_of_data > 0:
+        message = f"已有{days_of_data}天数据，再积累{3 - days_of_data}天后预警将自动生成"
+    else:
+        message = "暂无运营数据，需要至少3天数据才能开始分析异常"
+
+    return APIResponse(data={
+        "has_sufficient_data": has_sufficient_data,
+        "days_of_data": days_of_data,
+        "min_required_days": 3,
+        "message": message,
+        "sources": sources_checked,
+    })
+
+
 # UNUSED: no frontend caller
 @router.get("", response_model=APIResponse[list[dict]])
 async def list_alerts(

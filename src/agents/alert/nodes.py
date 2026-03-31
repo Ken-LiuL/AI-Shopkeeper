@@ -197,6 +197,15 @@ async def _check_inventory_anomaly(pool, stockout_threshold: float = 0.10) -> li
         return []
     alerts = []
     items = data if isinstance(data, list) else [data]
+    if len(items) < 3:
+        return [{
+            "type": "data_insufficient",
+            "severity": "info",
+            "title": "数据积累中",
+            "message": f"需要至少3条库存记录才能进行异常检测（当前{len(items)}条）",
+            "recommendation": "请继续正常运营，系统将自动开始监测",
+            "is_info": True,
+        }]
     total = len(items)
     stockout_count = 0
     stockout_products = []
