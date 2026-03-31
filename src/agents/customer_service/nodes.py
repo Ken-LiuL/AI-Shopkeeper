@@ -2291,10 +2291,13 @@ async def _chat_via_pipeline(
         suggested_action = result_state.get("suggested_action") or {"type": "none"}
         product_cards = result_state.get("product_cards") or []
 
-        # ── 置信度兜底：基于 intent_confidence 决定是否强制转人工 ──────────
+        # ── 置信度兜底：综合 intent_confidence 和 reply_confidence 决定是否转人工 ──
         conf_low = float(os.environ.get("CS_CONFIDENCE_LOW", "0.4"))
         conf_med = float(os.environ.get("CS_CONFIDENCE_MED", "0.6"))
         intent_confidence = float(result_state.get("intent_confidence", 1.0) or 1.0)
+        reply_confidence = float(result_state.get("reply_confidence", 1.0) or 1.0)
+        # 取两者较低值作为综合置信度，任一环节不确定都应标记
+        intent_confidence = min(intent_confidence, reply_confidence)
 
         if intent_confidence < conf_low:
             logger.warning(

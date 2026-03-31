@@ -430,7 +430,7 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
                         if current_margin < category_avg - 10:
                             reason = f"当前毛利率{current_margin:.1f}%比品类均值{category_avg:.1f}%低{category_avg - current_margin:.1f}个百分点，建议逐步调价向品类均值靠拢"
                             confidence = 0.70
-                            potential_impact = "对标品类均值后利润率可改善约{:.0f}%".format(category_avg - current_margin)
+                            potential_impact = f"对标品类均值后利润率可改善约{category_avg - current_margin:.0f}%"
                         elif product["avg_competitor_price"] > 0 and current_price > product["avg_competitor_price"] * 1.05:
                             suggested_price = product["avg_competitor_price"] * 1.03
                             reason = f"当前价格比竞品均价高{((current_price / product['avg_competitor_price'] - 1) * 100):.0f}%，建议小幅调整以提升竞争力"
