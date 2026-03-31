@@ -131,10 +131,13 @@ jobs:
               python -c "import openpyxl, uvicorn; print(\"openpyxl\", openpyxl.__version__); print(\"uvicorn\", uvicorn.__version__)"
             '
 
-            echo "=== Starting infra (no-recreate) ==="
+            echo "=== Starting stable infra (no-recreate) ==="
             cd /opt/aishop
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
-            docker compose up -d --no-recreate postgres neo4j redis 2>/dev/null || true
+            docker compose up -d --no-recreate postgres redis 2>/dev/null || true
+
+            echo "=== Recreating neo4j to apply compose/env/healthcheck changes ==="
+            docker compose up -d --force-recreate --no-build neo4j
 
             echo "=== Restarting app only ==="
             docker rm -f aishop-app 2>/dev/null || true
@@ -151,5 +154,6 @@ jobs:
             done
             echo "❌ Unhealthy"
             docker compose ps
+            docker logs aishop-neo4j-1 --tail 100 || true
             docker logs aishop-app --tail 100
             exit 1
