@@ -2,8 +2,9 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # 避免与宿主机已有 PostgreSQL 冲突；容器内仍通过 postgres:5432 通信
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5433:5432"
     environment:
       POSTGRES_DB: ai_store
       POSTGRES_USER: postgres
