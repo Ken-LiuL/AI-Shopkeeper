@@ -103,10 +103,20 @@ jobs:
         run: |
           scp -i ~/.ssh/id_rsa docker-compose.yml root@${{ secrets.VPS_HOST }}:/opt/aishop/docker-compose.yml
 
-      - name: Upload backend image to VPS
+      - name: Stream backend image to VPS & load
         run: |
-          docker save aishop-app:ci-${{ github.sha }} | gzip -1 > /tmp/aishop-app.tar.gz
-          scp -i ~/.ssh/id_rsa /tmp/aishop-app.tar.gz root@${{ secrets.VPS_HOST }}:/opt/aishop/aishop-app.tar.gz
+          # 流式传输：docker save → zstd 压缩 → ssh 管道 → 远端 zstd 解压 → docker load
+          # 不落盘，省掉 scp 全量传输的等待
+          echo "=== Installing zstd on VPS ==="
+          ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} \
+            'command -v zstd >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq zstd) || (yum install -y -q zstd) || true'
+
+          echo "=== Streaming image (docker save | zstd | ssh | zstd -d | docker load) ==="
+          docker save aishop-app:ci-${{ github.sha }} \
+            | zstd -1 -T0 \
+            | ssh -i ~/.ssh/id_rsa -o Compression=no root@${{ secrets.VPS_HOST }} \
+              'zstd -d | docker load'
+          echo "✅ Image streamed and loaded"
 
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
@@ -120,9 +130,7 @@ jobs:
             set -e
             IMAGE_TAG="${{ github.sha }}"
 
-            echo "=== Loading backend image ==="
-            gzip -dc /opt/aishop/aishop-app.tar.gz | docker load
-            rm -f /opt/aishop/aishop-app.tar.gz
+            echo "=== Tagging image ==="
             docker tag "aishop-app:ci-${IMAGE_TAG}" aishop-app:latest
             echo "✅ Image ready"
 
