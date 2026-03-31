@@ -70,179 +70,6 @@ USE_LANGGRAPH_PIPELINE: bool = (
 )
 
 
-def _new_ai_reply_id() -> str:
-    return f"csr-{uuid.uuid4().hex}"
-
-
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# P0-1: Fast-Path 秒回（仅拦截确定性高频简单消息）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-_FAST_PATH_GREETINGS = frozenset({
-    "你好", "您好", "在吗", "在不在", "有人吗", "hi", "hello",
-    "你好啊", "您好啊", "嗨", "hey", "ni hao",
-})
-
-_FAST_PATH_THANKS = frozenset({
-    "谢谢", "谢谢你", "谢谢您", "感谢", "多谢", "thank you",
-    "thanks", "非常感谢", "太感谢了", "感谢您",
-})
-
-_FAST_PATH_ACKS = frozenset({
-    "好的", "嗯嗯", "嗯", "知道了", "收到", "好哒", "ok", "okay",
-})
-
-_GREETING_REPLIES = [
-    "亲，您好！😊 欢迎光临，请问有什么可以帮您的呢？",
-    "您好亲！🌟 我是AI客服小康，随时为您服务，请问有什么需要帮忙吗？",
-    "亲好！😊 很高兴为您服务，请问想了解哪方面的商品或问题呢？",
-]
-_THANKS_REPLIES = [
-    "亲，不客气！😊 还有其他需要帮忙的吗？",
-    "应该的亲！🌟 如有任何问题随时告诉我哦~",
-    "不用谢亲！😊 祝您购物愉快，有需要随时来找我~",
-]
-_ACK_REPLIES = [
-    "亲，好的！😊 有其他问题随时告诉我哦~",
-    "好的亲！🌟 如还有需要帮忙的随时找我~",
-]
-_FAST_GREETING_COOLDOWN_SECONDS = 10 * 60
-
-
-def _parse_history_timestamp(value: object) -> float | None:
-    if value is None:
-        return None
-    if isinstance(value, (int, float)):
-        ts = float(value)
-        return ts if ts > 0 else None
-    if isinstance(value, str):
-        raw = value.strip()
-        if not raw:
-            return None
-        try:
-            if raw.endswith("Z"):
-                raw = raw[:-1] + "+00:00"
-            return datetime.fromisoformat(raw).timestamp()
-        except Exception:
-            return None
-    return None
-
-
-def _has_recent_fast_greeting(
-    conversation_history: list[dict] | None,
-    *,
-    cooldown_seconds: int = _FAST_GREETING_COOLDOWN_SECONDS,
-) -> bool:
-    if not conversation_history:
-        return False
-
-    now_ts = datetime.now(UTC).timestamp()
-    reply_set = set(_GREETING_REPLIES) | set(_THANKS_REPLIES) | set(_ACK_REPLIES)
-    for msg in reversed(conversation_history[-20:]):
-        if not isinstance(msg, dict):
-            continue
-        role = (msg.get("role") or "").strip().lower()
-        if role != "assistant":
-            continue
-        content = (msg.get("content") or "").strip()
-        if content not in reply_set:
-            continue
-        ts = _parse_history_timestamp(msg.get("timestamp"))
-        if ts is None:
-            return True
-        return (now_ts - ts) <= cooldown_seconds
-    return False
-
-
-def _is_non_actionable_placeholder_message(message: str) -> bool:
-    """占位消息不进入 LLM，避免生成无意义问候/泛回复。"""
-    normalized = re.sub(r"\s+", "", (message or "").strip().lower())
-    if not normalized:
-        return False
-
-    pure_placeholders = {
-        "[图片消息]",
-        "[卡片消息]",
-        "[语音消息]",
-        "[系统消息]",
-        "[文件消息]",
-    }
-    if normalized in pure_placeholders:
-        return True
-
-    if normalized.startswith("[图片消息]"):
-        tail = normalized[len("[图片消息]") :]
-        if not tail or tail == "[图片地址]":
-            return True
-        if tail.startswith("[图片地址]http"):
-            return True
-
-    return normalized.startswith("[卡片消息]") and len(normalized) <= 10
-
-
-def _fast_path_reply(
-    session_id: str,
-    message: str,
-    ai_reply_id: str | None = None,
-    conversation_history: list[dict] | None = None,
-) -> dict | None:
-    """
-    P0-1 快速路径：只拦截确定性高频简单消息（问候、感谢、简单确认）。
-    不拦截任何需要推理的商品/订单/售后问题。
-    命中时打印 [CS-PERF] Fast-path hit 日志。
-    """
-    m = message.strip().lower().rstrip("~！!。，,.?？ ")
-
-    reply_id = ai_reply_id or _new_ai_reply_id()
-
-    if m in _FAST_PATH_GREETINGS:
-        if _has_recent_fast_greeting(conversation_history):
-            logger.info("[CS-PERF] Fast-path greeting throttled (session=%s)", session_id)
-            return None
-        reply = random.choice(_GREETING_REPLIES)
-        logger.info("[CS-PERF] Fast-path hit: greeting")
-        return {
-            "session_id": session_id,
-            "reply": reply,
-            "ai_reply_id": reply_id,
-            "intent": "greeting",
-            "sources": [],
-            "needs_human": False,
-            "action": {"type": "none"},
-            "product_cards": [],
-        }
-
-    if m in _FAST_PATH_THANKS:
-        reply = random.choice(_THANKS_REPLIES)
-        logger.info("[CS-PERF] Fast-path hit: thanks")
-        return {
-            "session_id": session_id,
-            "reply": reply,
-            "ai_reply_id": reply_id,
-            "intent": "greeting",
-            "sources": [],
-            "needs_human": False,
-            "action": {"type": "none"},
-            "product_cards": [],
-        }
-
-    # 简单确认：只对极短消息触发（防止"好的，那血压计多少钱"被拦截）
-    if m in _FAST_PATH_ACKS and len(message.strip()) <= 6:
-        reply = random.choice(_ACK_REPLIES)
-        logger.info("[CS-PERF] Fast-path hit: ack")
-        return {
-            "session_id": session_id,
-            "reply": reply,
-            "ai_reply_id": reply_id,
-            "intent": "greeting",
-            "sources": [],
-            "needs_human": False,
-            "action": {"type": "none"},
-            "product_cards": [],
-        }
-
-    return None
-
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -493,86 +320,6 @@ def _build_vision_prompt_text(messages: list[dict[str, Any]], fallback_user_prom
 
 
 
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-# 快速意图预判 + 上下文预算器（不额外调 LLM）
-# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-def _quick_intent_guess(message: str, conversation_history: list[dict] | None = None) -> str:
-    """基于关键词的快速意图预判，结合对话历史判断上下文延续。
-
-    核心原则：短/模糊消息（如"有哪些"/"多少钱"）必须结合历史判断，
-    不能当作独立新问题。否则会丢失"我们一直在聊血压计"的上下文。
-    """
-    m = message.strip().lower()
-
-    # ===== 第一层：明确意图，关键词足够强，无需历史 =====
-    if any(kw in m for kw in ["投诉", "举报", "315", "律师", "消协", "骗"]):
-        return "complaint"
-    if any(kw in m for kw in ["退", "换", "坏了", "破损", "过期", "质量"]):
-        return "after_sales"
-    if any(kw in m for kw in ["吃什么药", "用药", "治疗", "诊断", "处方", "药"]):
-        return "medical_advice"
-    if any(kw in m for kw in ["发货", "物流", "送到", "配送", "骑手", "多久到", "还没到", "催单"]):
-        return "logistics"
-    if "订单" in m and any(kw in m for kw in ["还没", "多久", "到了吗", "在哪", "怎么"]):
-        return "logistics"
-    if any(kw in m for kw in ["对比", "区别", "vs", "哪个更"]):
-        return "comparison"
-    if any(kw in m for kw in ["和", "跟"]) and any(kw in m for kw in ["哪个好", "哪个更", "区别", "好"]):
-        return "comparison"
-    if any(kw in m for kw in ["怎么用", "用法", "用量", "一盒", "能用多久"]):
-        return "usage_question"
-
-    # ===== 第二层：模糊/短消息 → 从历史推断 =====
-    vague_kws = [
-        "有哪些", "都有什么", "还有吗", "有啥", "哪个", "哪款",
-        "多少钱", "价格", "贵吗", "便宜", "打折", "推荐",
-        "有没有", "哪个好", "什么牌子", "不是", "那个",
-    ]
-    is_vague = len(m) <= 20 and any(kw in m for kw in vague_kws)
-
-    if is_vague and conversation_history:
-        # 向上扫描最近对话，找到最近的"商品话题"
-        product_signals = [
-            "推荐", "血压", "体温", "血糖", "口罩", "创可贴",
-            "型号", "库存", "月销", "欧姆龙", "鱼跃", "体重秤",
-            "轮椅", "拐杖", "雾化", "制氧", "呼吸机",
-            "退热贴", "纱布", "绷带", "面膜", "敷料",
-        ]
-        for msg in reversed(conversation_history[-8:]):
-            content = (msg.get("content") or "").lower()
-            if any(kw in content for kw in product_signals):
-                return "product_inquiry"  # 延续商品话题
-        # 历史里没有商品话题，但用户在追问 → 大概率还是商品
-        return "product_inquiry"
-
-    # ===== 第三层：非模糊的常规判断 =====
-    if any(kw in m for kw in ["推荐", "有没有", "哪个好", "哪款", "什么牌子"]):
-        return "recommendation"
-    if any(kw in m for kw in ["价格", "多少钱", "贵", "便宜", "打折"]):
-        return "product_inquiry"
-
-    # 自报身份（"我是XX"）：在有历史对话时视为上下文延续，不是新对话
-    if re.match(r"^我是.{1,10}$", m) and conversation_history:
-        # 用户只是报了个名字，延续之前的话题
-        _id_product_kw = ["血压", "体温", "血糖", "口罩", "推荐", "型号", "价格"]
-        for msg in reversed(conversation_history[-6:]):
-            content = (msg.get("content") or "").lower()
-            if any(kw in content for kw in _id_product_kw):
-                return "product_inquiry"
-        return "other"
-
-    # greeting: 仅在对话开头或纯问候短语时触发
-    # "我是塔哥" 这种自报身份不是 greeting（对话已经在进行中）
-    if any(kw in m for kw in ["你好", "在吗", "hi", "hello"]):
-        if not conversation_history or len(m) <= 5:
-            return "greeting"
-        # 有历史对话时，"你好"可能是打断但不应该重置上下文
-        return "other"
-
-    return "other"
-
-
 def _select_context_by_intent(intent: str, has_product_history: bool = False) -> set:
     """返回该意图下应注入的上下文类型（上下文预算器）
 
@@ -600,101 +347,8 @@ def _select_context_by_intent(intent: str, has_product_history: bool = False) ->
     return result
 
 
-_PRODUCT_INTENTS = {"product_inquiry", "recommendation", "comparison", "usage_question", "medical_advice"}
-_ORDER_INTENTS = {"logistics", "after_sales", "complaint"}
-_POLICY_INTENTS = {"after_sales", "complaint", "medical_advice"}
-_PROFILE_INTENTS = {"after_sales", "complaint"}
-_PROMPT_ENHANCER_INTENTS = {
-    "product_inquiry",
-    "recommendation",
-    "comparison",
-    "usage_question",
-    "medical_advice",
-    "after_sales",
-    "complaint",
-}
-_RETRIEVAL_CACHE_TTL_SECONDS = 90
+# in-flight 检索任务去重（避免同一 cache_key 重复计算）
 _retrieval_inflight: dict[str, asyncio.Task[list[dict]]] = {}
-
-
-def _history_has_product_signals(conversation_history: list[dict] | None) -> bool:
-    if not conversation_history:
-        return False
-    product_signals = [
-        "推荐", "血压", "体温", "血糖", "口罩", "创可贴",
-        "型号", "库存", "价格", "欧姆龙", "鱼跃", "体重秤",
-        "轮椅", "拐杖", "雾化", "制氧", "呼吸机",
-    ]
-    for msg in reversed(conversation_history[-8:]):
-        content = (msg.get("content") or "").lower()
-        if any(sig in content for sig in product_signals):
-            return True
-    return False
-
-
-def _should_run_product_pipeline(quick_intent: str, conversation_history: list[dict] | None) -> bool:
-    if quick_intent in _PRODUCT_INTENTS:
-        return True
-    # "other" 是最常见的兜底分类，保留商品检索以避免漏召回
-    if quick_intent == "other":
-        return True
-    return _history_has_product_signals(conversation_history)
-
-
-def _build_retrieval_cache_key(
-    session_id: str,
-    message: str,
-    conversation_history: list[dict] | None = None,
-    quick_intent: str | None = None,
-) -> str | None:
-    sid = (session_id or "").strip()
-    normalized_message = re.sub(r"\s+", " ", (message or "").strip().lower())[:200]
-    if not sid or not normalized_message:
-        return None
-
-    context_parts: list[str] = []
-    if quick_intent:
-        context_parts.append(f"intent:{quick_intent.strip().lower()}")
-
-    if conversation_history:
-        for history_msg in conversation_history[-4:]:
-            role = (history_msg.get("role") or "").strip().lower()
-            if role == "system":
-                continue
-            content = re.sub(r"\s+", " ", (history_msg.get("content") or "").strip().lower())[:120]
-            if not content:
-                continue
-            context_parts.append(f"{role}:{content}")
-
-    digest_seed = f"{normalized_message}|{'|'.join(context_parts)}"
-    digest = hashlib.sha1(digest_seed.encode("utf-8")).hexdigest()[:20]
-    return f"cs:retrieval:{sid}:{digest}"
-
-
-async def _load_cached_retrieval(redis_client, cache_key: str) -> list[dict] | None:
-    if not redis_client or not cache_key:
-        return None
-    try:
-        raw = await redis_client.get(cache_key)
-        if not raw:
-            return None
-        data = json.loads(raw)
-        if isinstance(data, list):
-            logger.info("[CS] Retrieval cache hit: %s (%d items)", cache_key, len(data))
-            return data
-    except Exception as e:
-        logger.debug("[CS] Retrieval cache read failed: %s", e)
-    return None
-
-
-async def _store_cached_retrieval(redis_client, cache_key: str, results: list[dict]) -> None:
-    if not redis_client or not cache_key or not isinstance(results, list):
-        return
-    try:
-        payload = json.dumps(results, ensure_ascii=False)
-        await redis_client.set(cache_key, payload, ex=_RETRIEVAL_CACHE_TTL_SECONDS)
-    except Exception as e:
-        logger.debug("[CS] Retrieval cache write failed: %s", e)
 
 
 async def _run_product_pipeline_with_cache(
@@ -708,7 +362,7 @@ async def _run_product_pipeline_with_cache(
     async def _compute_results() -> list[dict]:
         try:
             results = await asyncio.wait_for(
-                _full_pipeline_search(message, pool),
+                full_pipeline_search(message, pool),
                 timeout=pipeline_timeout,
             )
         except TimeoutError:
@@ -716,11 +370,11 @@ async def _run_product_pipeline_with_cache(
             return []
 
         if cache_key and results:
-            await _store_cached_retrieval(redis_client, cache_key, results)
+            await store_cached_retrieval(redis_client, cache_key, results)
         return results
 
     if cache_key:
-        cached_results = await _load_cached_retrieval(redis_client, cache_key)
+        cached_results = await load_cached_retrieval(redis_client, cache_key)
         if cached_results is not None:
             return cached_results
 
@@ -867,137 +521,6 @@ async def _summarize_conversation(messages: list[dict]) -> str:
         logger.warning(f"[CS] Conversation summarization failed (graceful): {e}")
         # Fallback: 提取式摘要兜底
         return _extract_summary(messages)
-
-
-async def _full_pipeline_search(message: str, pool=None) -> list[dict]:
-    """完整检索管线：向量+关键词 Hybrid Search → Reranker → GraphRAG 子图丰富。
-
-    任何一步失败都有 graceful fallback，不会抛出异常。
-    """
-    try:
-        from src.db import neo4j as neo4j_db
-        from src.skills.embedding import EmbeddingSkill
-        from src.skills.neo4j_skill import Neo4jSkill
-
-        driver = neo4j_db.get_driver()
-        neo4j_skill = Neo4jSkill(driver=driver)
-
-        # ── Step 1: 生成 Embedding ─────────────────────────────────────
-        query_embedding = None
-        try:
-            embedding_skill = EmbeddingSkill()
-            query_embedding = embedding_skill.embed(message)
-            logger.info(f"[CS] Query embedding generated: dim={len(query_embedding)}")
-        except Exception as e:
-            logger.warning(f"[CS] Embedding generation failed (graceful): {e}")
-
-        # ── Step 2: 并发向量检索 + 关键词检索 ─────────────────────────
-        vector_results = []
-        keyword_results = []
-
-        async def _vector_search():
-            if query_embedding:
-                try:
-                    return await neo4j_skill.vector_search(query_embedding, limit=10)
-                except Exception as e:
-                    logger.warning(f"[CS] Vector search failed (graceful): {e}")
-            return []
-
-        async def _keyword_search():
-            try:
-                keywords = [w for w in message.split() if len(w) > 1]
-                if not keywords:
-                    keywords = [message[:10]]
-                return await neo4j_skill.keyword_search(keywords, limit=10)
-            except Exception as e:
-                logger.warning(f"[CS] Keyword search failed (graceful): {e}")
-                return []
-
-        vector_results, keyword_results = await asyncio.gather(
-            _vector_search(), _keyword_search()
-        )
-        logger.info(
-            f"[CS] Retrieval: vector={len(vector_results)}, keyword={len(keyword_results)}"
-        )
-
-        # ── Step 3: RRF 融合 ──────────────────────────────────────────
-        merged_models = neo4j_skill._rrf_merge(vector_results, keyword_results)
-        merged_dicts = [
-            {"id": r.id, "name": r.name, "description": r.description, "score": r.score}
-            for r in merged_models
-        ]
-        logger.info(f"[CS] RRF merged: {len(merged_dicts)} candidates")
-
-        # ── Step 4: Reranker 精排 ────────────────────────────────────
-        reranked: list[dict] = []
-        try:
-            from src.skills.reranker import RerankerSkill
-
-            reranker = RerankerSkill()
-            loop = asyncio.get_event_loop()
-            reranked = await loop.run_in_executor(
-                None,
-                lambda: reranker.rerank(message, merged_dicts, top_k=5),
-            )
-            logger.info(f"[CS] Reranker returned {len(reranked)} results")
-        except Exception as e:
-            logger.warning(f"[CS] Reranker failed (graceful fallback to top-5 RRF): {e}")
-            reranked = merged_dicts[:5]
-
-        if not reranked:
-            reranked = merged_dicts[:5]
-
-        # ── Step 5: GraphRAG 子图丰富 ────────────────────────────────
-        async def _enrich_product(product: dict) -> dict:
-            enriched_product = dict(product)
-            try:
-                product_id = enriched_product.get("id")
-                if product_id:
-                    graph_ctx, deep_ctx = await asyncio.gather(
-                        neo4j_skill.get_product_graph(product_id),
-                        neo4j_skill.get_deep_context(product_id),
-                    )
-                    if graph_ctx:
-                        enriched_product["suitable_for"] = graph_ctx.suitable_for or []
-                        enriched_product["contraindicated_for"] = [
-                            {"name": c.get("name", ""), "reason": c.get("reason", "")}
-                            if isinstance(c, dict) else {"name": str(c)}
-                            for c in (graph_ctx.contraindicated_for or [])
-                        ]
-                        enriched_product["related_products"] = [
-                            {"id": r.get("id", ""), "name": r.get("name", "")}
-                            if isinstance(r, dict) else {"name": str(r)}
-                            for r in (graph_ctx.related_products or [])
-                        ]
-                        enriched_product["scenarios"] = graph_ctx.scenarios or []
-                    if deep_ctx:
-                        competitors = deep_ctx.get("competitors") or []
-                        seasons = deep_ctx.get("seasons") or []
-                        if competitors:
-                            enriched_product["deep_competitors"] = competitors
-                        if seasons:
-                            enriched_product["deep_seasons"] = seasons
-                        if competitors or seasons:
-                            enriched_product["deep_context"] = {
-                                "competitors": competitors,
-                                "seasons": seasons,
-                            }
-            except Exception as e:
-                logger.warning(
-                    f"[CS] GraphRAG enrichment failed for {enriched_product.get('id')} (graceful): {e}"
-                )
-            return enriched_product
-
-        enriched = await asyncio.gather(
-            *(_enrich_product(product) for product in reranked)
-        )
-
-        logger.info(f"[CS] Pipeline complete: {len(enriched)} enriched products")
-        return enriched
-
-    except Exception as e:
-        logger.error(f"[CS] Full pipeline search failed: {e}", exc_info=True)
-        return []
 
 
 async def load_knowledge_base(pool) -> list[dict]:
@@ -2909,43 +2432,8 @@ async def chat(
     )
 
 
-# 为了向后兼容，保留一些原有函数签名（但实现很简单）
-async def _search_knowledge_base(
-    pool, query: str, intent: str = None, limit: int = 3
-) -> list[dict]:
-    """向后兼容的知识库搜索（已废弃，新版本不使用）"""
-    logger.warning("_search_knowledge_base is deprecated, use new chat() function instead")
-    return []
-
-
-async def _log_conversation_compat(
-    pool,
-    session_id: str = None,
-    user_message: str = "",
-    intent: str = "",
-    ai_response: str = "",
-    matched_kb_ids: list[int] = None,
-    matched_product_ids: list[str] = None,
-    confidence: float = 0.0,
-) -> None:
-    """向后兼容的日志记录函数"""
-    await _log_conversation(
-        pool=pool,
-        session_id=session_id or "",
-        user_message=user_message,
-        intent=intent,
-        ai_response=ai_response,
-        ai_reply_id=None,
-        sources=None,
-        confidence=confidence,
-    )
-
-
-# 导出兼容接口
 __all__ = [
     "chat",
     "load_knowledge_base",
     "search_products_with_embedding",
-    "_search_knowledge_base",  # 向后兼容
-    "_log_conversation_compat",  # 向后兼容
 ]
