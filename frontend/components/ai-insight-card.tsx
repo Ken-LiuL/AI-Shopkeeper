@@ -14,7 +14,7 @@ export function AIInsightCard({ loading, insight, actions = [], title = '🤖 AI
         <CardContent className="py-3 px-4">
           <div className="flex items-center gap-2 text-sm text-blue-600">
             <span className="animate-pulse">⚡</span>
-            <span>AI 分析中...</span>
+            <span>数据加载中...</span>
           </div>
         </CardContent>
       </Card>

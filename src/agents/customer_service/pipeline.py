@@ -19,6 +19,20 @@ from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
+# 意图初始置信度映射（规则匹配的先验置信度，会被 reply_node LLM 返回的真实值更新）
+INTENT_CONFIDENCE_MAP = {
+    "greeting": 0.95,       # 问候，规则完全确定
+    "after_sales": 0.85,    # 售后，关键词明确
+    "logistics": 0.85,
+    "complaint": 0.80,
+    "usage_question": 0.75,
+    "product_inquiry": 0.75,
+    "recommendation": 0.70,
+    "medical_advice": 0.70,
+    "comparison": 0.65,
+    "other": 0.45,          # 未匹配到，低置信
+}
+
 # ── LangGraph 导入（graceful：未安装时给出清晰报错） ──────────────────────────
 
 try:
@@ -73,6 +87,7 @@ class CSPipelineState(TypedDict, total=False):
     needs_human: bool
     suggested_action: dict
     product_cards: list[dict]
+    reply_confidence: float  # LLM 对回复内容的把握度（区别于 intent_confidence）
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -88,20 +103,6 @@ async def intent_node(state: CSPipelineState) -> dict:
     """
     from src.agents.customer_service.intent import llm_intent_classify, quick_intent_guess
 
-    # 根据意图的明确性给初始置信度（会被 reply_node 中 LLM 返回的真实值覆盖）
-    INTENT_CONFIDENCE_MAP = {
-        "greeting": 0.95,       # 问候，规则完全确定
-        "after_sales": 0.85,    # 售后，关键词明确
-        "logistics": 0.85,
-        "complaint": 0.80,
-        "usage_question": 0.75,
-        "product_inquiry": 0.75,
-        "recommendation": 0.70,
-        "medical_advice": 0.70,
-        "comparison": 0.65,
-        "other": 0.45,          # 未匹配到，低置信
-    }
-
     message = state.get("user_message", "")
     history: list[dict] = state.get("conversation_history") or []
 
@@ -109,7 +110,7 @@ async def intent_node(state: CSPipelineState) -> dict:
     confidence = INTENT_CONFIDENCE_MAP.get(intent, 0.60)
 
     # 规则无法识别时，尝试 LLM 二次分类（使用轻量 FLASH 模型）
-    if intent == "other" and confidence < 0.55:
+    if intent == "other":
         llm_intent, llm_conf = await llm_intent_classify(message)
         if llm_intent != "other" or llm_conf > confidence:
             intent = llm_intent
@@ -238,8 +239,8 @@ async def reply_node(state: CSPipelineState) -> dict:
         "needs_human": needs_human,
         "suggested_action": suggested_action,
         "product_cards": product_cards,
-        # 用 LLM 返回的真实置信度覆盖 intent_node 给的初始值
-        "intent_confidence": llm_confidence,
+        "reply_confidence": llm_confidence,  # LLM 对回复内容的把握度，独立于 intent_confidence
+        # 不覆盖 intent_confidence，保留 intent_node 给的值
     }
 
 

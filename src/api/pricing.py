@@ -337,7 +337,7 @@ async def get_pricing_suggestions() -> APIResponse[list[PricingSuggestion]]:
 
             # 基础规则建议（作为主要逻辑）
             suggested_price = product["current_price"]
-            reason = "维持当前价格"
+            reason = ""  # 各分支必须显式赋值
             confidence = 0.6
             potential_impact = "价格稳定，保持竞争力"
 
