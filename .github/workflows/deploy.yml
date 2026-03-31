@@ -116,7 +116,7 @@ jobs:
           script: |
             set -e
             echo "=== Build image on VPS (reuse local cache) ==="
-            DOCKER_BUILDKIT=1 docker build \
+            docker build \
               --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
               --build-arg PIP_EXTRA_INDEX_URL=https://pypi.org/simple \
               -t aishop-app:latest \
