@@ -1,3 +1,5 @@
+# 注意：此文件的 data_insufficient 改动通过 orchestrator/agent 路径生效。
+# 前端 /api/alerts 直接查 DB（不经过此 agent），前端空状态由 alerts.py 和 /api/alerts/status 控制。
 """Alert Agent 各节点实现
 
 融合数据:

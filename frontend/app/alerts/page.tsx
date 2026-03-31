@@ -60,6 +60,7 @@ function AlertsPage() {
   const [error, setError] = useState<string | null>(null);
   const [resolvingIds, setResolvingIds] = useState<Set<string>>(new Set());
   const [resolvedIds, setResolvedIds] = useState<Set<string>>(new Set());
+  const [dataStatus, setDataStatus] = useState<{has_sufficient_data: boolean; days_of_data: number; message: string} | null>(null);
 
   const fetchAlerts = async () => {
     try {
@@ -72,6 +73,10 @@ function AlertsPage() {
     } finally {
       setLoading(false);
     }
+    try {
+      const statusData = await fetchAPI<{data: {has_sufficient_data: boolean; days_of_data: number; message: string}}>('/alerts/status');
+      setDataStatus(statusData.data);
+    } catch (_) { /* 不阻断主流程 */ }
   };
 
   useEffect(() => {
@@ -440,17 +445,17 @@ function AlertsPage() {
             <div className="text-center py-12">
               {severityFilter ? (
                 <div className="text-muted-foreground">没有找到符合条件的预警</div>
-              ) : (
+              ) : dataStatus && !dataStatus.has_sufficient_data ? (
                 <>
                   <div className="text-4xl mb-3">📊</div>
                   <div className="text-lg font-medium text-gray-700">数据积累中</div>
                   <div className="text-sm text-gray-500 mt-2">
-                    系统需要至少3天运营数据才能开始分析异常。<br />
+                    {dataStatus.message || '需要更多历史数据才能分析异常'}<br />
                     请先完成数据导入，正常运营后预警将自动生成。
                   </div>
                   <div className="mt-4 flex justify-center gap-3">
                     <a
-                      href="/imports"
+                      href="/settings/sync"
                       className="inline-flex items-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
                     >
                       去导入数据
@@ -462,6 +467,12 @@ function AlertsPage() {
                       刷新检查
                     </button>
                   </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-4xl mb-3">✅</div>
+                  <div className="text-lg font-medium text-gray-700">运营正常，暂无预警</div>
+                  <div className="text-sm text-gray-500 mt-2">系统持续监控中，发现异常会第一时间通知你。</div>
                 </>
               )}
             </div>
