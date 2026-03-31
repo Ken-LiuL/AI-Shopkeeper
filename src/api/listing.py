@@ -28,13 +28,6 @@ router = APIRouter(prefix="/api/listing", tags=["listing"])
 logger = logging.getLogger(__name__)
 
 
-# UNUSED: no frontend caller
-@router.get("/optimization", response_model=APIResponse[dict])
-async def listing_optimization() -> APIResponse[dict]:
-    """商品上架优化建议"""
-    return APIResponse(data=None, message="商品上架优化功能开发中")
-
-
 @router.get("", response_model=PaginatedResponse[dict])
 async def list_listings(
     page: int = 1,
@@ -79,77 +72,6 @@ async def list_listings(
             page_size=page_size,
             message="暂无上架记录",
         )
-
-
-# UNUSED: no frontend caller
-@router.put("/{listing_id}", response_model=APIResponse[dict])
-async def update_listing(listing_id: str, body: dict) -> APIResponse[dict]:
-    try:
-        pool = pg.get_pool()
-        sets = []
-        params = []
-        idx = 1
-        for k, v in body.items():
-            if k in ("source_url", "platform", "raw_product_data", "status"):
-                sets.append(f"{k} = ${idx}")
-                params.append(v)
-                idx += 1
-        if not sets:
-            return APIResponse(success=False, message="No valid fields")
-        params.append(listing_id)
-        row = await pool.fetchrow(
-            f"UPDATE listings SET {', '.join(sets)} WHERE listing_id = ${idx} RETURNING *",
-            *params,
-        )
-        if not row:
-            raise NotFoundError("Listing", listing_id)
-        return APIResponse(data=dict(row))
-    except NotFoundError:
-        raise
-    except Exception as e:
-        logger.error("Failed to update listing %s: %s", listing_id, e)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to update listing") from e
-
-
-# UNUSED: no frontend caller
-@router.post("/{listing_id}/publish", response_model=APIResponse[dict])
-async def publish_listing(listing_id: str) -> APIResponse[dict]:
-    try:
-        pool = pg.get_pool()
-        row = await pool.fetchrow(
-            "UPDATE listings SET status = 'published', finished_at = NOW() WHERE listing_id = $1 RETURNING *",
-            listing_id,
-        )
-        if not row:
-            raise NotFoundError("Listing", listing_id)
-        return APIResponse(data=dict(row), message="Listing published")
-    except NotFoundError:
-        raise
-    except Exception as e:
-        logger.error("Failed to publish listing %s: %s", listing_id, e)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to publish listing") from e
-
-
-# UNUSED: no frontend caller
-@router.delete("/{listing_id}", response_model=APIResponse[dict])
-async def delete_listing(listing_id: str) -> APIResponse[dict]:
-    try:
-        pool = pg.get_pool()
-        row = await pool.fetchrow(
-            "UPDATE listings SET status = 'deleted' WHERE listing_id = $1 AND status = 'processing' RETURNING *",
-            listing_id,
-        )
-        if not row:
-            raise NotFoundError("Listing", listing_id)
-        return APIResponse(data=dict(row), message="Draft deleted")
-    except NotFoundError:
-        raise
-    except Exception as e:
-        logger.error("Failed to delete listing %s: %s", listing_id, e)
-        from fastapi import HTTPException
-        raise HTTPException(status_code=500, detail="Failed to delete listing") from e
 
 
 @router.post("/parse", response_model=APIResponse[dict])

@@ -47,14 +47,14 @@
 
 | # | SPEC 要求 | 状态 | 备注 |
 |---|-----------|------|------|
-| CS1 | Intent Sub-Agent | 🔧 | 已拆出 `intent.py`，待接入 nodes.py |
-| CS2 | Hybrid Search 管线 | 🔧 | 已拆出 `search.py`，待替换内联实现 |
+| CS1 | Intent Sub-Agent | ✅ | `intent.py` 已拆出且被 pipeline 使用 |
+| CS2 | Hybrid Search 管线 | ✅ | `search.py` 已拆出且被 pipeline 使用 |
 | CS3 | Reranker (BGE Top-5) | ✅ 已实现 | 代码在，fallback 到 RRF |
 | CS4 | GraphRAG 子图丰富 | ✅ 已实现 | 依赖 Neo4j 在线 |
 | CS5 | Reply Sub-Agent | 📋 | 目前内联在 chat()，计划拆出 `reply.py` |
 | CS6 | Fast-Path 秒回 | ✅ | SPEC 没要求但已实现并拆出 `fast_path.py` |
 | CS7 | LangGraph 状态机 | ❌ 延后 | 当前函数编排模式工作正常，LangGraph 非必要 |
-| CS8 | nodes.py 模块化 | 🔧 | Phase 1 完成（拆出 3 模块），Phase 2 待替换内联 |
+| CS8 | nodes.py 模块化 | ✅ | Phase 1+2 完成，内联实现已替换为子模块调用 |
 
 ### Alert Agent (SPEC 第五部分)
 
@@ -96,7 +96,34 @@
 
 ## 后续优先级
 
-1. **CS 管线 Phase 2** — 将 nodes.py 中的内联实现替换为子模块调用
-2. **Git history 清理** — 用 BFG 清除泄露的 API Key
-3. **模型优化** — 关键决策路径评估是否需要回 Claude
-4. **前端精简** — 17 页砍到 5 核心页面
+1. **Git history 清理** — 用 BFG 清除泄露的 API Key
+2. **模型优化** — 关键决策路径评估是否需要回 Claude
+3. **前端精简** — 17 页砍到 5 核心页面
+
+---
+
+## 2026-03-31 新增功能
+
+### 客服 Agent 增强
+| # | 功能 | 状态 | 备注 |
+|---|------|------|------|
+| NEW1 | 置信度兜底 + 自动转人工 | ✅ | confidence < 0.4 强制转人工，0.4-0.6 标记需人工 |
+| NEW2 | 医疗器械合规过滤 | ✅ | 16 条硬拦截 + 6 条软替换，独立模块 compliance.py |
+| NEW3 | 效果量化埋点 | ✅ | cs_metrics 表 + /metrics API，记录响应时间/接管率 |
+| NEW4 | 基础监控告警 | ✅ | /health + /ready + 飞书 webhook |
+
+### 智能上架
+| # | 功能 | 状态 | 备注 |
+|---|------|------|------|
+| NEW5 | 上架前端页面 | ✅ | /listing 分步表单 + 可编辑结果 |
+| NEW6 | API 进度追踪 | ✅ | 每步更新 DB，轮询进度 |
+| NEW7 | 批量上架 | ✅ | POST /api/listing/batch |
+| NEW8 | 共享合规规则 | ✅ | src/compliance/ 包，客服+上架共用 |
+| NEW9 | Chrome 扩展导入 | ✅ | 1688/拼多多一键导入 |
+
+### 工程质量
+| # | 改进 | 状态 | 备注 |
+|---|------|------|------|
+| NEW10 | Sidebar 精简 | ✅ | 隐藏空壳页面，保留核心功能 |
+| NEW11 | CS nodes.py 技术债清理 | ✅ | 删除重复代码，使用子模块调用 |
+| NEW12 | Migration 自动化 | ✅ | 移入 postgres/ 目录，部署时自动执行 |
