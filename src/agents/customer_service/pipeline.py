@@ -84,14 +84,41 @@ async def intent_node(state: CSPipelineState) -> dict:
     """Step 1 — 快速意图识别。
 
     调用 intent.py 中的 quick_intent_guess() + should_run_product_pipeline()。
+    当规则无法匹配（other）且置信度低时，用 LLM 做二次意图兜底分类。
     """
-    from src.agents.customer_service.intent import quick_intent_guess
+    from src.agents.customer_service.intent import llm_intent_classify, quick_intent_guess
+
+    # 根据意图的明确性给初始置信度（会被 reply_node 中 LLM 返回的真实值覆盖）
+    INTENT_CONFIDENCE_MAP = {
+        "greeting": 0.95,       # 问候，规则完全确定
+        "after_sales": 0.85,    # 售后，关键词明确
+        "logistics": 0.85,
+        "complaint": 0.80,
+        "usage_question": 0.75,
+        "product_inquiry": 0.75,
+        "recommendation": 0.70,
+        "medical_advice": 0.70,
+        "comparison": 0.65,
+        "other": 0.45,          # 未匹配到，低置信
+    }
 
     message = state.get("user_message", "")
     history: list[dict] = state.get("conversation_history") or []
 
     intent = quick_intent_guess(message, history)
-    confidence = 0.85 if intent != "other" else 0.50
+    confidence = INTENT_CONFIDENCE_MAP.get(intent, 0.60)
+
+    # 规则无法识别时，尝试 LLM 二次分类（使用轻量 FLASH 模型）
+    if intent == "other" and confidence < 0.55:
+        llm_intent, llm_conf = await llm_intent_classify(message)
+        if llm_intent != "other" or llm_conf > confidence:
+            intent = llm_intent
+            confidence = llm_conf
+            logger.info(
+                "[Pipeline:intent] LLM fallback used: intent=%s conf=%.2f",
+                intent,
+                confidence,
+            )
 
     logger.info(
         "[Pipeline:intent] session=%s intent=%s conf=%.2f",
@@ -176,7 +203,7 @@ async def reply_node(state: CSPipelineState) -> dict:
     )
     graph_context: str | None = state.get("graph_context")
 
-    reply_text, needs_human, suggested_action, _confidence = await _generate_reply(
+    reply_text, needs_human, suggested_action, llm_confidence = await _generate_reply(
         message=message,
         session_id=session_id,
         pool=pool,
@@ -199,10 +226,11 @@ async def reply_node(state: CSPipelineState) -> dict:
             product_cards.append(card)
 
     logger.info(
-        "[Pipeline:reply] session=%s reply_len=%d needs_human=%s",
+        "[Pipeline:reply] session=%s reply_len=%d needs_human=%s llm_conf=%.2f",
         session_id[:12],
         len(reply_text),
         needs_human,
+        llm_confidence,
     )
     return {
         "reply": reply_text,
@@ -210,6 +238,8 @@ async def reply_node(state: CSPipelineState) -> dict:
         "needs_human": needs_human,
         "suggested_action": suggested_action,
         "product_cards": product_cards,
+        # 用 LLM 返回的真实置信度覆盖 intent_node 给的初始值
+        "intent_confidence": llm_confidence,
     }
 
 

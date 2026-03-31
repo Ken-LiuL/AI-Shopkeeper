@@ -85,6 +85,51 @@ def quick_intent_guess(
     return "other"
 
 
+async def llm_intent_classify(message: str) -> tuple[str, float]:
+    """用 LLM 做意图兜底分类，返回 (intent, confidence)。
+
+    仅在规则匹配失败（other）时调用，使用轻量 FLASH 模型，低延迟。
+    """
+    try:
+        from src.agents.llm import MODEL_FLASH, call_tool
+
+        tool = {
+            "name": "classify_intent",
+            "description": "对用户消息进行意图分类",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": [
+                            "product_inquiry",
+                            "usage_question",
+                            "recommendation",
+                            "comparison",
+                            "logistics",
+                            "after_sales",
+                            "complaint",
+                            "medical_advice",
+                            "greeting",
+                            "other",
+                        ],
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["intent", "confidence"],
+            },
+        }
+        prompt = [{"role": "user", "content": f"请判断以下客服消息的意图类型：\n\n{message[:200]}"}]
+        result = await call_tool(prompt, tool, model=MODEL_FLASH, max_tokens=100)
+        intent = result.get("intent", "other")
+        confidence = float(result.get("confidence", 0.5))
+        logger.debug("[intent] LLM fallback: intent=%s conf=%.2f", intent, confidence)
+        return intent, confidence
+    except Exception as e:
+        logger.warning("[intent] LLM classify failed (graceful): %s", e)
+        return "other", 0.45
+
+
 def should_run_product_pipeline(quick_intent: str, conversation_history: list[dict] | None) -> bool:
     """判断是否需要运行商品检索管线。"""
     return quick_intent in PRODUCT_INTENTS or bool(
