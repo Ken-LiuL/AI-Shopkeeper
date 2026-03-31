@@ -131,13 +131,10 @@ jobs:
               python -c "import openpyxl, uvicorn; print(\"openpyxl\", openpyxl.__version__); print(\"uvicorn\", uvicorn.__version__)"
             '
 
-            echo "=== Starting stable infra (no-recreate) ==="
+            echo "=== Starting infra (non-blocking) ==="
             cd /opt/aishop
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
-            docker compose up -d --no-recreate postgres redis 2>/dev/null || true
-
-            echo "=== Recreating neo4j to apply compose/env/healthcheck changes ==="
-            docker compose up -d --force-recreate --no-build neo4j
+            docker compose up -d --no-recreate postgres redis neo4j 2>/dev/null || true
 
             echo "=== Restarting app only ==="
             docker rm -f aishop-app 2>/dev/null || true
