@@ -153,13 +153,19 @@ class ManualImportService:
     ORDER_LIST_HEADERS = {"订单号", "门店编码", "下单时间", "订单总金额"}
     ORDER_DETAIL_HEADERS = {"订单号", "商品名称", "商品SKU码", "商品销售数量"}
     INVENTORY_HEADERS = {"SKU", "商品名称", "总库存", "可用库存"}
+    ORDER_PREVIEW_LIMIT = 5
+    ORDER_PREVIEW_ITEM_GROUP_LIMIT = 3
+    ORDER_PREVIEW_ITEMS_PER_ORDER = 5
 
     def __init__(self, pool: Any):
         self.pool = pool
 
     def preview(self, filename: str, content: bytes, import_type: str | None = None) -> ImportPreview:
+        detected_type = import_type or self._detect_import_type_from_content(filename, content)
+        if detected_type == "orders":
+            return self._preview_orders_from_content(filename, content)
+
         workbook = self._load_workbook(filename, content)
-        detected_type = import_type or self._detect_import_type(workbook)
         parser = {
             "products": self._parse_products,
             "orders": self._parse_orders,
@@ -755,6 +761,44 @@ class ManualImportService:
             return result
         raise ValueError("Only .xlsx and .xls files are supported")
 
+    def _sheet_headers_from_content(self, filename: str, content: bytes) -> dict[str, list[str]]:
+        suffix = filename.lower().rsplit(".", 1)[-1]
+        if suffix == "xlsx":
+            workbook = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+            try:
+                headers = {}
+                for ws in workbook.worksheets:
+                    ws.reset_dimensions()
+                    row_iter = ws.iter_rows(values_only=True)
+                    header_row = next(row_iter, ())
+                    headers[ws.title] = [_clean_header(cell) for cell in header_row]
+                return headers
+            finally:
+                workbook.close()
+        if suffix == "xls":
+            book = xlrd.open_workbook(file_contents=content)
+            headers = {}
+            for index in range(book.nsheets):
+                sheet = book.sheet_by_index(index)
+                header_row = sheet.row_values(0) if sheet.nrows > 0 else []
+                headers[sheet.name] = [_clean_header(value) for value in header_row]
+            return headers
+        raise ValueError("Only .xlsx and .xls files are supported")
+
+    def _detect_import_type_from_content(self, filename: str, content: bytes) -> str:
+        header_sets = {
+            name: set(headers)
+            for name, headers in self._sheet_headers_from_content(filename, content).items()
+        }
+        for headers in header_sets.values():
+            if self.PRODUCT_HEADERS.issubset(headers):
+                return "products"
+        if any(self.ORDER_LIST_HEADERS.issubset(headers) for headers in header_sets.values()):
+            return "orders"
+        if any(self.INVENTORY_HEADERS.issubset(headers) for headers in header_sets.values()):
+            return "inventory"
+        raise ValueError("Unable to detect import type from workbook headers")
+
     def _detect_import_type(self, workbook: dict[str, list[dict[str, Any]]]) -> str:
         header_sets = {name: set(rows[0].keys()) if rows else set() for name, rows in workbook.items()}
         for headers in header_sets.values():
@@ -765,6 +809,312 @@ class ManualImportService:
         if any(self.INVENTORY_HEADERS.issubset(headers) for headers in header_sets.values()):
             return "inventory"
         raise ValueError("Unable to detect import type from workbook headers")
+
+    def _preview_orders_from_content(self, filename: str, content: bytes) -> ImportPreview:
+        suffix = filename.lower().rsplit(".", 1)[-1]
+        if suffix == "xlsx":
+            return self._preview_orders_from_xlsx(filename, content)
+        if suffix == "xls":
+            return self._preview_orders_from_xls(filename, content)
+        raise ValueError("Only .xlsx and .xls files are supported")
+
+    def _preview_orders_from_xlsx(self, filename: str, content: bytes) -> ImportPreview:
+        workbook = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+        try:
+            worksheets = list(workbook.worksheets)
+            headers_by_name: dict[str, list[str]] = {}
+            list_sheet = None
+            detail_sheet = None
+            for ws in worksheets:
+                ws.reset_dimensions()
+                row_iter = ws.iter_rows(values_only=True)
+                header_row = next(row_iter, ())
+                headers = [_clean_header(cell) for cell in header_row]
+                headers_by_name[ws.title] = headers
+                header_set = set(headers)
+                if list_sheet is None and self.ORDER_LIST_HEADERS.issubset(header_set):
+                    list_sheet = ws
+                if detail_sheet is None and self.ORDER_DETAIL_HEADERS.issubset(header_set):
+                    detail_sheet = ws
+
+            if list_sheet is None:
+                raise ValueError("Order list sheet not found")
+
+            return self._build_order_preview_result(
+                filename=filename,
+                list_sheet_name=list_sheet.title,
+                list_headers=headers_by_name[list_sheet.title],
+                list_rows=list_sheet.iter_rows(values_only=True),
+                detail_sheet_name=detail_sheet.title if detail_sheet else None,
+                detail_headers=headers_by_name.get(detail_sheet.title or "", []),
+                detail_rows=detail_sheet.iter_rows(values_only=True) if detail_sheet else None,
+            )
+        finally:
+            workbook.close()
+
+    def _preview_orders_from_xls(self, filename: str, content: bytes) -> ImportPreview:
+        book = xlrd.open_workbook(file_contents=content)
+        list_sheet = None
+        detail_sheet = None
+        list_headers: list[str] = []
+        detail_headers: list[str] = []
+        for index in range(book.nsheets):
+            sheet = book.sheet_by_index(index)
+            headers = [_clean_header(value) for value in (sheet.row_values(0) if sheet.nrows > 0 else [])]
+            header_set = set(headers)
+            if list_sheet is None and self.ORDER_LIST_HEADERS.issubset(header_set):
+                list_sheet = sheet
+                list_headers = headers
+            if detail_sheet is None and self.ORDER_DETAIL_HEADERS.issubset(header_set):
+                detail_sheet = sheet
+                detail_headers = headers
+
+        if list_sheet is None:
+            raise ValueError("Order list sheet not found")
+
+        list_rows = (tuple(list_sheet.row_values(row_idx)) for row_idx in range(list_sheet.nrows))
+        detail_rows = None
+        if detail_sheet is not None:
+            detail_rows = (tuple(detail_sheet.row_values(row_idx)) for row_idx in range(detail_sheet.nrows))
+
+        return self._build_order_preview_result(
+            filename=filename,
+            list_sheet_name=list_sheet.name,
+            list_headers=list_headers,
+            list_rows=list_rows,
+            detail_sheet_name=detail_sheet.name if detail_sheet else None,
+            detail_headers=detail_headers,
+            detail_rows=detail_rows,
+        )
+
+    def _build_order_preview_result(
+        self,
+        *,
+        filename: str,
+        list_sheet_name: str,
+        list_headers: list[str],
+        list_rows,
+        detail_sheet_name: str | None,
+        detail_headers: list[str],
+        detail_rows,
+    ) -> ImportPreview:
+        preview_orders: list[dict[str, Any]] = []
+        preview_order_ids: list[str] = []
+        preview_order_set: set[str] = set()
+        preview_items_by_order: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        seen_orders: set[str] = set()
+        duplicate_orders: set[str] = set()
+        all_order_ids: set[str] = set()
+        paid_by_order: dict[str, Decimal] = {}
+        missing_paid = 0
+        order_count = 0
+
+        next(list_rows, None)
+        for values in list_rows:
+            if not any(_clean_text(value) for value in values):
+                continue
+            row = {
+                list_headers[idx]: values[idx]
+                for idx in range(min(len(list_headers), len(values)))
+            }
+            order_id = _clean_text(row.get("订单号"))
+            if not order_id:
+                continue
+            order_count += 1
+            if order_id in seen_orders:
+                duplicate_orders.add(order_id)
+            seen_orders.add(order_id)
+            all_order_ids.add(order_id)
+
+            order_time = _parse_datetime(row.get("下单时间"))
+            paid_amount = _parse_decimal(row.get("支付金额"))
+            total_amount = _parse_decimal(row.get("订单总金额"))
+            if paid_amount is None:
+                missing_paid += 1
+            paid_by_order[order_id] = paid_amount or Decimal("0")
+
+            if len(preview_orders) >= self.ORDER_PREVIEW_LIMIT:
+                continue
+
+            store_id = _clean_text(row.get("门店编码"))
+            preview_order_ids.append(order_id)
+            preview_order_set.add(order_id)
+            preview_orders.append(
+                {
+                    "order_id": order_id,
+                    "platform": self._normalize_platform(_clean_text(row.get("渠道"))),
+                    "store_id": store_id,
+                    "store_name": _clean_text(row.get("门店名称")),
+                    "customer_name": _clean_text(row.get("收件人")),
+                    "customer_phone_suffix": self._extract_phone_suffix(
+                        _clean_text(row.get("收件人真实电话")) or _clean_text(row.get("收件人虚拟号"))
+                    ),
+                    "total_amount": total_amount or Decimal("0"),
+                    "customer_paid": paid_amount or Decimal("0"),
+                    "status": _normalize_status(_clean_text(row.get("订单状态")), "order"),
+                    "order_time": order_time,
+                    "order_date": order_time.date() if order_time else None,
+                    "delivery_address_type": _clean_text(row.get("订单时效类型")),
+                    "commission": _parse_decimal(row.get("商品佣金")) or Decimal("0"),
+                    "delivery_fee": _parse_decimal(row.get("履约服务费")) or Decimal("0"),
+                    "merchant_discount": sum(
+                        (
+                            _parse_decimal(row.get("整单商家优惠")) or Decimal("0"),
+                            _parse_decimal(row.get("单品商家优惠")) or Decimal("0"),
+                            _parse_decimal(row.get("配送费商家优惠")) or Decimal("0"),
+                        ),
+                        Decimal("0"),
+                    ),
+                    "day_seq": _parse_int(row.get("订单流水号")),
+                    "store_city": _clean_text(row.get("门店所属城市")),
+                    "delivery_status": _clean_text(row.get("配送状态")),
+                    "delivery_method": _clean_text(row.get("配送方式")),
+                    "items": [],
+                    "extra": {
+                        "merchant_income": float(_parse_decimal(row.get("商家预计收入")) or 0),
+                        "package_fee_customer": float(_parse_decimal(row.get("顾客支付包装费")) or 0),
+                        "package_fee_merchant": float(_parse_decimal(row.get("商家包装费收入")) or 0),
+                        "order_flags": _clean_text(row.get("订单标识")),
+                        "refund_reason": _clean_text(row.get("用户申请退款原因")),
+                        "cancel_reason": _clean_text(row.get("订单取消原因")),
+                        "remark": _clean_text(row.get("备注")),
+                    },
+                }
+            )
+
+        detail_rows_count = 0
+        missing_item_sku = 0
+        detail_line_sums: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+        orders_with_detail: set[str] = set()
+
+        if detail_rows is not None and detail_headers:
+            next(detail_rows, None)
+            for values in detail_rows:
+                if not any(_clean_text(value) for value in values):
+                    continue
+                row = {
+                    detail_headers[idx]: values[idx]
+                    for idx in range(min(len(detail_headers), len(values)))
+                }
+                order_id = _clean_text(row.get("订单号"))
+                if not order_id:
+                    continue
+                detail_rows_count += 1
+                orders_with_detail.add(order_id)
+
+                sku_id = _clean_text(row.get("商品SKU码"))
+                if not sku_id:
+                    missing_item_sku += 1
+
+                total_price = _parse_decimal(row.get("商品总售价")) or Decimal("0")
+                detail_line_sums[order_id] += total_price
+
+                if (
+                    order_id in preview_order_set
+                    and len(preview_items_by_order[order_id]) < self.ORDER_PREVIEW_ITEMS_PER_ORDER
+                ):
+                    preview_items_by_order[order_id].append(
+                        {
+                            "product_id": sku_id
+                            or _clean_text(row.get("商品条码"))
+                            or _clean_text(row.get("商品名称")),
+                            "sku_id": sku_id,
+                            "barcode": _clean_text(row.get("商品条码")),
+                            "name": _clean_text(row.get("商品名称")),
+                            "spec": _clean_text(row.get("商品规格")),
+                            "category": _clean_text(row.get("店内分类")),
+                            "quantity": _parse_int(row.get("商品销售数量")) or 0,
+                            "unit_price": _parse_decimal(row.get("商品售价")) or Decimal("0"),
+                            "line_total": total_price,
+                            "refunded": _clean_text(row.get("是否退款商品")) == "是",
+                            "refund_qty": _parse_int(row.get("退款数量")) or 0,
+                            "order_time": _parse_datetime(row.get("下单时间")),
+                            "completed_time": _parse_datetime(row.get("订单完成时间")),
+                        }
+                    )
+
+        if detail_sheet_name:
+            unmatched_detail_orders = all_order_ids - orders_with_detail
+        else:
+            unmatched_detail_orders = set()
+
+        detail_total_mismatch = sum(
+            1
+            for order_id in orders_with_detail
+            if order_id in paid_by_order
+            and abs(detail_line_sums[order_id] - paid_by_order[order_id]) > Decimal("5")
+        )
+
+        for order in preview_orders:
+            order["items"] = preview_items_by_order.get(order["order_id"], [])
+
+        issues: list[QualityIssue] = []
+        if duplicate_orders:
+            issues.append(
+                QualityIssue(
+                    "critical",
+                    "duplicate_order_id",
+                    "订单列表中存在重复订单号",
+                    len(duplicate_orders),
+                    samples=sorted(duplicate_orders)[:5],
+                )
+            )
+        if missing_paid:
+            issues.append(QualityIssue("warning", "missing_paid_amount", "订单缺少支付金额", missing_paid))
+        if missing_item_sku:
+            issues.append(QualityIssue("warning", "missing_item_sku", "订单明细缺少 SKU", missing_item_sku))
+        if unmatched_detail_orders:
+            issues.append(
+                QualityIssue(
+                    "warning",
+                    "orders_without_detail",
+                    "订单列表中部分订单没有匹配到订单明细",
+                    len(unmatched_detail_orders),
+                    samples=sorted(unmatched_detail_orders)[:5],
+                )
+            )
+        if detail_total_mismatch:
+            issues.append(
+                QualityIssue(
+                    "info",
+                    "order_item_total_mismatch",
+                    "部分订单明细金额与支付金额差异较大",
+                    detail_total_mismatch,
+                )
+            )
+
+        quality_report = self._build_quality_report(
+            total_rows=order_count + detail_rows_count,
+            issues=issues,
+            stats={
+                "orders": order_count,
+                "order_items": detail_rows_count,
+                "missing_paid_amount": missing_paid,
+                "missing_item_sku": missing_item_sku,
+                "orders_without_detail": len(unmatched_detail_orders),
+                "detail_total_mismatch": detail_total_mismatch,
+            },
+            suggestions=[
+                "订单导入会同步回填 products.monthly_sales，并生成订单商品行供补货、套餐、日报使用。",
+                "若订单状态和配送状态长期缺失，订单履约分析和客服订单上下文会受影响。",
+            ],
+        )
+
+        return ImportPreview(
+            import_type="orders",
+            filename=filename,
+            detected_sheets=[name for name in (list_sheet_name, detail_sheet_name) if name],
+            total_rows=order_count + detail_rows_count,
+            normalized_preview={
+                "orders": preview_orders,
+                "order_items": [
+                    preview_items_by_order[order_id]
+                    for order_id in preview_order_ids
+                    if preview_items_by_order.get(order_id)
+                ][: self.ORDER_PREVIEW_ITEM_GROUP_LIMIT],
+            },
+            quality_report=quality_report,
+        )
 
     def _parse_products(self, workbook: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
         sheet_name = next((name for name, rows in workbook.items() if rows and self.PRODUCT_HEADERS.issubset(rows[0].keys())), None)
