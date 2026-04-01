@@ -9,7 +9,7 @@ import { AIAssistantFAB } from '@/components/ai-assistant-fab';
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const [authed, setAuthed] = useState(false);
+  const [authed, setAuthed] = useState<boolean | null>(null);
 
   useEffect(() => {
     const syncAuth = () => {
@@ -19,13 +19,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     syncAuth();
     window.addEventListener('storage', syncAuth);
+    window.addEventListener('auth-changed', syncAuth);
 
-    return () => window.removeEventListener('storage', syncAuth);
-  }, [pathname]);
+    return () => {
+      window.removeEventListener('storage', syncAuth);
+      window.removeEventListener('auth-changed', syncAuth);
+    };
+  }, []);
 
   useEffect(() => {
-    if (!authed && pathname !== '/login') {
+    if (authed === false && pathname !== '/login') {
       router.push('/login');
+    }
+    if (authed === true && pathname === '/login') {
+      router.replace('/');
     }
   }, [authed, pathname, router]);
 
@@ -33,6 +40,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   if (pathname === '/login') {
     return <>{children}</>;
   }
+
+  if (authed === null) return null;
 
   // Not authed → redirect happening, show nothing
   if (!authed) return null;

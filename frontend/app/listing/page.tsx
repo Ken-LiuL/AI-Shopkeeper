@@ -144,6 +144,7 @@ function ListingPage() {
   const [pipelineStep, setPipelineStep] = useState(0);
   const [result, setResult] = useState<ListingDetailResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Editable listing info
@@ -224,8 +225,34 @@ function ListingPage() {
     setStep('input');
     setResult(null);
     setError(null);
+    setActionMessage(null);
     setPipelineStep(0);
   };
+
+  const handleCopyListingPlan = useCallback(async () => {
+    if (!result) return;
+
+    const plan = [
+      `标题：${editTitle || result.listing_info?.title || '—'}`,
+      `建议售价：${editPrice || result.listing_info?.price || '—'}`,
+      '',
+      '卖点：',
+      editPoints || '—',
+      '',
+      'SEO 关键词：',
+      editKeywords || '—',
+      '',
+      '商品描述：',
+      editDesc || '—',
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(plan);
+      setActionMessage('上架方案已复制，可直接粘贴到美团后台。');
+    } catch {
+      setActionMessage('复制失败，请手动复制页面中的上架方案。');
+    }
+  }, [editDesc, editKeywords, editPoints, editPrice, editTitle, result]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
@@ -243,6 +270,12 @@ function ListingPage() {
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           ⚠️ {error}
+        </div>
+      )}
+
+      {actionMessage && (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
+          ✅ {actionMessage}
         </div>
       )}
 
@@ -507,10 +540,11 @@ function ListingPage() {
           {/* ⑤ 底部操作 */}
           <div className="flex flex-wrap gap-3 pt-2">
             <Button
+              onClick={handleCopyListingPlan}
               disabled={result.compliance_check?.can_list === false}
               className="flex-1 sm:flex-none"
             >
-              ✅ 确认上架
+              📋 复制上架方案
             </Button>
             <Button
               variant="outline"
@@ -526,6 +560,9 @@ function ListingPage() {
               💾 保存草稿
             </Button>
           </div>
+          <p className="text-xs text-gray-500">
+            当前生成的是可编辑上架草案，复制后到美团商家后台完成最终发布。
+          </p>
         </div>
       )}
     </div>

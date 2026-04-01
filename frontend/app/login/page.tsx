@@ -24,7 +24,8 @@ export default function LoginPage() {
       localStorage.setItem('auth_token', data.access_token);
       localStorage.setItem('auth_username', username);
       localStorage.setItem('show_onboarding_cta', '1');
-      router.push('/');
+      window.dispatchEvent(new Event('auth-changed'));
+      router.replace('/');
     } catch (err) {
       setError(err instanceof Error ? err.message : '网络连接失败，请检查网络后重试');
     } finally {
