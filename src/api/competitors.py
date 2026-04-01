@@ -82,7 +82,8 @@ _monitor_cache: dict[str, tuple[float, APIResponse]] = {}
 _CACHE_TTL = 300  # 5 minutes
 
 
-# UNUSED: no frontend caller
+# Support both `/api/competitors` and `/api/competitors/` to avoid proxy redirects
+@router.get("", response_model=APIResponse[CompetitorMonitorResult], include_in_schema=False)
 @router.get("/", response_model=APIResponse[CompetitorMonitorResult])
 async def get_competitors_root(limit: int = 20) -> APIResponse[CompetitorMonitorResult]:
     """竞品监控根端点 - 默认返回监控结果，支持 limit 参数"""
