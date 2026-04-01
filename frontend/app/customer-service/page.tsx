@@ -36,6 +36,15 @@ interface RecentSession {
   updated_at?: string;
 }
 
+interface SessionMessage {
+  role?: string;
+  content?: string;
+  timestamp?: string;
+  created_at?: string;
+  intent?: string;
+  needs_human?: boolean;
+}
+
 interface TestMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -121,6 +130,10 @@ function CustomerServicePage() {
   const [queueingKnowledgeKey, setQueueingKnowledgeKey] = useState<string | null>(null);
   const [queuedKnowledgeKeys, setQueuedKnowledgeKeys] = useState<Record<string, boolean>>({});
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [selectedSessionMessages, setSelectedSessionMessages] = useState<SessionMessage[]>([]);
+  const [sessionDetailLoading, setSessionDetailLoading] = useState(false);
+  const [showInternalWorkbench, setShowInternalWorkbench] = useState(false);
   const [testSessions, setTestSessions] = useState<{id: string; name: string; messages: TestMessage[]}[]>([]);
   const [activeTestSession, setActiveTestSession] = useState<string | null>(null);
   const [testInput, setTestInput] = useState('');
@@ -183,6 +196,20 @@ function CustomerServicePage() {
     setRefreshing(true);
     await Promise.all([loadStats(), loadSessions(), loadQualityQueue()]);
     setRefreshing(false);
+  };
+
+  const loadSessionMessages = async (sessionId: string) => {
+    setSelectedSessionId(sessionId);
+    setSessionDetailLoading(true);
+    try {
+      const data = await fetchAPI<{ session_id: string; messages: SessionMessage[] }>(`/customer-service/sessions/${sessionId}/messages`);
+      setSelectedSessionMessages(data.messages || []);
+    } catch (err) {
+      console.error('Failed to load session messages:', err);
+      setSelectedSessionMessages([]);
+    } finally {
+      setSessionDetailLoading(false);
+    }
   };
 
   const createTestSession = async () => {
@@ -401,6 +428,13 @@ function CustomerServicePage() {
     } catch {
       return '—';
     }
+  };
+
+  const formatMessageRole = (role?: string) => {
+    if (role === 'user') return '买家';
+    if (role === 'assistant' || role === 'agent') return 'AI 客服';
+    if (role === 'system') return '系统';
+    return role || '消息';
   };
 
   const currentTestSession = testSessions.find((session) => session.id === activeTestSession);
@@ -670,77 +704,157 @@ function CustomerServicePage() {
 
       <section>
         <h2 className="text-lg font-semibold mb-3">最近对话记录</h2>
-        <Card>
-          <CardContent className="p-0">
-            {sessionsLoading ? (
-              <div className="p-4 space-y-3">
-                {[1, 2, 3, 4, 5].map((i) => (
-                  <div key={i} className="flex gap-3 items-center">
-                    <Skeleton className="h-8 w-8 rounded-full" />
-                    <div className="flex-1 space-y-1">
-                      <Skeleton className="h-4 w-32" />
-                      <Skeleton className="h-3 w-48" />
-                    </div>
-                    <Skeleton className="h-3 w-16" />
-                  </div>
-                ))}
-              </div>
-            ) : sessions.length === 0 ? (
-              <div className="py-10 text-center text-muted-foreground text-sm">
-                暂无对话记录
-              </div>
-            ) : (
-              <div className="divide-y">
-                {sessions.map((session) => (
-                  <div
-                    key={session.session_id}
-                    className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition-colors"
-                  >
-                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-sm flex-shrink-0">
-                      👤
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-700 truncate">
-                        {session.customer_id
-                          ? `买家 ${session.customer_id.slice(-6)}`
-                          : `会话 ${session.session_id.slice(-6)}`}
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-[0.95fr,1.05fr]">
+          <Card>
+            <CardContent className="p-0">
+              {sessionsLoading ? (
+                <div className="p-4 space-y-3">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <div key={i} className="flex gap-3 items-center">
+                      <Skeleton className="h-8 w-8 rounded-full" />
+                      <div className="flex-1 space-y-1">
+                        <Skeleton className="h-4 w-32" />
+                        <Skeleton className="h-3 w-48" />
                       </div>
-                      {session.last_message && (
-                        <div className="text-xs text-muted-foreground truncate">
-                          {session.last_message}
+                      <Skeleton className="h-3 w-16" />
+                    </div>
+                  ))}
+                </div>
+              ) : sessions.length === 0 ? (
+                <div className="py-10 text-center text-muted-foreground text-sm">
+                  暂无对话记录
+                </div>
+              ) : (
+                <div className="divide-y">
+                  {sessions.map((session) => {
+                    const active = session.session_id === selectedSessionId;
+                    return (
+                      <button
+                        key={session.session_id}
+                        type="button"
+                        onClick={() => void loadSessionMessages(session.session_id)}
+                        className={`flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
+                          active ? 'bg-blue-50' : 'hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 text-sm flex-shrink-0">
+                          👤
                         </div>
-                      )}
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium text-gray-700 truncate">
+                            {session.customer_id
+                              ? `买家 ${session.customer_id.slice(-6)}`
+                              : `会话 ${session.session_id.slice(-6)}`}
+                          </div>
+                          {session.last_message && (
+                            <div className="text-xs text-muted-foreground truncate">
+                              {session.last_message}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                          {session.message_count != null && (
+                            <Badge variant="outline" className="text-xs">
+                              {session.message_count} 条
+                            </Badge>
+                          )}
+                          <div className="text-xs text-muted-foreground">
+                            {formatTime(session.updated_at || session.created_at)}
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">
+                {selectedSessionId ? `会话详情 ${selectedSessionId.slice(-8)}` : '选择左侧会话查看详情'}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!selectedSessionId ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                  从左侧选择一条最近对话，查看真实消息往返，而不是只看摘要。
+                </div>
+              ) : sessionDetailLoading ? (
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="space-y-2">
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-16 w-full" />
                     </div>
-                    <div className="flex flex-col items-end gap-1 flex-shrink-0">
-                      {session.message_count != null && (
-                        <Badge variant="outline" className="text-xs">
-                          {session.message_count} 条
-                        </Badge>
-                      )}
-                      <div className="text-xs text-muted-foreground">
-                        {formatTime(session.updated_at || session.created_at)}
+                  ))}
+                </div>
+              ) : selectedSessionMessages.length === 0 ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+                  这条会话当前没有可展示的消息记录。
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {selectedSessionMessages.map((message, index) => {
+                    const isBuyer = message.role === 'user';
+                    const isSystem = message.role === 'system';
+                    return (
+                      <div key={`${selectedSessionId}-${index}`} className={`flex ${isBuyer ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[88%] rounded-xl px-3 py-2 ${
+                          isBuyer
+                            ? 'bg-blue-500 text-white'
+                            : isSystem
+                              ? 'bg-slate-100 text-slate-600'
+                              : 'bg-gray-100 text-slate-900'
+                        }`}>
+                          <div className={`mb-1 text-[11px] font-medium ${
+                            isBuyer ? 'text-blue-100' : 'text-slate-500'
+                          }`}>
+                            {formatMessageRole(message.role)}
+                          </div>
+                          <div className="whitespace-pre-wrap break-words text-sm">
+                            {message.content || '（空消息）'}
+                          </div>
+                          <div className={`mt-2 text-[11px] ${
+                            isBuyer ? 'text-blue-100' : 'text-slate-400'
+                          }`}>
+                            {formatTime(message.timestamp || message.created_at)}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       </section>
 
       <section>
         <div className="flex flex-wrap items-start justify-between gap-3 mb-3">
           <div>
             <h2 className="text-lg font-semibold">内部验证</h2>
-            <p className="text-sm text-muted-foreground">仅用于运营或研发验证客服回复，不再作为主界面重心。</p>
+            <p className="text-sm text-muted-foreground">仅用于运营或研发抽查，不作为客服工作台主视图。</p>
           </div>
-          <Button variant="outline" size="sm" onClick={createTestSession} className="gap-1 min-h-[44px]">
-            ➕ 新建测试客户
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowInternalWorkbench((prev) => !prev)}
+            className="gap-1 min-h-[44px]"
+          >
+            {showInternalWorkbench ? '收起内部验证' : '展开内部验证'}
           </Button>
         </div>
 
-        {testSessions.length === 0 ? (
+        {!showInternalWorkbench ? (
+          <Card className="border-dashed">
+            <CardContent className="py-6 text-sm text-muted-foreground">
+              这个区域只在需要抽测回复质量、转人工逻辑或异常问题复现时展开，平时应优先处理上面的真实会话和审核队列。
+            </CardContent>
+          </Card>
+        ) : testSessions.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="py-8 text-center">
               <div className="text-3xl mb-3">🧪</div>
