@@ -25,6 +25,7 @@ from src.api.alerts import router as alerts_router
 from src.api.boss_assistant import router as boss_assistant_router
 from src.api.bundles import router as bundles_router
 from src.api.chat import router as chat_router
+from src.api.competitors import router as competitors_router
 from src.api.customer_service import router as cs_router
 from src.api.dashboard import router as dashboard_router
 from src.api.errors import register_error_handlers
@@ -504,6 +505,7 @@ app.include_router(inventory_router)
 app.include_router(settings_router)
 app.include_router(insights_router)
 app.include_router(stores_router)
+app.include_router(competitors_router)
 app.include_router(ab_testing_router)
 app.include_router(boss_assistant_router)
 app.include_router(export_router)
