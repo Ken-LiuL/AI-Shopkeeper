@@ -1032,7 +1032,7 @@ async def _get_recent_outcomes(
                     title=f"完成{label}导入",
                     detail=f"{row['filename']} 已导入 {int(row['imported_rows'] or 0)} 行，质量分 {float(row['quality_score'] or 0):.1f}。",
                     category="数据导入",
-                    link="/imports",
+                    link="/settings/sync",
                     happened_at=row["created_at"].isoformat() if row["created_at"] else "",
                     next_check="重新查看今日待办，确认这批数据带来的新问题和已修复项。",
                 )

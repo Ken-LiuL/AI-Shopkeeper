@@ -48,6 +48,7 @@ from src.api.settings import router as settings_router
 from src.api.stores import router as stores_router
 from src.api.sync_receiver import router as sync_receiver_router
 from src.api.sync_status import router as sync_status_router
+from src.api.system import health_router
 from src.api.system import router as system_router
 from src.auth.router import router as auth_router
 from src.config import get_settings
@@ -493,6 +494,7 @@ app.include_router(issue_actions_router)
 app.include_router(knowledge_router)
 app.include_router(metrics_router)
 app.include_router(orders_router)
+app.include_router(health_router)
 app.include_router(system_router)
 app.include_router(replenishment_router)
 app.include_router(pricing_router)

@@ -19,6 +19,7 @@ const PAGE_CONTEXT_MAP: Record<string, string> = {
   '/chat': '我在看AI客服页面',
   '/competitors': '我在看未启用的竞品页面',
   '/imports': '我在看数据导入页面',
+  '/settings/sync': '我在看数据导入页面',
   '/products': '我在看商品修复页面',
   '/orders': '我在看异常订单页面',
   '/inventory': '我在看库存修复页面',
