@@ -71,6 +71,7 @@ jobs:
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
           vercel env rm NEXT_PUBLIC_API_URL production --token $VERCEL_TOKEN --yes 2>/dev/null || true
+          echo "${{ secrets.VPS_API_URL }}" | vercel env add NEXT_PUBLIC_API_URL production --token $VERCEL_TOKEN --yes 2>/dev/null || true
           vercel deploy --prod --token $VERCEL_TOKEN --yes
 
   # ── 后端部署 → VPS（推送模式，无需服务器访问 GitHub） ──────────────────
@@ -100,7 +101,6 @@ jobs:
             scripts \
             requirements.backend.txt \
             Dockerfile.backend \
-            Caddyfile \
             docker-compose.yml \
             data/cs_knowledge_structured.json \
             | ssh -i ~/.ssh/id_rsa root@${{ secrets.VPS_HOST }} \
@@ -135,22 +135,15 @@ jobs:
             echo "=== Starting infra (non-blocking) ==="
             cd /opt/aishop
             cp /opt/aishop/repo/docker-compose.yml /opt/aishop/docker-compose.yml
-            cp /opt/aishop/repo/Caddyfile /opt/aishop/Caddyfile
             docker compose up -d --no-recreate postgres redis neo4j 2>/dev/null || true
 
-            echo "=== Opening public HTTP port ==="
-            if command -v ufw >/dev/null 2>&1; then
-              ufw allow 80/tcp >/dev/null 2>&1 || true
-            fi
-            iptables -C INPUT -p tcp --dport 80 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 80 -j ACCEPT
-
-            echo "=== Restarting app and gateway ==="
+            echo "=== Restarting app only ==="
             docker rm -f aishop-app 2>/dev/null || true
-            docker compose up -d --force-recreate --no-build app caddy
+            docker compose up -d --force-recreate --no-build app
 
             echo "=== Health check (up to 150s) ==="
             for i in $(seq 1 30); do
-              if curl -sf http://localhost:8000/health >/dev/null && curl -sf http://localhost/api/health >/dev/null; then
+              if curl -sf http://localhost:8000/health >/dev/null; then
                 echo "✅ Backend healthy"
                 exit 0
               fi
